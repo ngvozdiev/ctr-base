@@ -9,10 +9,19 @@ namespace ctr {
 // Can provide the K next shortest paths on demand for an aggregate.
 class PathProvider {
  public:
-  // Returns the K shortest paths. The returned vector will have up to k + 1
-  // elements. K=0 is the shortest path.
-  std::vector<const nc::net::Walk*> KShorestPaths(AggregateId aggregate,
-                                                  size_t k);
+  // Returns the K shortest paths computed so far for an aggregate. Empty if
+  // NextShortestPathOrNull has not been called yet.
+  const std::vector<const nc::net::Walk*>& KShorestPaths(AggregateId aggregate);
+
+  // Extends the K shortest paths for an aggregate and returns the path.
+  const nc::net::Walk* NextShortestPathOrNull(AggregateId aggregate);
+
+  // Returns a path that avoids the given set of links.
+  const nc::net::Walk* AvoidingPathOrNull(
+      AggregateId aggregate, const nc::net::GraphLinkSet& to_avoid);
+
+  // Takes ownership of a path.
+  const nc::net::Walk* TakeOwnership(std::unique_ptr<nc::net::Walk> path);
 };
 
 }  // namespace ctr

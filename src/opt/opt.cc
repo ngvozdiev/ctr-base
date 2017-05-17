@@ -1,0 +1,447 @@
+#include "opt.h"
+
+namespace ctr {
+
+std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
+    const TrafficMatrix& tm) {
+  RoutingConfiguration out;
+  for (const auto& aggregate_and_demand : tm.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+
+    std::vector<const nc::net::Walk*> paths =
+        path_provider_->KShorestPaths(aggregate_id, 0);
+    CHECK(paths.size() == 1) << "Unable to find a path for aggregate";
+    out.AddRouteAndFraction(aggregate_id, {{paths[0], 1.0}});
+  }
+
+  return out;
+}
+
+class MinMaxMCProblem : public nc::lp::MCProblem {
+ public:
+  MinMaxMCProblem(const nc::net::GraphStorage* graph_storage,
+                  double capacity_multiplier = 1.0)
+      : nc::lp::MCProblem({}, graph_storage, capacity_multiplier) {}
+
+  double Solve(
+      std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths) {
+    using namespace nc::lp;
+
+    Problem problem(MINIMIZE);
+    std::vector<ProblemMatrixElement> problem_matrix;
+    VarMap link_to_variables =
+        GetLinkToVariableMap(false, &problem, &problem_matrix);
+    AddFlowConservationConstraints(link_to_variables, &problem,
+                                   &problem_matrix);
+
+    // There will be one max utilization variable.
+    VariableIndex max_utilization_var = problem.AddVariable();
+    problem.SetVariableRange(max_utilization_var, 0, Problem::kInifinity);
+    problem.SetObjectiveCoefficient(max_utilization_var, 10000.0);
+
+    // Will add per-link constraints to make each link's utilization less than
+    // the max utilization.
+    for (const auto& link_and_variables : link_to_variables) {
+      nc::net::GraphLinkIndex link_index = link_and_variables.first;
+      const nc::net::GraphLink* link = graph_storage_->GetLink(link_index);
+      const nc::net::GraphNodeMap<VariableIndex>& variables =
+          *link_and_variables.second;
+
+      // All utilization variables will be less than max utilization.
+      ConstraintIndex utilization_var_constraint = problem.AddConstraint();
+      problem.SetConstraintRange(utilization_var_constraint,
+                                 Problem::kNegativeInifinity, 0);
+      problem_matrix.emplace_back(utilization_var_constraint,
+                                  max_utilization_var, -1.0);
+
+      VariableIndex link_utilization_var = problem.AddVariable();
+      problem.SetVariableRange(link_utilization_var, 0, Problem::kInifinity);
+      problem_matrix.emplace_back(utilization_var_constraint,
+                                  link_utilization_var, 1.0);
+
+      ConstraintIndex constraint = problem.AddConstraint();
+      problem.SetConstraintRange(constraint, 0, 0);
+      problem_matrix.emplace_back(constraint, link_utilization_var, -1.0);
+      double link_capacity = link->bandwidth().Mbps();
+
+      // The coefficient of each variable that goes over the link should be 1 /
+      // link capacity.
+      for (const auto& dst_and_variable : variables) {
+        VariableIndex variable = *dst_and_variable.second;
+        problem_matrix.emplace_back(constraint, variable, 1.0 / link_capacity);
+      }
+
+      problem.SetObjectiveCoefficient(link_utilization_var, 1);
+    }
+
+    // Solve the problem.
+    problem.SetMatrix(problem_matrix);
+    std::unique_ptr<Solution> solution = problem.Solve();
+    bool solution_found = (solution->type() == nc::lp::OPTIMAL ||
+                           solution->type() == nc::lp::FEASIBLE);
+    if (!solution_found) {
+      return std::numeric_limits<double>::max();
+    }
+
+    *paths = RecoverPaths(link_to_variables, *solution);
+    return solution->ObjectiveValue();
+  }
+};
+
+std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
+    const TrafficMatrix& tm) {
+  MinMaxMCProblem problem(graph_storage_, link_capacity_multiplier_);
+
+  for (const auto& aggregate_and_demand : tm.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+    nc::net::Bandwidth demand = aggregate_and_demand.second;
+
+    nc::net::GraphNodeIndex src;
+    nc::net::GraphNodeIndex dst;
+    std::tie(src, dst) = aggregate_id;
+    problem.AddCommodity(src, dst, demand);
+  }
+
+  std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
+  LOG(ERROR) << "MinMax solving MC problem";
+  double min_utilization = problem.Solve(&paths);
+  LOG(ERROR) << "MinMax util " << min_utilization;
+
+  RoutingConfiguration out;
+  for (const auto& aggregate_and_demand : tm.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+    nc::net::Bandwidth demand = aggregate_and_demand.second;
+
+    // All input aggregates should have an entry in the solution.
+    std::vector<nc::lp::FlowAndPath>& flow_and_paths =
+        nc::FindOrDieNoPrint(paths, aggregate_id);
+
+    std::vector<RouteAndFraction> routes_for_aggregate;
+    for (nc::lp::FlowAndPath& flow_and_path : flow_and_paths) {
+      // Compute the fraction of the total demand that this path handles.
+      double fraction = flow_and_path.flow() / demand;
+      if (fraction == 0) {
+        continue;
+      }
+
+      // Need to take ownership of the path and transfer it to the path
+      // provider, the path provider will also return the same pointer for the
+      // same path, avoiding creating new path objects for the same path every
+      // time this runs.
+      auto path = flow_and_path.TakeOwnershipOfPath();
+      routes_for_aggregate.emplace_back(
+          path_provider_->TakeOwnership(std::move(path)), fraction);
+    }
+
+    out.AddRouteAndFraction(aggregate_id, routes_for_aggregate);
+  }
+
+  return out;
+}
+
+class B4AggregateState;
+
+// State to associate with each link in B4.
+struct B4LinkState {
+ public:
+  B4LinkState(nc::net::GraphLinkIndex link, double capacity)
+      : link_(link), remaining_capacity_(capacity) {}
+
+  // How much fair share would it take for all non-frozen aggregates over this
+  // link to congest it.
+  double FairShareToCongest();
+
+  // Advances fair share and assigns capacity to aggregates.
+  void AdvanceByFairShare(double fair_share);
+
+  void AddAggregate(B4AggregateState* aggregate_state) {
+    aggregates_over_link_.insert(aggregate_state);
+  }
+
+  const std::set<B4AggregateState*>& aggregates_over_link() const {
+    return aggregates_over_link_;
+  }
+
+  nc::net::GraphLinkIndex link() const { return link_; }
+
+  bool IsCongested() const { return remaining_capacity_ < 0.1; }
+
+ private:
+  nc::net::GraphLinkIndex link_;
+
+  // Aggregates that go over this link.
+  std::set<B4AggregateState*> aggregates_over_link_;
+
+  // Capacity left on this link.
+  double remaining_capacity_;
+};
+
+// State to associate with each aggregate.
+class B4AggregateState {
+ public:
+  B4AggregateState(const AggregateId& aggregate_id,
+                   const DemandAndPriority& demand_and_priority)
+      : aggregate_id_(aggregate_id),
+        demand_(demand_and_priority.first),
+        current_path_(nullptr),
+        fair_share_(demand_and_priority.second) {
+    fair_share_ratio_ = demand_.bps() / fair_share_;
+  }
+
+  const AggregateId& aggregate_id() const { return aggregate_id_; }
+
+  const nc::net::Walk* current_path() const { return current_path_; }
+  void set_current_path(const nc::net::Walk* path) { current_path_ = path; }
+
+  void freeze() { frozen_ = true; }
+  bool frozen() const { return frozen_; }
+
+  double fair_share_ratio() const { return fair_share_ratio_; }
+
+  double fair_share() const { return fair_share_; }
+
+  // Adds some capacity to the current path.
+  void AdvanceByFairShare(double fair_share) {
+    CHECK(current_path_ != nullptr);
+    path_to_capacity_[current_path_] += fair_share_ratio_ * fair_share;
+  }
+
+  // Returns a map from path to the capacity that will be sent over it.
+  const std::map<const nc::net::Walk*, double>& path_to_capacity() const {
+    return path_to_capacity_;
+  }
+
+ private:
+  // Identifies the aggregate.
+  AggregateId aggregate_id_;
+
+  // Total volume in the entire aggregate.
+  nc::net::Bandwidth demand_;
+
+  // All links that are on this aggregate's current path.
+  const nc::net::Walk* current_path_;
+
+  // Allocation of paths to capacity on those paths.
+  std::map<const nc::net::Walk*, double> path_to_capacity_;
+
+  // Set to true when the aggregate reaches capacity.
+  bool frozen_ = false;
+
+  // The ratio C / F, where C is the total required demand of the aggregate and
+  // F is the fair share at which the aggregate achieves its total demand.
+  double fair_share_ratio_;
+
+  // This aggregate's fair share.
+  double fair_share_;
+};
+
+double B4LinkState::FairShareToCongest() {
+  double sum = 0;  // sum of fair share ratios
+  for (const B4AggregateState* aggregate : aggregates_over_link_) {
+    if (aggregate->frozen()) {
+      continue;
+    }
+
+    sum += aggregate->fair_share_ratio();
+  }
+
+  return remaining_capacity_ / sum;
+}
+
+void B4LinkState::AdvanceByFairShare(double fair_share) {
+  double sum = 0;  // sum of capacities.
+  for (B4AggregateState* aggregate : aggregates_over_link_) {
+    if (aggregate->frozen()) {
+      continue;
+    }
+
+    double capacity = aggregate->fair_share_ratio() * fair_share;
+    sum += capacity;
+  }
+
+  remaining_capacity_ -= sum;
+}
+
+std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
+    const TrafficMatrix& tm) {
+  std::vector<B4AggregateState> aggregate_states;
+  std::map<nc::net::GraphLinkIndex, B4LinkState> link_states;
+
+  // Populate link states.
+  for (nc::net::GraphLinkIndex link_index : graph_storage_->AllLinks()) {
+    const nc::net::GraphLink* link = graph_storage_->GetLink(link_index);
+
+    link_states.emplace(
+        std::piecewise_construct, std::forward_as_tuple(link_index),
+        std::forward_as_tuple(
+            link_index, link->bandwidth().bps() * link_capacity_multiplier_));
+  }
+
+  // A constraint to avoid congested links.
+  nc::net::GraphLinkSet to_avoid;
+
+  // Populate aggregate states and initial paths.
+  aggregate_states.reserve(tm.demands().size());
+  for (const auto& aggregate_and_demand : tm.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+    const DemandAndPriority& demand_and_priority = aggregate_and_demand.second;
+
+    aggregate_states.emplace_back(aggregate_id, demand_and_priority);
+    B4AggregateState& aggregate_state = aggregate_states.back();
+
+    const nc::net::Walk* path =
+        path_provider_->AvoidingPathOrNull(aggregate_id, to_avoid);
+    aggregate_state.set_current_path(path);
+
+    for (nc::net::GraphLinkIndex link : path->links()) {
+      B4LinkState& link_state = nc::FindOrDie(link_states, link);
+      link_state.AddAggregate(&aggregate_state);
+    }
+  }
+
+  size_t satisfied_aggregates = 0;
+  double current_fair_share = 0;
+  while (true) {
+    // Figure out at which fair share the next event is -- either a link is
+    // congested or an aggregate is satisfied.
+    double fair_share_of_next_event = std::numeric_limits<double>::max();
+    const B4LinkState* link_to_congest = nullptr;
+    std::vector<B4AggregateState*> aggregates_to_satisfy;
+
+    for (auto& link_and_state : link_states) {
+      B4LinkState* link_state = &link_and_state.second;
+      if (link_state->IsCongested()) {
+        continue;
+      }
+
+      double fair_share_to_congest =
+          current_fair_share + link_state->FairShareToCongest();
+      if (fair_share_to_congest < fair_share_of_next_event) {
+        fair_share_of_next_event = fair_share_to_congest;
+        link_to_congest = link_state;
+      }
+    }
+
+    for (B4AggregateState& aggregate_state : aggregate_states) {
+      if (aggregate_state.frozen()) {
+        continue;
+      }
+
+      double fair_share_to_satisfy = aggregate_state.fair_share();
+      if (fair_share_to_satisfy < fair_share_of_next_event) {
+        fair_share_of_next_event = fair_share_to_satisfy;
+        aggregates_to_satisfy = {&aggregate_state};
+        link_to_congest = nullptr;
+      } else if (fair_share_to_satisfy == fair_share_of_next_event) {
+        aggregates_to_satisfy.emplace_back(&aggregate_state);
+        link_to_congest = nullptr;
+      }
+    }
+
+    if (fair_share_of_next_event == std::numeric_limits<double>::max()) {
+      // Done -- all links have been congested and all aggregates satisfied (or
+      // we ran out of paths).
+      break;
+    }
+
+    double fair_share_delta = fair_share_of_next_event - current_fair_share;
+    for (auto& link_and_state : link_states) {
+      B4LinkState* link_state = &link_and_state.second;
+      link_state->AdvanceByFairShare(fair_share_delta);
+    }
+    for (B4AggregateState& aggregate_state : aggregate_states) {
+      aggregate_state.AdvanceByFairShare(fair_share_delta);
+    }
+    current_fair_share = fair_share_of_next_event;
+
+    if (link_to_congest != nullptr) {
+      // Will advance fair share to the congesting point. All aggregates that go
+      // over the link will need new paths.
+      to_avoid.Insert(link_to_congest->link());
+
+      for (B4AggregateState* aggregate_state :
+           link_to_congest->aggregates_over_link()) {
+        const AggregateId& aggregate_id = aggregate_state->aggregate_id();
+        const nc::net::Walk* path =
+            path_provider_->AvoidingPathOrNull(aggregate_id, to_avoid);
+        if (path->empty()) {
+          aggregate_state->freeze();
+          continue;
+        }
+
+        aggregate_state->set_current_path(path);
+        for (nc::net::GraphLinkIndex link : path->links()) {
+          B4LinkState& link_state = nc::FindOrDie(link_states, link);
+          link_state.AddAggregate(aggregate_state);
+        }
+      }
+    }
+
+    if (!aggregates_to_satisfy.empty()) {
+      for (B4AggregateState* aggregate_to_satisfy : aggregates_to_satisfy) {
+        // Will freeze the aggregate, since it has satisfied its demand.
+        aggregate_to_satisfy->freeze();
+        ++satisfied_aggregates;
+      }
+    }
+  }
+
+  RoutingConfiguration out;
+  for (const B4AggregateState& aggregate_state : aggregate_states) {
+    uint64_t cookie = aggregate_state.aggregate_input()->cookie();
+
+    const AggregateInput& aggregate_input =
+        ncode::FindOrDie(input.aggregates(), cookie);
+    auto it = aggregate_output_map.emplace(cookie, aggregate_input).first;
+    AggregateOutput& aggregate_output = it->second;
+
+    const std::map<const GraphPath*, double>& path_to_capacity =
+        aggregate_state.path_to_capacity();
+
+    // If we were unable to satisfy the demand the total capacity allocated to
+    // paths may be less than the aggregate's total demand. Will normalize.
+    double total_capacity = 0;
+
+    for (const auto& path_and_capacity : path_to_capacity) {
+      total_capacity += path_and_capacity.second;
+    }
+
+    for (const auto& path_and_capacity : path_to_capacity) {
+      const GraphPath* path = path_and_capacity.first;
+      double capacity = path_and_capacity.second;
+      if (capacity == 0) {
+        continue;
+      }
+
+      double fraction = capacity / total_capacity;
+      if (aggregate_input.num_flows() > 1 &&
+          fraction * aggregate_input.num_flows() < 1) {
+        // The split is too fine for the aggregate.
+        continue;
+      }
+
+      PathOutput path_output(fraction, path);
+      aggregate_output.AddToPaths(path_output);
+    }
+  }
+
+  auto end = high_resolution_clock::now();
+  uint64_t duration_ms = duration_cast<milliseconds>(end - start).count();
+
+  B4Output output(duration_ms);
+  output.SetAggregates(std::move(aggregate_output_map));
+  output.PopulateBandwidthLimitsAndLinks(input.link_capacity_multiplier(),
+                                         path_cache_);
+
+  // Log the output.
+  PBOutput output_pb;
+  output.ToProtobuf(path_cache_, &output_pb);
+
+  BytesBlob value_to_log;
+  value_to_log.set_bytes_value(output_pb.SerializeAsString());
+  kOutputLog->GetHandle()->AddValue(value_to_log);
+
+  return output;
+}
+
+}  // namespace ctr

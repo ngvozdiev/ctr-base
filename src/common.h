@@ -28,10 +28,18 @@ class TrafficMatrix {
 // For each aggregate a set of paths and a fraction of demand to route.
 class RoutingConfiguration {
  public:
-  void AddRouteAndFraction(const AggregateId& aggregate_id,
-                           const RouteAndFraction& route_and_fraction) {
+  void AddRouteAndFraction(
+      const AggregateId& aggregate_id,
+      const std::vector<RouteAndFraction>& routes_and_fractions) {
     CHECK(!nc::ContainsKey(configuration_, aggregate_id));
-    configuration_[aggregate_id] = route_and_fraction;
+
+    // Just to be on the safe side will check that the sum of all fractions is 1
+    double total = 0.0;
+    for (const auto& route_and_fraction : routes_and_fractions) {
+      total += route_and_fraction.second;
+    }
+    CHECK(total <= 1.001 && total >= 0.999);
+    configuration_[aggregate_id] = routes_and_fractions;
   }
 
   RouteAndFraction FindRouteOrDie(const AggregateId& aggregate_id) const {
@@ -39,7 +47,7 @@ class RoutingConfiguration {
   }
 
  private:
-  std::map<AggregateId, RouteAndFraction> configuration_;
+  std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;
 };
 
 }  // namespace ctr
