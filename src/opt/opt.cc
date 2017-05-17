@@ -1,17 +1,34 @@
 #include "opt.h"
 
+#include <algorithm>
+#include <initializer_list>
+#include <limits>
+#include <map>
+#include <memory>
+#include <set>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include "ncode_lp/src/lp.h"
+#include "ncode_lp/src/mc_flow.h"
+#include "ncode_common/src/logging.h"
+#include "ncode_common/src/map_util.h"
+#include "ncode_common/src/perfect_hash.h"
+#include "../common.h"
+
 namespace ctr {
 
 std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
     const TrafficMatrix& tm) {
-  RoutingConfiguration out;
+  auto out = nc::make_unique<RoutingConfiguration>();
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
 
-    std::vector<const nc::net::Walk*> paths =
-        path_provider_->KShorestPaths(aggregate_id, 0);
-    CHECK(paths.size() == 1) << "Unable to find a path for aggregate";
-    out.AddRouteAndFraction(aggregate_id, {{paths[0], 1.0}});
+    const nc::net::Walk* path =
+        path_provider_->AvoidingPathOrNull(aggregate_id, {});
+    CHECK(path != nullptr) << "Unable to find a path for aggregate";
+    out->AddRouteAndFraction(aggregate_id, {{path, 1.0}});
   }
 
   return out;
@@ -90,11 +107,11 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
 
 std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     const TrafficMatrix& tm) {
-  MinMaxMCProblem problem(graph_storage_, link_capacity_multiplier_);
+  MinMaxMCProblem problem(graph_, link_capacity_multiplier_);
 
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
-    nc::net::Bandwidth demand = aggregate_and_demand.second;
+    nc::net::Bandwidth demand = aggregate_and_demand.second.first;
 
     nc::net::GraphNodeIndex src;
     nc::net::GraphNodeIndex dst;
@@ -107,10 +124,10 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
   double min_utilization = problem.Solve(&paths);
   LOG(ERROR) << "MinMax util " << min_utilization;
 
-  RoutingConfiguration out;
+  auto out = nc::make_unique<RoutingConfiguration>();
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
-    nc::net::Bandwidth demand = aggregate_and_demand.second;
+    nc::net::Bandwidth demand = aggregate_and_demand.second.first;
 
     // All input aggregates should have an entry in the solution.
     std::vector<nc::lp::FlowAndPath>& flow_and_paths =
@@ -133,7 +150,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
           path_provider_->TakeOwnership(std::move(path)), fraction);
     }
 
-    out.AddRouteAndFraction(aggregate_id, routes_for_aggregate);
+    out->AddRouteAndFraction(aggregate_id, routes_for_aggregate);
   }
 
   return out;
@@ -268,8 +285,8 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
   std::map<nc::net::GraphLinkIndex, B4LinkState> link_states;
 
   // Populate link states.
-  for (nc::net::GraphLinkIndex link_index : graph_storage_->AllLinks()) {
-    const nc::net::GraphLink* link = graph_storage_->GetLink(link_index);
+  for (nc::net::GraphLinkIndex link_index : graph_->AllLinks()) {
+    const nc::net::GraphLink* link = graph_->GetLink(link_index);
 
     link_states.emplace(
         std::piecewise_construct, std::forward_as_tuple(link_index),
@@ -386,16 +403,9 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
     }
   }
 
-  RoutingConfiguration out;
+  auto out = nc::make_unique<RoutingConfiguration>();
   for (const B4AggregateState& aggregate_state : aggregate_states) {
-    uint64_t cookie = aggregate_state.aggregate_input()->cookie();
-
-    const AggregateInput& aggregate_input =
-        ncode::FindOrDie(input.aggregates(), cookie);
-    auto it = aggregate_output_map.emplace(cookie, aggregate_input).first;
-    AggregateOutput& aggregate_output = it->second;
-
-    const std::map<const GraphPath*, double>& path_to_capacity =
+    const std::map<const nc::net::Walk*, double>& path_to_capacity =
         aggregate_state.path_to_capacity();
 
     // If we were unable to satisfy the demand the total capacity allocated to
@@ -406,42 +416,22 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
       total_capacity += path_and_capacity.second;
     }
 
+    std::vector<RouteAndFraction> routes_for_aggregate;
     for (const auto& path_and_capacity : path_to_capacity) {
-      const GraphPath* path = path_and_capacity.first;
+      const nc::net::Walk* path = path_and_capacity.first;
       double capacity = path_and_capacity.second;
       if (capacity == 0) {
         continue;
       }
 
       double fraction = capacity / total_capacity;
-      if (aggregate_input.num_flows() > 1 &&
-          fraction * aggregate_input.num_flows() < 1) {
-        // The split is too fine for the aggregate.
-        continue;
-      }
-
-      PathOutput path_output(fraction, path);
-      aggregate_output.AddToPaths(path_output);
+      routes_for_aggregate.emplace_back(path, fraction);
     }
+    out->AddRouteAndFraction(aggregate_state.aggregate_id(),
+                             routes_for_aggregate);
   }
 
-  auto end = high_resolution_clock::now();
-  uint64_t duration_ms = duration_cast<milliseconds>(end - start).count();
-
-  B4Output output(duration_ms);
-  output.SetAggregates(std::move(aggregate_output_map));
-  output.PopulateBandwidthLimitsAndLinks(input.link_capacity_multiplier(),
-                                         path_cache_);
-
-  // Log the output.
-  PBOutput output_pb;
-  output.ToProtobuf(path_cache_, &output_pb);
-
-  BytesBlob value_to_log;
-  value_to_log.set_bytes_value(output_pb.SerializeAsString());
-  kOutputLog->GetHandle()->AddValue(value_to_log);
-
-  return output;
+  return out;
 }
 
 }  // namespace ctr

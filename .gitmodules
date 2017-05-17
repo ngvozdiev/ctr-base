@@ -1,9 +1,3 @@
-[submodule "external/ncode_common"]
-	path = external/ncode_common
-	url = https://github.com/ngvozdiev/ncode-common.git
-[submodule "external/ncode_net"]
-	path = external/ncode_net
-	url = https://github.com/ngvozdiev/ncode-net.git
-[submodule "external/ncode_lp"]
-	path = external/ncode_lp
-	url = https://github.com/ngvozdiev/ncode-lp.git
+[submodule "external/googletest"]
+	path = external/googletest
+	url = https://github.com/google/googletest.git
