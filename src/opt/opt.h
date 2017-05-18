@@ -50,6 +50,7 @@ class ShortestPathOptimizer : public Optimizer {
 // Should be considered a lower bound for how low link utilization can get with
 // a given traffic matrix.
 class MinMaxOptimizer : public Optimizer {
+ public:
   MinMaxOptimizer(std::unique_ptr<PathProvider> path_provider,
                   double link_capacity_multiplier = 1.0)
       : Optimizer(std::move(path_provider), link_capacity_multiplier) {}
@@ -61,6 +62,7 @@ class MinMaxOptimizer : public Optimizer {
 // Runs a heuristic similar to that of B4. Each aggregate's "fair share" will be
 // set to its priority from the TM.
 class B4Optimizer : public Optimizer {
+ public:
   B4Optimizer(std::unique_ptr<PathProvider> path_provider,
               double link_capacity_multiplier = 1.0)
       : Optimizer(std::move(path_provider), link_capacity_multiplier) {}

@@ -87,8 +87,6 @@ TEST_F(ShortestPathTest, SingleAggregate) {
 }
 
 TEST_F(ShortestPathTest, TwoAggregates) {
-  ShortestPathOptimizer sp_optimizer(std::move(path_provider_));
-
   AddSPAggregate("A", "B");
   AddSPAggregate("A", "C");
   auto routing = sp_optimizer_.Optimize(tm_);
@@ -98,112 +96,95 @@ TEST_F(ShortestPathTest, TwoAggregates) {
 
 class B4Test : public TestBase {
  protected:
-  B4Test() : b4_optimizer_(std::move(path_provider_)) {}
-
-  void AddB4Aggregate(const std::string& src, const std::string& dst,
-                      nc::net::Bandwidth bw) {
-    AddAggregate(src, dst, 1, bw);
+  void AddAggregate(const std::string& src, const std::string& dst,
+                    nc::net::Bandwidth bw) {
+    TestBase::AddAggregate(src, dst, 1, bw);
   }
-
-  B4Optimizer b4_optimizer_;
 };
 
 // Fits on the shortest path.
 TEST_F(B4Test, SinglePath) {
-  AddB4Aggregate("A", "B", kDefaultLinkspeed.bps());
+  B4Optimizer b4_optimizer(std::move(path_provider_));
+  AddAggregate("A", "B", kDefaultLinkspeed);
+  auto routing = b4_optimizer.Optimize(tm_);
 
-  Input input(1.0, std::move(input_map_));
-  B4Optimizer optimizer(&path_cache_);
-  B4Output output = optimizer.Optimize(input);
-  ASSERT_FALSE(output.IsOversubscribed());
-
-  ASSERT_EQ(1ul, output.aggregates().size());
-  const AggregateOutput& aggregate_output =
-      ncode::FindOrDie(output.aggregates(), 10);
-
-  // +1 for the backup path.
-  ASSERT_EQ(2ul, aggregate_output.paths().size());
-
-  const PathOutput* path_output = aggregate_output.PathsSorted().front();
-  ASSERT_EQ(1.0, path_output->fraction());
-
-  const ncode::net::GraphPath* graph_path =
-      graph_storage_.PathFromStringOrDie("[A->B]", 10);
-  ASSERT_EQ(graph_path, path_output->path());
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 1.0));
 }
 
 // Does not fit on the shortest path
 TEST_F(B4Test, SinglePathNoFit) {
-  AddAggregate("A", "B", 10, 100, kDefaultLinkspeed.bps() * 1.2);
+  B4Optimizer b4_optimizer(std::move(path_provider_));
+  AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
+  auto routing = b4_optimizer.Optimize(tm_);
 
-  Input input(0.9, std::move(input_map_));
-  B4Optimizer optimizer(&path_cache_);
-  B4Output output = optimizer.Optimize(input);
-  ASSERT_FALSE(output.IsOversubscribed());
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.833));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.166));
+}
 
-  ASSERT_EQ(1ul, output.aggregates().size());
-  const AggregateOutput& aggregate_output =
-      ncode::FindOrDie(output.aggregates(), 10);
-  ASSERT_EQ(2ul, aggregate_output.paths().size());
+// Does not fit on the shortest path, lower link capacity
+TEST_F(B4Test, SinglePathNoFitLowerCapacity) {
+  B4Optimizer b4_optimizer(std::move(path_provider_), 0.9);
+  AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
+  auto routing = b4_optimizer.Optimize(tm_);
 
-  // This should be the shorter of the 2 paths (A->B).
-  const PathOutput* path_output = aggregate_output.PathsSorted().front();
-  ASSERT_DOUBLE_EQ(0.9, path_output->fraction() * 1.2);
-
-  const ncode::net::GraphPath* graph_path =
-      graph_storage_.PathFromStringOrDie("[A->B]", 10);
-  ASSERT_EQ(graph_path, path_output->path());
-
-  const PathOutput* other_path_output = aggregate_output.PathsSorted().back();
-  ASSERT_DOUBLE_EQ(0.3, other_path_output->fraction() * 1.2);
-
-  graph_path = graph_storage_.PathFromStringOrDie("[A->D, D->C, C->B]", 10);
-  ASSERT_EQ(graph_path, other_path_output->path());
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.75));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.25));
 }
 
 // A couple of aggregates that do not fit on the shortest path
 TEST_F(B4Test, MultiSinglePathNoFit) {
-  AddAggregate("A", "B", 10, 100, kDefaultLinkspeed.bps() * 0.6);
-  AddAggregate("A", "C", 11, 100, kDefaultLinkspeed.bps() * 0.6);
+  B4Optimizer b4_optimizer(std::move(path_provider_), 0.9);
+  AddAggregate("A", "B", kDefaultLinkspeed * 0.6);
+  AddAggregate("A", "C", kDefaultLinkspeed * 0.6);
+  auto routing = b4_optimizer.Optimize(tm_);
 
-  Input input(0.9, std::move(input_map_));
-  B4Optimizer optimizer(&path_cache_);
-  B4Output output = optimizer.Optimize(input);
-  ASSERT_FALSE(output.IsOversubscribed());
-  ASSERT_EQ(2ul, output.aggregates().size());
-
-  ASSERT_TRUE(HasPath(output, "[A->B]", 0.9 / 1.2, 10));
-  ASSERT_TRUE(HasPath(output, "[A->D, D->C, C->B]", 0.3 / 1.2, 10));
-  ASSERT_TRUE(HasPath(output, "[A->B, B->C]", 0.9 / 1.2, 11));
-  ASSERT_TRUE(HasPath(output, "[A->D, D->C]", 0.3 / 1.2, 11));
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.9 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.3 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 0.9 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.3 / 1.2));
 }
 
 // A couple of aggregates, one does not fit.
 TEST_F(B4Test, MultiSinglePathOneNoFit) {
-  AddAggregate("A", "B", 10, 100, kDefaultLinkspeed.bps() * 0.3);
-  AddAggregate("A", "C", 11, 100, kDefaultLinkspeed.bps() * 0.9);
-
-  Input input(0.9, std::move(input_map_));
-  B4Optimizer optimizer(&path_cache_);
-  B4Output output = optimizer.Optimize(input);
-  ASSERT_FALSE(output.IsOversubscribed());
-  ASSERT_EQ(2ul, output.aggregates().size());
+  B4Optimizer b4_optimizer(std::move(path_provider_), 0.9);
+  AddAggregate("A", "B", kDefaultLinkspeed * 0.3);
+  AddAggregate("A", "C", kDefaultLinkspeed * 0.9);
+  auto routing = b4_optimizer.Optimize(tm_);
 
   // Should be the same as in the previous test!
-  ASSERT_TRUE(HasPath(output, "[A->B]", 0.9 / 1.2, 10));
-  ASSERT_TRUE(HasPath(output, "[A->D, D->C, C->B]", 0.3 / 1.2, 10));
-  ASSERT_TRUE(HasPath(output, "[A->B, B->C]", 0.9 / 1.2, 11));
-  ASSERT_TRUE(HasPath(output, "[A->D, D->C]", 0.3 / 1.2, 11));
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.9 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.3 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 0.9 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.3 / 1.2));
 }
 
 // Traffic does not fit.
 TEST_F(B4Test, NoFit) {
-  AddAggregate("A", "B", 10, 100, kDefaultLinkspeed.bps() * 3);
+  B4Optimizer b4_optimizer(std::move(path_provider_));
+  AddAggregate("A", "B", kDefaultLinkspeed * 3);
+  auto routing = b4_optimizer.Optimize(tm_);
 
-  Input input(1.0, std::move(input_map_));
-  B4Optimizer optimizer(&path_cache_);
-  B4Output output = optimizer.Optimize(input);
-  ASSERT_TRUE(output.IsOversubscribed());
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.5));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.5));
+}
+
+class MinMaxTest : public TestBase {
+ protected:
+  void AddAggregate(const std::string& src, const std::string& dst,
+                    nc::net::Bandwidth bw) {
+    TestBase::AddAggregate(src, dst, 1, bw);
+  }
+};
+
+// A single aggregate with 2 disjoint paths through the network. The optimizer
+// should split traffic evenly among the two paths (given enough capacity).
+TEST_F(MinMaxTest, SinglePath) {
+  MinMaxOptimizer minmax_optimizer(std::move(path_provider_), 0.9);
+  AddAggregate("A", "B", kDefaultLinkspeed);
+  auto routing = minmax_optimizer.Optimize(tm_);
+
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.5));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.5));
 }
 
 }  // namespace ctr

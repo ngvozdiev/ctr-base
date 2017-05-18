@@ -381,7 +381,7 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
         const AggregateId& aggregate_id = aggregate_state->aggregate_id();
         const nc::net::Walk* path =
             path_provider_->AvoidingPathOrNull(aggregate_id, to_avoid);
-        if (path->empty()) {
+        if (path == nullptr) {
           aggregate_state->freeze();
           continue;
         }
