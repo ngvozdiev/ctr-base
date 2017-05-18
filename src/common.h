@@ -1,11 +1,34 @@
 #ifndef CTR_COMMON_H
 #define CTR_COMMON_H
 
+#include <string>
+#include <tuple>
+
+#include "ncode_common/src/common.h"
 #include "ncode_net/src/net_common.h"
 
 namespace ctr {
 
-using AggregateId = std::pair<nc::net::GraphNodeIndex, nc::net::GraphNodeIndex>;
+// Each aggregate is identified by a combination of src, dst.
+class AggregateId {
+ public:
+  AggregateId(nc::net::GraphNodeIndex src, nc::net::GraphNodeIndex dst)
+      : src_(src), dst_(dst) {}
+
+  nc::net::GraphNodeIndex src() const { return src_; }
+
+  nc::net::GraphNodeIndex dst() const { return dst_; }
+
+  std::string ToString(const nc::net::GraphStorage& graph) const;
+
+  friend bool operator<(const AggregateId& a, const AggregateId& b);
+  friend bool operator==(const AggregateId& a, const AggregateId& b);
+  friend bool operator!=(const AggregateId& a, const AggregateId& b);
+
+ private:
+  nc::net::GraphNodeIndex src_;
+  nc::net::GraphNodeIndex dst_;
+};
 
 // A bandwidth demand and arbitrary priority.
 using DemandAndPriority = std::pair<nc::net::Bandwidth, double>;
@@ -16,19 +39,35 @@ using RouteAndFraction = std::pair<const nc::net::Walk*, double>;
 // For each aggregate, a bandwidth demand and a priority.
 class TrafficMatrix {
  public:
-  TrafficMatrix() {}
+  // Loads a TraffixMatrix from a string in the format used by
+  // https://bitbucket.org/StevenGay/repetita/src.
+  static std::unique_ptr<TrafficMatrix> LoadRepetitaOrDie(
+      const std::string& matrix_string,
+      const std::vector<std::string>& node_names,
+      const nc::net::GraphStorage* graph);
+
+  // Constructs an empty traffic matrix.
+  TrafficMatrix(const nc::net::GraphStorage* graph) : graph_(graph) {}
 
   const std::map<AggregateId, DemandAndPriority>& demands() const {
     return demands_;
   }
 
   void AddDemand(const AggregateId& aggregate_id,
-                 const DemandAndPriority& demand_and_priority) {
-    CHECK(!nc::ContainsKey(demands_, aggregate_id));
-    demands_[aggregate_id] = demand_and_priority;
-  }
+                 const DemandAndPriority& demand_and_priority);
+
+  // A DemandMatrix is similar to TrafficMatrix, but has no concept of priority.
+  std::unique_ptr<nc::lp::DemandMatrix> ToDemandMatrix() const;
+
+  // Returns a new traffic matrix with the same aggregates, but each aggregate's
+  // demand is +- a fraction of this one.
+  std::unique_ptr<TrafficMatrix> Randomize(double fraction,
+                                           std::mt19937* rnd) const;
 
  private:
+  // The graph.
+  const nc::net::GraphStorage* graph_;
+
   // For each aggregate its demand and its priority.
   std::map<AggregateId, DemandAndPriority> demands_;
 
@@ -42,26 +81,16 @@ class RoutingConfiguration {
 
   void AddRouteAndFraction(
       const AggregateId& aggregate_id,
-      const std::vector<RouteAndFraction>& routes_and_fractions) {
-    CHECK(!nc::ContainsKey(configuration_, aggregate_id));
-
-    // Just to be on the safe side will check that the sum of all fractions is 1
-    double total = 0.0;
-    for (const auto& route_and_fraction : routes_and_fractions) {
-      total += route_and_fraction.second;
-    }
-    CHECK(total <= 1.001 && total >= 0.999);
-    configuration_[aggregate_id] = routes_and_fractions;
-  }
+      const std::vector<RouteAndFraction>& routes_and_fractions);
 
   const std::vector<RouteAndFraction>& FindRoutesOrDie(
-      const AggregateId& aggregate_id) const {
-    return nc::FindOrDieNoPrint(configuration_, aggregate_id);
-  }
+      const AggregateId& aggregate_id) const;
 
   const std::map<AggregateId, std::vector<RouteAndFraction>>& routes() const {
     return configuration_;
   }
+
+  std::string ToString(const nc::net::GraphStorage& graph) const;
 
  private:
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;

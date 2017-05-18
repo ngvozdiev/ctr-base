@@ -1,11 +1,11 @@
 #include "path_provider.h"
 
+#include <algorithm>
 #include <set>
 
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/map_util.h"
 #include "ncode_net/src/algorithm.h"
-#include "ncode_net/src/net_common.h"
 
 namespace ctr {
 
@@ -22,7 +22,7 @@ PathProvider::Generator* PathProvider::FindOrCreateGenerator(
   constraint_sets.emplace(empty_set);
 
   auto new_gen = nc::make_unique<PathProvider::Generator>(
-      aggregate_id.first, aggregate_id.second, *graph_, constraint_sets);
+      aggregate_id.src(), aggregate_id.dst(), *graph_, constraint_sets);
   PathProvider::Generator* raw_ptr = new_gen.get();
 
   generators_[aggregate_id] = std::move(new_gen);

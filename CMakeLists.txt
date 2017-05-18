@@ -61,8 +61,8 @@ endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/external ${PROJECT_BINARY_DIR} ${OPTIMIZER_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/external)
 
-set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h)
-add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc ${CTR_BASE_HEADER_FILES})
+set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h)
+add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc ${CTR_BASE_HEADER_FILES})
 target_link_libraries(ctr_base ncode_lp ${OPTIMIZER_LIBRARIES})
 
 if (NOT CTR_BASE_DISABLE_TESTS)

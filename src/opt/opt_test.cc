@@ -1,4 +1,5 @@
 #include "opt.h"
+#include "ctr.h"
 
 #include <gtest/gtest.h>
 #include <set>
@@ -178,13 +179,99 @@ class MinMaxTest : public TestBase {
 
 // A single aggregate with 2 disjoint paths through the network. The optimizer
 // should split traffic evenly among the two paths (given enough capacity).
-TEST_F(MinMaxTest, SinglePath) {
+TEST_F(MinMaxTest, SingleAggregate) {
   MinMaxOptimizer minmax_optimizer(std::move(path_provider_), 0.9);
   AddAggregate("A", "B", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);
 
   ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.5));
   ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.5));
+}
+
+TEST_F(MinMaxTest, TwoAggregates) {
+  MinMaxOptimizer minmax_optimizer(std::move(path_provider_));
+  AddAggregate("A", "B", kDefaultLinkspeed);
+  AddAggregate("A", "D", kDefaultLinkspeed);
+  auto routing = minmax_optimizer.Optimize(tm_);
+
+  // Traffic should be split among the 2 shortest paths.
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 1.0));
+  ASSERT_TRUE(HasPath(*routing, "[A->D]", 1.0));
+}
+
+TEST_F(MinMaxTest, TwoAggregatesNoFit) {
+  MinMaxOptimizer minmax_optimizer(std::move(path_provider_));
+  AddAggregate("A", "B", kDefaultLinkspeed * 2);
+  AddAggregate("A", "D", kDefaultLinkspeed);
+  auto routing = minmax_optimizer.Optimize(tm_);
+
+  // The optimizer should equalize overload:
+  // 0.75 * 2 is 1.5 and 1 + 0.25 * 2 is also 1.5.
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.75));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.25));
+  ASSERT_TRUE(HasPath(*routing, "[A->D]", 1.0));
+}
+
+class CTRTest : public TestBase {
+ protected:
+  void AddAggregate(const std::string& src, const std::string& dst,
+                    nc::net::Bandwidth bw) {
+    TestBase::AddAggregate(src, dst, 1, bw);
+  }
+};
+
+TEST_F(CTRTest, SingleAggregateFit) {
+  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  AddAggregate("A", "C", kDefaultLinkspeed);
+  auto routing = ctr_optimizer.Optimize(tm_);
+
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 1.0));
+}
+
+TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
+  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  AddAggregate("A", "C", kDefaultLinkspeed * 2);
+  auto routing = ctr_optimizer.Optimize(tm_);
+
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 0.5));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.5));
+}
+
+// Will set the link multiplier to 0.9. This should cause the shortest path to
+// be loaded up to kDefaultLinkspeed * 0.9 and the rest of the aggregate to end
+// up on the second best path. There should be no oversubscription.
+TEST_F(CTRTest, SingleAggregateTwoPaths) {
+  CTROptimizer ctr_optimizer(std::move(path_provider_), 0.9);
+  AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
+  auto routing = ctr_optimizer.Optimize(tm_);
+
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.9 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.3 / 1.2));
+}
+
+TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
+  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  AddAggregate("A", "C", kDefaultLinkspeed * 3);
+  auto routing = ctr_optimizer.Optimize(tm_);
+
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 0.5));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.5));
+}
+
+TEST_F(CTRTest, FourAggregates) {
+  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  AddAggregate("A", "B", nc::net::Bandwidth::FromKBitsPerSecond(1500));
+  AddAggregate("B", "A", nc::net::Bandwidth::FromKBitsPerSecond(200));
+  AddAggregate("C", "D", nc::net::Bandwidth::FromKBitsPerSecond(1500));
+  AddAggregate("D", "C", nc::net::Bandwidth::FromKBitsPerSecond(200));
+  auto routing = ctr_optimizer.Optimize(tm_);
+
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.666));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.333));
+  ASSERT_TRUE(HasPath(*routing, "[C->B, B->A, A->D]", 0.333));
+  ASSERT_TRUE(HasPath(*routing, "[C->D]", 0.666));
+  ASSERT_TRUE(HasPath(*routing, "[B->A]", 1.0));
+  ASSERT_TRUE(HasPath(*routing, "[D->C]", 1.0));
 }
 
 }  // namespace ctr

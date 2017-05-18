@@ -113,10 +113,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     const AggregateId& aggregate_id = aggregate_and_demand.first;
     nc::net::Bandwidth demand = aggregate_and_demand.second.first;
 
-    nc::net::GraphNodeIndex src;
-    nc::net::GraphNodeIndex dst;
-    std::tie(src, dst) = aggregate_id;
-    problem.AddCommodity(src, dst, demand);
+    problem.AddCommodity(aggregate_id.src(), aggregate_id.dst(), demand);
   }
 
   std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
@@ -131,7 +128,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
 
     // All input aggregates should have an entry in the solution.
     std::vector<nc::lp::FlowAndPath>& flow_and_paths =
-        nc::FindOrDieNoPrint(paths, aggregate_id);
+        nc::FindOrDieNoPrint(paths, {aggregate_id.src(), aggregate_id.dst()});
 
     std::vector<RouteAndFraction> routes_for_aggregate;
     for (nc::lp::FlowAndPath& flow_and_path : flow_and_paths) {
