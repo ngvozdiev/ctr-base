@@ -9,7 +9,9 @@ namespace ctr {
 // Performance of a single optimizer on a single TM.
 class PerOptimizerSummary {
  public:
-  PerOptimizerSummary(uint64_t processing_time_ms,
+  PerOptimizerSummary(const TrafficMatrix& input,
+                      const RoutingConfiguration& output,
+                      uint64_t processing_time_ms,
                       const nc::net::GraphStorage* graph)
       : processing_time_ms(processing_time_ms) {
     // How far away each flow is from the shortest path. In seconds.
@@ -28,24 +30,35 @@ class PerOptimizerSummary {
     // Unmet demand.
     std::vector<double> unmet_demand;
 
-    for (const auto& cookie_and_aggregate_output : output.aggregates()) {
-      const fubar::AggregateOutput& aggregate_output =
-          cookie_and_aggregate_output.second;
-      size_t total_num_flows = aggregate_output.total_num_flows();
-      double total_aggregate_demand = aggregate_output.total_demand_bps();
+    for (const auto& aggregate_and_aggregate_output : output.routes()) {
+      const AggregateId& aggregate_id = aggregate_and_aggregate_output.first;
+      const std::vector<RouteAndFraction>& routes =
+          aggregate_and_aggregate_output.second;
+      const DemandAndFlowCount& demand_and_flow_count =
+          nc::FindOrDie(input.demands(), aggregate_id);
+
+      size_t total_num_flows = demand_and_flow_count.second;
+      double total_aggregate_demand = demand_and_flow_count.first.bps();
       double required_per_flow_bps = total_aggregate_demand / total_num_flows;
 
-      std::chrono::microseconds shortest_path_delay =
-          aggregate_output.ShortestPath(path_cache)->delay();
+      std::unique_ptr<nc::net::Walk> sp = nc::net::ShortestPathWithConstraints(
+          aggregate_id.src(), aggregate_id.dst(), *graph, {});
+      CHECK(sp);
+
+      std::chrono::microseconds shortest_path_delay = sp->delay();
       double sp_delay_sec =
           std::chrono::duration<double>(shortest_path_delay).count();
+
+      // Will limit the delay at 1ms.
       sp_delay_sec = std::max(sp_delay_sec, 0.001);
 
       size_t path_count = 0;
-      for (const auto& tag_and_path : aggregate_output.paths()) {
+      for (const auto& route : routes) {
+        const nc::net::Walk* path = route.first;
+        double fraction = route.second;
+
         const fubar::PathOutput& path_output = tag_and_path.second;
-        std::chrono::microseconds path_delay = path_output.path()->delay();
-        double per_flow_bps = path_output.per_flow_bps();
+        std::chrono::microseconds path_delay = path->delay();
         CHECK(path_delay >= shortest_path_delay);
 
         if (path_output.bps_limit() > 0) {

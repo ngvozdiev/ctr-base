@@ -1,8 +1,11 @@
 #ifndef CTR_OPT_H
 #define CTR_OPT_H
 
-#include "ncode_net/src/net_common.h"
-#include "ncode_net/src/graph_query.h"
+#include <algorithm>
+#include <memory>
+
+#include "ncode_common/src/logging.h"
+#include "../common.h"
 #include "path_provider.h"
 
 namespace ctr {
@@ -60,7 +63,7 @@ class MinMaxOptimizer : public Optimizer {
 };
 
 // Runs a heuristic similar to that of B4. Each aggregate's "fair share" will be
-// set to its priority from the TM.
+// set to its flow count from the TM.
 class B4Optimizer : public Optimizer {
  public:
   B4Optimizer(std::unique_ptr<PathProvider> path_provider,

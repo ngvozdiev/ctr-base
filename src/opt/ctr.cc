@@ -11,7 +11,7 @@
 #include "ncode_common/src/map_util.h"
 #include "ncode_common/src/perfect_hash.h"
 #include "ncode_common/src/substitute.h"
-#include "ncode_lp/src/lp.h"
+#include "ncode_common/src/lp/lp.h"
 #include "path_provider.h"
 
 namespace ctr {
@@ -262,10 +262,10 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   size_t total_paths = 0;
 
   // Per-aggregate constraints.
-  for (const auto& aggregate_id_and_demand : input_->demands()) {
-    const AggregateId& aggregate_id = aggregate_id_and_demand.first;
-    const DemandAndPriority& demand_and_priority =
-        aggregate_id_and_demand.second;
+  for (const auto& aggregate_id_and_flow_count : input_->demands()) {
+    const AggregateId& aggregate_id = aggregate_id_and_flow_count.first;
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_id_and_flow_count.second;
 
     // Skip frozen aggregates.
     if (nc::ContainsKey(frozen_aggregates_, aggregate_id)) {
@@ -277,7 +277,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     ConstraintIndex per_aggregate_constraint = problem.AddConstraint();
     problem.SetConstraintRange(per_aggregate_constraint, 1, 1);
 
-    double priority = demand_and_priority.second;
+    double flow_count = demand_and_flow_count.second;
     const std::vector<PathPtr>& paths =
         nc::FindOrDieNoPrint(*paths_, aggregate_id);
 
@@ -295,12 +295,12 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       // The cost, delay in seconds.
       double cost = PathCost(path);
       double uniqueness_weight =
-          kM2 * priority * cost / PathCost(shortest_path);
+          kM2 * flow_count * cost / PathCost(shortest_path);
       problem.SetObjectiveCoefficient(variable,
-                                      priority * cost + uniqueness_weight);
+                                      flow_count * cost + uniqueness_weight);
 
       PathAndCost path_and_cost(aggregate_id, variable,
-                                demand_and_priority.first, path);
+                                demand_and_flow_count.first, path);
       for (nc::net::GraphLinkIndex link : path->links()) {
         link_to_paths[link].emplace_back(path_and_cost);
       }
@@ -589,11 +589,11 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
       continue;
     }
 
-    const DemandAndPriority& input =
+    const DemandAndFlowCount& input =
         nc::FindOrDieNoPrint(input_->demands(), aggregate);
     PathPtr path = paths.front();
-    double priority = input.second;
-    total_cost += priority * PathCost(path) + priority * kM2;
+    double flow_count = input.second;
+    total_cost += flow_count * PathCost(path) + flow_count * kM2;
 
     std::vector<RouteAndFraction>& aggregate_paths =
         run_output_.aggregate_outputs[aggregate];

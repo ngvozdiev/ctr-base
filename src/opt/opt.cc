@@ -1,21 +1,21 @@
 #include "opt.h"
 
-#include <algorithm>
+#include <stddef.h>
 #include <initializer_list>
 #include <limits>
 #include <map>
-#include <memory>
 #include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "ncode_lp/src/lp.h"
-#include "ncode_lp/src/mc_flow.h"
-#include "ncode_common/src/logging.h"
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/lp/lp.h"
+#include "ncode_common/src/lp/mc_flow.h"
 #include "ncode_common/src/map_util.h"
+#include "ncode_common/src/net/net_common.h"
+#include "ncode_common/src/net/algorithm.h"
 #include "ncode_common/src/perfect_hash.h"
-#include "../common.h"
 
 namespace ctr {
 
@@ -194,11 +194,11 @@ struct B4LinkState {
 class B4AggregateState {
  public:
   B4AggregateState(const AggregateId& aggregate_id,
-                   const DemandAndPriority& demand_and_priority)
+                   const DemandAndFlowCount& demand_and_flow_count)
       : aggregate_id_(aggregate_id),
-        demand_(demand_and_priority.first),
+        demand_(demand_and_flow_count.first),
         current_path_(nullptr),
-        fair_share_(demand_and_priority.second) {
+        fair_share_(demand_and_flow_count.second) {
     fair_share_ratio_ = demand_.bps() / fair_share_;
   }
 
@@ -298,9 +298,10 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
   aggregate_states.reserve(tm.demands().size());
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
-    const DemandAndPriority& demand_and_priority = aggregate_and_demand.second;
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_and_demand.second;
 
-    aggregate_states.emplace_back(aggregate_id, demand_and_priority);
+    aggregate_states.emplace_back(aggregate_id, demand_and_flow_count);
     B4AggregateState& aggregate_state = aggregate_states.back();
 
     const nc::net::Walk* path =

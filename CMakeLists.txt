@@ -6,7 +6,7 @@ if(TARGET ctr_base)
   return()
 endif(TARGET ctr_base)
 
-project(NCodeLP)
+project(CTR)
 option(CTR_BASE_DISABLE_TESTS "If tests should be compiled or not" ON)
 option(CTR_BASE_DEBUG "A debug build" OFF)
 option(CTR_BASE_ASAN "Compile with ASAN on" OFF)
@@ -42,28 +42,16 @@ if (NOT CTR_BASE_DISABLE_TESTS)
    endmacro(add_test_exec)
 endif()
 
-set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_extensions)
-
 if (NOT TARGET ncode_common)
    EXECUTE_PROCESS(COMMAND "git" "clone" "https://github.com/ngvozdiev/ncode-common.git" "${CMAKE_BINARY_DIR}/external/ncode_common")
    add_subdirectory(${CMAKE_BINARY_DIR}/external/ncode_common)
 endif()
 
-if (NOT TARGET ncode_net)
-   EXECUTE_PROCESS(COMMAND "git" "clone" "https://github.com/ngvozdiev/ncode-net.git" "${CMAKE_BINARY_DIR}/external/ncode_net")
-   add_subdirectory(${CMAKE_BINARY_DIR}/external/ncode_net)
-endif()
+include_directories(${CMAKE_SOURCE_DIR}/external ${CMAKE_BINARY_DIR}/external)
 
-if (NOT TARGET ncode_lp)
-   EXECUTE_PROCESS(COMMAND "git" "clone" "https://github.com/ngvozdiev/ncode-lp.git" "${CMAKE_BINARY_DIR}/external/ncode_lp")
-   add_subdirectory(${CMAKE_BINARY_DIR}/external/ncode_lp)
-endif()
-
-include_directories(${CMAKE_SOURCE_DIR}/external ${PROJECT_BINARY_DIR} ${OPTIMIZER_INCLUDE_DIRS} ${CMAKE_BINARY_DIR}/external)
-
-set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h)
-add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc ${CTR_BASE_HEADER_FILES})
-target_link_libraries(ctr_base ncode_lp ${OPTIMIZER_LIBRARIES})
+set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h)
+add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc ${CTR_BASE_HEADER_FILES})
+target_link_libraries(ctr_base ncode)
 
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)

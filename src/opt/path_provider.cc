@@ -5,7 +5,7 @@
 
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/map_util.h"
-#include "ncode_net/src/algorithm.h"
+#include "ncode_common/src/net/algorithm.h"
 
 namespace ctr {
 

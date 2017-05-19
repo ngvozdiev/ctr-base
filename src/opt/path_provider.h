@@ -5,14 +5,9 @@
 #include <memory>
 #include <vector>
 
-#include "ncode_net/src/net_common.h"
+#include "ncode_common/src/net/net_common.h"
+#include "ncode_common/src/net/algorithm.h"
 #include "../common.h"
-
-namespace nc {
-namespace net {
-class DisjunctKShortestPathsGenerator;
-} /* namespace net */
-} /* namespace nc */
 
 namespace ctr {
 

@@ -1,10 +1,9 @@
+#include "ncode_common/src/common.h"
 #include "common.h"
 
-#include <utility>
-#include <vector>
+#include <tuple>
 
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
+#include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/strutil.h"
 
 namespace ctr {
@@ -28,9 +27,20 @@ std::string AggregateId::ToString(const nc::net::GraphStorage& graph) const {
 }
 
 void TrafficMatrix::AddDemand(const AggregateId& aggregate_id,
-                              const DemandAndPriority& demand_and_priority) {
+                              const DemandAndFlowCount& demand_and_flow_count) {
   CHECK(!nc::ContainsKey(demands_, aggregate_id));
-  demands_[aggregate_id] = demand_and_priority;
+  demands_[aggregate_id] = demand_and_flow_count;
+}
+
+TrafficMatrix::TrafficMatrix(
+    const nc::lp::DemandMatrix& demand_matrix,
+    const std::map<nc::lp::SrcAndDst, double>& flow_counts)
+    : graph_(demand_matrix.graph()) {
+  for (const auto& element : demand_matrix.elements()) {
+    double flow_count =
+        nc::FindWithDefault(flow_counts, {element.src, element.dst}, 1.0);
+    demands_[{element.src, element.dst}] = {element.demand, flow_count};
+  }
 }
 
 std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
@@ -45,100 +55,31 @@ std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
   return nc::make_unique<nc::lp::DemandMatrix>(std::move(elements), graph_);
 }
 
+static double Pick(double current, double fraction, std::mt19937* rnd) {
+  double delta = current * fraction;
+  double low = current - delta;
+  double high = current + delta;
+  std::uniform_real_distribution<double> dist(low, high);
+  double new_demand = dist(*rnd);
+  return std::max(new_demand, 1.0);
+}
+
 std::unique_ptr<TrafficMatrix> TrafficMatrix::Randomize(
-    double fraction, std::mt19937* rnd) const {
-  std::map<AggregateId, DemandAndPriority> new_demands;
+    double demand_fraction, double flow_count_fraction,
+    std::mt19937* rnd) const {
+  std::map<AggregateId, DemandAndFlowCount> new_demands;
   for (const auto& aggregate_and_demand : demands_) {
     const AggregateId& aggregate = aggregate_and_demand.first;
     nc::net::Bandwidth demand = aggregate_and_demand.second.first;
+    double flow_count = aggregate_and_demand.second.second;
 
-    double demand_mbps = demand.Mbps();
-    double delta = demand_mbps * fraction;
-
-    double low = demand_mbps - delta;
-    double high = demand_mbps + delta;
-    std::uniform_real_distribution<double> dist(low, high);
-    double new_demand = dist(*rnd);
-
-    new_demands[aggregate] = {
-        nc::net::Bandwidth::FromMBitsPerSecond(new_demand),
-        aggregate_and_demand.second.second};
+    nc::net::Bandwidth new_demand = nc::net::Bandwidth::FromBitsPerSecond(
+        Pick(demand.bps(), demand_fraction, rnd));
+    double new_flow_count = Pick(flow_count, flow_count_fraction, rnd);
+    new_demands[aggregate] = {new_demand, new_flow_count};
   }
 
   auto new_tm = nc::make_unique<TrafficMatrix>(graph_);
-  new_tm->demands_ = std::move(new_demands);
-  return new_tm;
-}
-
-// Parses a line of the form <tag> <count> and returns count.
-static uint32_t ParseCountOrDie(const std::string& tag,
-                                const std::string& line) {
-  std::vector<std::string> line_split = nc::Split(line, " ");
-  CHECK(line_split.size() == 2);
-  CHECK(line_split[0] == tag);
-
-  uint32_t count;
-  CHECK(nc::safe_strtou32(line_split[1], &count));
-  return count;
-}
-
-std::unique_ptr<TrafficMatrix> TrafficMatrix::LoadRepetitaOrDie(
-    const std::string& matrix_string,
-    const std::vector<std::string>& node_names,
-    const nc::net::GraphStorage* graph) {
-  std::vector<std::string> all_lines = nc::Split(matrix_string, "\n");
-  auto it = all_lines.begin();
-
-  const std::string& demands_line = *it;
-  uint32_t num_demands = ParseCountOrDie("DEMANDS", demands_line);
-
-  // Skip free form line.
-  ++it;
-
-  std::map<std::pair<nc::net::GraphNodeIndex, nc::net::GraphNodeIndex>, double>
-      total_demands;
-  for (uint32_t i = 0; i < num_demands; ++i) {
-    ++it;
-
-    std::vector<std::string> line_split = nc::Split(*it, " ");
-    CHECK(line_split.size() == 4) << *it << " demand " << i;
-
-    uint32_t src_index;
-    uint32_t dst_index;
-    double demand_kbps;
-
-    CHECK(nc::safe_strtou32(line_split[1], &src_index));
-    CHECK(nc::safe_strtou32(line_split[2], &dst_index));
-    CHECK(nc::safe_strtod(line_split[3], &demand_kbps));
-
-    CHECK(src_index < node_names.size()) << src_index << " line " << *it;
-    CHECK(dst_index < node_names.size()) << dst_index << " line " << *it;
-
-    nc::net::GraphNodeIndex src =
-        graph->NodeFromStringOrDie(node_names[src_index]);
-    nc::net::GraphNodeIndex dst =
-        graph->NodeFromStringOrDie(node_names[dst_index]);
-
-    total_demands[{src, dst}] += demand_kbps;
-  }
-
-  std::map<AggregateId, DemandAndPriority> new_demands;
-  for (const auto& src_and_dst_and_demand : total_demands) {
-    double demand_kbps = src_and_dst_and_demand.second;
-    if (demand_kbps < 1) {
-      continue;
-    }
-
-    nc::net::GraphNodeIndex src;
-    nc::net::GraphNodeIndex dst;
-    std::tie(src, dst) = src_and_dst_and_demand.first;
-
-    nc::net::Bandwidth demand =
-        nc::net::Bandwidth::FromKBitsPerSecond(demand_kbps);
-    new_demands[{src, dst}] = demand;
-  }
-
-  auto new_tm = nc::make_unique<TrafficMatrix>(graph);
   new_tm->demands_ = std::move(new_demands);
   return new_tm;
 }

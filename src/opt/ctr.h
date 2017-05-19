@@ -8,7 +8,7 @@
 #include <set>
 #include <vector>
 
-#include "ncode_net/src/net_common.h"
+#include "ncode_common/src/net/net_common.h"
 #include "../common.h"
 #include "opt.h"
 
