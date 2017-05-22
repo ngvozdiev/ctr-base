@@ -117,9 +117,9 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
   }
 
   std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
-  LOG(ERROR) << "MinMax solving MC problem";
+  //  LOG(ERROR) << "MinMax solving MC problem";
   double min_utilization = problem.Solve(&paths);
-  LOG(ERROR) << "MinMax util " << min_utilization;
+  //  LOG(ERROR) << "MinMax util " << min_utilization;
 
   auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const auto& aggregate_and_demand : tm.demands()) {

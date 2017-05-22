@@ -118,7 +118,7 @@ void RoutingConfiguration::AddRouteAndFraction(
   for (const auto& route_and_fraction : routes_and_fractions) {
     total += route_and_fraction.second;
   }
-  CHECK(total <= 1.001 && total >= 0.999);
+  CHECK(total <= 1.001 && total >= 0.999) << "Bad total " << total;
   configuration_[aggregate_id] = routes_and_fractions;
 }
 

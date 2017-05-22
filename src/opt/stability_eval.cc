@@ -27,41 +27,45 @@ DEFINE_double(demand_fraction, 0.05, "By how much to vary demand");
 DEFINE_double(flow_count_fraction, 0, "By how much to vary flow counts");
 DEFINE_uint64(aggregate_count, 1, "How many aggregates to change");
 DEFINE_uint64(try_count, 1, "How many tries to perform");
+DEFINE_string(opt, "CTR", "Optimizer to run. One of CTR,MinMax,B4");
 
-static double MaxFractionDelta(
-    const std::map<ctr::AggregateId, ctr::AggregateDelta>& difference_map) {
-  double max_fraction_delta = 0;
-  for (const auto& aggregate_and_delta : difference_map) {
-    const ctr::AggregateDelta& delta = aggregate_and_delta.second;
-    max_fraction_delta = std::max(max_fraction_delta, delta.fraction_delta);
-  }
-
-  return max_fraction_delta;
-}
-
-static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
-                        ctr::Optimizer* optimizer) {
+static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
+                        size_t seed, ctr::Optimizer* optimizer) {
   std::unique_ptr<ctr::RoutingConfiguration> baseline = optimizer->Optimize(tm);
-  ctr::RoutingConfigurationDelta worst_try;
-  double worst_delta = 0;
+  std::vector<ctr::AggregateDelta> deltas;
+  double worst_total_demand_delta = 0;
+  double worst_total_flow_delta = 0;
+  std::vector<double> fraction_deltas;
 
   std::mt19937 rnd(seed);
   for (size_t i = 0; i < FLAGS_try_count; ++i) {
     auto rnd_tm = tm.Randomize(FLAGS_demand_fraction, FLAGS_flow_count_fraction,
                                FLAGS_aggregate_count, &rnd);
+    if (!rnd_tm->ToDemandMatrix()->IsFeasible({})) {
+      continue;
+    }
+
     auto output = optimizer->Optimize(*rnd_tm);
     ctr::RoutingConfigurationDelta routing_config_delta =
         baseline->GetDifference(*output);
 
-    double delta = routing_config_delta.total_flow_fraction_delta;
-    if (delta > worst_delta) {
-      worst_delta = delta;
-      worst_try = routing_config_delta;
+    double demand_delta = routing_config_delta.total_volume_fraction_delta;
+    double flow_delta = routing_config_delta.total_flow_fraction_delta;
+    worst_total_demand_delta = std::max(worst_total_demand_delta, demand_delta);
+    worst_total_flow_delta = std::max(worst_total_flow_delta, flow_delta);
+
+    for (const auto& aggregate_id_and_delta : routing_config_delta.aggregates) {
+      const ctr::AggregateDelta& aggregate_delta =
+          aggregate_id_and_delta.second;
+      fraction_deltas.emplace_back(aggregate_delta.fraction_delta);
     }
   }
 
-  LOG(ERROR) << "Worst try delta " << worst_delta << " mf "
-             << MaxFractionDelta(worst_try.aggregates);
+  std::vector<double> delta_percentiles = nc::Percentiles(&fraction_deltas);
+  std::cout << tm_id << " " << worst_total_demand_delta << " "
+            << tm.demands().size() << " " << worst_total_flow_delta << " "
+            << delta_percentiles[50] << " " << delta_percentiles[90] << " "
+            << delta_percentiles[95] << " " << delta_percentiles[100] << "\n";
 }
 
 // The TM that we load will have no flow counts. Need some out of thin air.
@@ -99,7 +103,19 @@ int main(int argc, char** argv) {
                                       GetFlowCountMap(*demand_matrix));
 
     auto path_provider = nc::make_unique<ctr::PathProvider>(&graph);
-    ctr::CTROptimizer optimizer(std::move(path_provider));
-    ParseMatrix(traffic_matrix, 1, &optimizer);
+    std::unique_ptr<ctr::Optimizer> optimizer;
+    if (FLAGS_opt == "CTR") {
+      optimizer = nc::make_unique<ctr::CTROptimizer>(std::move(path_provider));
+    } else if (FLAGS_opt == "MinMax") {
+      optimizer =
+          nc::make_unique<ctr::MinMaxOptimizer>(std::move(path_provider));
+    } else if (FLAGS_opt == "B4") {
+      optimizer = nc::make_unique<ctr::B4Optimizer>(std::move(path_provider));
+    } else {
+      LOG(FATAL) << "Unknown optimizer";
+    }
+
+    ParseMatrix(nc::StrCat(FLAGS_topology_file, ":", matrix_file),
+                traffic_matrix, 1, optimizer.get());
   }
 }
