@@ -19,8 +19,6 @@ class OverSubModelLinkState {
 
   double SubscriptionRatio() const;
 
-  double SubscriptionRatioIgnoreBottlenecks() const;
-
   void Bottleneck();
 
   void ReduceCapacity(nc::net::Bandwidth by) { remaining_capacity_ -= by; }
@@ -38,7 +36,6 @@ class OverSubModelLinkState {
   nc::net::Bandwidth original_capacity() const { return original_capacity_; }
 
  private:
-  double SubscriptionRatioHelper(bool ignore_bottlenecks) const;
 
   // The original capacity of this link state.
   const nc::net::Bandwidth original_capacity_;
@@ -105,11 +102,6 @@ class OverSubModel {
     return per_flow_bandwidth_;
   }
 
-  // For each link its subscription value. If >1 the link is oversubscribed.
-  const nc::net::GraphLinkMap<double>& link_subscription_map() const {
-    return link_subscription_;
-  }
-
  private:
   // Initializes state for a subset of the aggregates.
   void InitState(
@@ -125,9 +117,6 @@ class OverSubModel {
       std::map<nc::net::GraphLinkIndex, OverSubModelLinkState>* link_to_state);
 
   std::map<const nc::net::Walk*, nc::net::Bandwidth> per_flow_bandwidth_;
-
-  // How subscribed each link is.
-  nc::net::GraphLinkMap<double> link_subscription_;
 };
 
 }  // namespace fubarizer

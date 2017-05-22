@@ -27,7 +27,7 @@ static nc::net::GraphBuilder GetGraph() {
 
 class TestBase : public ::testing::Test {
  protected:
-  TestBase() : graph_(GetGraph()) {
+  TestBase() : graph_(GetGraph()), tm_(&graph_) {
     path_provider_ = nc::make_unique<PathProvider>(&graph_);
   }
 
@@ -272,6 +272,9 @@ TEST_F(CTRTest, FourAggregates) {
   ASSERT_TRUE(HasPath(*routing, "[C->D]", 0.666));
   ASSERT_TRUE(HasPath(*routing, "[B->A]", 1.0));
   ASSERT_TRUE(HasPath(*routing, "[D->C]", 1.0));
+
+  auto routing_two = ctr_optimizer.Optimize(tm_);
+  ASSERT_TRUE(HasPath(*routing_two, "[A->B]", 0.666));
 }
 
 }  // namespace ctr

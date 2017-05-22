@@ -21,7 +21,7 @@ namespace ctr {
 
 std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
     const TrafficMatrix& tm) {
-  auto out = nc::make_unique<RoutingConfiguration>();
+  auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
 
@@ -121,7 +121,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
   double min_utilization = problem.Solve(&paths);
   LOG(ERROR) << "MinMax util " << min_utilization;
 
-  auto out = nc::make_unique<RoutingConfiguration>();
+  auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
     nc::net::Bandwidth demand = aggregate_and_demand.second.first;
@@ -401,7 +401,7 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
     }
   }
 
-  auto out = nc::make_unique<RoutingConfiguration>();
+  auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const B4AggregateState& aggregate_state : aggregate_states) {
     const std::map<const nc::net::Walk*, double>& path_to_capacity =
         aggregate_state.path_to_capacity();

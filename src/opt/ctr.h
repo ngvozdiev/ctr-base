@@ -117,6 +117,7 @@ class CTROptimizer : public Optimizer {
   // path that has some free capacity. Returns whether it added any paths.
   bool AddFreePaths(const nc::net::GraphLinkSet& links_with_no_capacity,
                     const std::vector<AggregateId>& aggregates_ordered,
+                    std::map<AggregateId, size_t>* ksp_indices,
                     CTRPathMap* out);
 
   // If the total number of paths that will go to the optimizer exceeds this

@@ -18,27 +18,15 @@ OverSubModelLinkState::OverSubModelLinkState(Bandwidth capacity,
       remaining_capacity_(capacity) {}
 
 double OverSubModelLinkState::SubscriptionRatio() const {
-  return SubscriptionRatioHelper(false);
-}
-
-double OverSubModelLinkState::SubscriptionRatioIgnoreBottlenecks() const {
-  return SubscriptionRatioHelper(true);
-}
-
-double OverSubModelLinkState::SubscriptionRatioHelper(
-    bool ignore_bottlenecks) const {
   Bandwidth total_demand = Bandwidth::Zero();
   for (OverSubModelPathState* path_state : path_states_over_link_) {
-    if (!ignore_bottlenecks && path_state->bottlenecked()) {
+    if (path_state->bottlenecked()) {
       continue;
     }
 
     total_demand += path_state->path_demand();
   }
 
-  if (ignore_bottlenecks) {
-    return total_demand / original_capacity_;
-  }
   return total_demand / remaining_capacity_;
 }
 
@@ -106,14 +94,6 @@ OverSubModel::OverSubModel(const TrafficMatrix& tm,
   std::map<nc::net::GraphLinkIndex, OverSubModelLinkState> link_to_state;
   InitState(tm, routing, capacity_multiplier, &path_to_state, &link_to_state);
   PopulateCapacities(&path_to_state, &link_to_state);
-
-  for (const auto& link_and_state : link_to_state) {
-    GraphLinkIndex link_index = link_and_state.first;
-    const OverSubModelLinkState& link_state = link_and_state.second;
-
-    double subscription = link_state.SubscriptionRatioIgnoreBottlenecks();
-    link_subscription_[link_index] = subscription;
-  }
 
   for (const auto& path_and_state : path_to_state) {
     const Walk* path = path_and_state.first;

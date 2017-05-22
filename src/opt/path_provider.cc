@@ -35,13 +35,6 @@ const std::vector<const nc::net::Walk*>& PathProvider::KShorestPaths(
   return generator->k_paths();
 }
 
-const nc::net::Walk* PathProvider::NextShortestPathOrNull(
-    const AggregateId& aggregate) {
-  PathProvider::Generator* generator = FindOrCreateGenerator(aggregate);
-  size_t k = generator->k_paths().size();
-  return generator->KthShortestPathOrNull(k);
-}
-
 const nc::net::Walk* PathProvider::AvoidingPathOrNull(
     const AggregateId& aggregate, const nc::net::GraphLinkSet& to_avoid) {
   PathProvider::Generator* generator = FindOrCreateGenerator(aggregate);

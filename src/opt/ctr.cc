@@ -36,7 +36,8 @@ static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
 
 bool CTROptimizer::AddFreePaths(
     const nc::net::GraphLinkSet& links_with_no_capacity,
-    const std::vector<AggregateId>& aggregates_ordered, CTRPathMap* out) {
+    const std::vector<AggregateId>& aggregates_ordered,
+    std::map<AggregateId, size_t>* ksp_indices, CTRPathMap* out) {
   bool free_paths_added = false;
 
   // Number of paths that will go to the optimizer. This excludes single-path
@@ -58,7 +59,7 @@ bool CTROptimizer::AddFreePaths(
 
     if (total_path_count > hard_path_limit_) {
       if (!hard_limit_exceeded_printed) {
-        LOG(ERROR) << "Hard limit " << hard_path_limit_ << " exceeded";
+//        LOG(ERROR) << "Hard limit " << hard_path_limit_ << " exceeded";
         hard_limit_exceeded_printed = true;
       }
 
@@ -71,29 +72,21 @@ bool CTROptimizer::AddFreePaths(
       continue;
     }
 
-    bool out_of_paths = false;
     std::vector<PathPtr> paths_up_to_free;
-    while (paths_in_output.size() + paths_up_to_free.size() <
-           per_aggregate_path_limit_) {
-      PathPtr path = path_provider_->NextShortestPathOrNull(aggregate_id);
-      if (path == nullptr) {
-        out_of_paths = true;
-        break;
-      }
-
-      paths_up_to_free.emplace_back(path);
-      if (!path->ContainsAny(links_with_no_capacity)) {
-        break;
-      }
+    CHECK(paths_in_output.size() <= per_aggregate_path_limit_);
+    size_t remaining_paths = per_aggregate_path_limit_ - paths_in_output.size();
+    if (total_path_count > soft_path_limit_) {
+      remaining_paths = 0;
     }
 
-    if (paths_up_to_free.empty() && out_of_paths) {
-      // Out of room in the aggregate, and know that there are no more shortest
-      // paths. Nothing we can do.
-      continue;
+    if (remaining_paths > 0) {
+      size_t& start_k_index = (*ksp_indices)[aggregate_id];
+      paths_up_to_free = path_provider_->KShortestUntilAvoidingPath(
+          aggregate_id, links_with_no_capacity, start_k_index, remaining_paths);
+      start_k_index += paths_up_to_free.size();
     }
 
-    if (paths_up_to_free.empty() && !out_of_paths) {
+    if (paths_up_to_free.empty()) {
       // Out of room at the aggregate, will directly skip to the next path that
       // avoids the links.
       PathPtr path = path_provider_->AvoidingPathOrNull(aggregate_id,
@@ -113,7 +106,7 @@ bool CTROptimizer::AddFreePaths(
 
     if (total_path_count > soft_path_limit_) {
       if (!soft_limit_exceeded_printed) {
-        LOG(ERROR) << "Soft limit " << soft_path_limit_ << " exceeded";
+//        LOG(ERROR) << "Soft limit " << soft_path_limit_ << " exceeded";
         soft_limit_exceeded_printed = true;
       }
 
@@ -134,7 +127,7 @@ std::unique_ptr<RoutingConfiguration> CTROptimizer::Optimize(
     const TrafficMatrix& tm) {
   std::vector<AggregateId> aggregates_ordered = PrioritizeAggregates(tm);
 
-  auto out = nc::make_unique<RoutingConfiguration>();
+  auto out = nc::make_unique<RoutingConfiguration>(tm);
   OptimizePrivate(tm, aggregates_ordered, out.get());
   return out;
 }
@@ -163,11 +156,15 @@ void CTROptimizer::OptimizePrivate(
   double prev_obj_value = std::numeric_limits<double>::max();
   double max_oversubscription = 0;
 
+  // Need some place to remember where in the order of K shortest paths we have
+  // gone up to for each aggregate.
+  std::map<AggregateId, size_t> ksp_indices;
+
   std::map<AggregateId, std::vector<RouteAndFraction>> aggregate_outputs;
   while (true) {
-    LOG(INFO) << "New pass";
-    bool added_any_paths =
-        AddFreePaths(links_with_no_capcity, aggregates_ordered, &path_map);
+//    LOG(INFO) << "New pass";
+    bool added_any_paths = AddFreePaths(
+        links_with_no_capcity, aggregates_ordered, &ksp_indices, &path_map);
     if (!added_any_paths) {
       break;
     }
@@ -191,8 +188,8 @@ void CTROptimizer::OptimizePrivate(
       break;
     }
 
-    LOG(ERROR) << obj_value << " vs " << prev_obj_value << " lnc "
-               << links_with_no_capcity.Count() << " remainder ";
+//    LOG(ERROR) << obj_value << " vs " << prev_obj_value << " lnc "
+//               << links_with_no_capcity.Count() << " remainder ";
 
     prev_obj_value = obj_value;
     max_oversubscription = run_output.max_oversubscription;
@@ -201,8 +198,8 @@ void CTROptimizer::OptimizePrivate(
     }
   }
 
-  LOG(INFO) << "FUBAR pass done obj " << prev_obj_value << " max os "
-            << max_oversubscription;
+//  LOG(INFO) << "FUBAR pass done obj " << prev_obj_value << " max os "
+//            << max_oversubscription;
 
   for (auto& aggregate_and_output : aggregate_outputs) {
     out->AddRouteAndFraction(aggregate_and_output.first,
@@ -375,10 +372,10 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   auto problem_constructed_at = high_resolution_clock::now();
   milliseconds problem_construction_duration =
       duration_cast<milliseconds>(problem_constructed_at - start_at);
-  LOG(INFO) << nc::Substitute(
-      "Problem constructed in $0ms, non-zero matrix elements $1, paths $2",
-      duration_cast<milliseconds>(problem_construction_duration).count(),
-      problem_matrix.size(), total_paths);
+//  LOG(INFO) << nc::Substitute(
+//      "Problem constructed in $0ms, non-zero matrix elements $1, paths $2",
+//      duration_cast<milliseconds>(problem_construction_duration).count(),
+//      problem_matrix.size(), total_paths);
 
   std::unique_ptr<Solution> solution = problem.Solve();
 
@@ -400,11 +397,11 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   auto problem_solved_at = high_resolution_clock::now();
   milliseconds problem_solution_duration =
       duration_cast<milliseconds>(problem_solved_at - problem_constructed_at);
-  LOG(INFO) << nc::Substitute(
-      "Problem solved in $0ms obj $1 paths $2, max os $3",
-      duration_cast<milliseconds>(problem_solution_duration).count(),
-      solution->ObjectiveValue(), total_paths,
-      latest_run_max_oversubscription_);
+//  LOG(INFO) << nc::Substitute(
+//      "Problem solved in $0ms obj $1 paths $2, max os $3",
+//      duration_cast<milliseconds>(problem_solution_duration).count(),
+//      solution->ObjectiveValue(), total_paths,
+//      latest_run_max_oversubscription_);
 
   std::map<AggregateId, std::set<PathPtr>>
       aggregate_to_max_oversubscribed_paths;
@@ -488,8 +485,8 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     }
   }
 
-  LOG(INFO) << "Frozen " << frozen_aggregates_.size() << "/" << paths_->size()
-            << " aggregates";
+//  LOG(INFO) << "Frozen " << frozen_aggregates_.size() << "/" << paths_->size()
+//            << " aggregates";
 
   // Populate the outputs for all frozen aggregates.
   for (const auto& aggregate_and_paths : aggregate_to_paths) {
@@ -531,9 +528,9 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   auto solution_obtained_at = high_resolution_clock::now();
   milliseconds solution_obtain_duration =
       duration_cast<milliseconds>(solution_obtained_at - problem_solved_at);
-  LOG(INFO) << nc::Substitute(
-      "Solution obtained in $0ms",
-      duration_cast<milliseconds>(solution_obtain_duration).count());
+//  LOG(INFO) << nc::Substitute(
+//      "Solution obtained in $0ms",
+//      duration_cast<milliseconds>(solution_obtain_duration).count());
 
   return solution->ObjectiveValue() - link_to_paths.Count();
 }
@@ -571,7 +568,7 @@ void CTROptimizerPass::Optimize() {
     }
 
     if (frozen_aggregates_.size() <= num_frozen_before) {
-      LOG(ERROR) << "Unable to freeze more aggregates";
+//      LOG(ERROR) << "Unable to freeze more aggregates";
       run_output_.obj_value = std::numeric_limits<double>::max();
       break;
     }
@@ -624,9 +621,9 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
   initial_oversubscription_ = std::max(1.0, max_oversub);
   initial_obj_ = total_cost + (initial_oversubscription_ - 1) * kM1;
 
-  LOG(ERROR) << "Frozen " << num_frozen
-             << " aggregates with 1 path, initial oversubscription "
-             << initial_oversubscription_ << " initial obj " << initial_obj_;
+//  LOG(ERROR) << "Frozen " << num_frozen
+//             << " aggregates with 1 path, initial oversubscription "
+//             << initial_oversubscription_ << " initial obj " << initial_obj_;
 }
 
 }  // namespace nc

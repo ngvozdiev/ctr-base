@@ -48,10 +48,17 @@ if (NOT TARGET ncode_common)
 endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/external ${CMAKE_BINARY_DIR}/external)
+SET(OLD_BUILD_TESTING ${BUILD_TESTING})
+SET(BUILD_TESTING False)
+add_subdirectory(external/gflags)
+SET(BUILD_TESTING ${OLD_BUILD_TESTING})
 
 set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h)
 add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc ${CTR_BASE_HEADER_FILES})
 target_link_libraries(ctr_base ncode)
+
+add_executable(stability_eval src/opt/stability_eval.cc)
+target_link_libraries(stability_eval ctr_base gflags)
 
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)
