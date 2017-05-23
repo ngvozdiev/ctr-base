@@ -116,6 +116,7 @@ void RoutingConfiguration::AddRouteAndFraction(
   // Just to be on the safe side will check that the sum of all fractions is 1
   double total = 0.0;
   for (const auto& route_and_fraction : routes_and_fractions) {
+    CHECK(route_and_fraction.second != 0);
     total += route_and_fraction.second;
   }
   CHECK(total <= 1.001 && total >= 0.999) << "Bad total " << total;
@@ -207,19 +208,46 @@ std::string TrafficMatrix::SummaryToString() const {
       flow_counts_str);
 }
 
-static double GetFractionDelta(const std::vector<RouteAndFraction>& lhs,
-                               const std::vector<RouteAndFraction>& rhs) {
+static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
+                               const std::vector<RouteAndFraction>& next,
+                               size_t* add_count, size_t* update_count,
+                               size_t* remove_count) {
   // Will get the difference as 1 - fraction that stays on the same path.
   double total = 0;
-  for (const RouteAndFraction& lhs_fraction : lhs) {
-    const nc::net::Walk* lhs_path = lhs_fraction.first;
-    for (const RouteAndFraction& rhs_fraction : rhs) {
-      const nc::net::Walk* rhs_path = rhs_fraction.first;
+  for (const RouteAndFraction& prev_fraction : prev) {
+    const nc::net::Walk* prev_path = prev_fraction.first;
 
-      if (*lhs_path == *rhs_path) {
-        double f_delta = std::min(lhs_fraction.second, rhs_fraction.second);
+    bool found = false;
+    for (const RouteAndFraction& next_fraction : next) {
+      const nc::net::Walk* next_path = next_fraction.first;
+
+      if (*prev_path == *next_path) {
+        found = true;
+
+        double f_delta = std::min(prev_fraction.second, next_fraction.second);
         total += f_delta;
       }
+    }
+
+    if (found) {
+      ++(*update_count);
+    } else {
+      ++(*remove_count);
+    }
+  }
+
+  for (const RouteAndFraction& next_fraction : next) {
+    const nc::net::Walk* next_path = next_fraction.first;
+    bool found = false;
+    for (const RouteAndFraction& prev_fraction : prev) {
+      const nc::net::Walk* prev_path = prev_fraction.first;
+      if (*prev_path == *next_path) {
+        found = true;
+      }
+    }
+
+    if (!found) {
+      ++(*add_count);
     }
   }
 
@@ -268,8 +296,10 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
         nc::FindOrDieNoPrint(other.configuration_, aggregate_id);
 
     AggregateDelta& aggregate_delta = out.aggregates[aggregate_id];
-    aggregate_delta.fraction_delta =
-        GetFractionDelta(route_and_fractions_this, route_and_fractions_other);
+    aggregate_delta.fraction_delta = GetFractionDelta(
+        route_and_fractions_this, route_and_fractions_other,
+        &aggregate_delta.routes_added, &aggregate_delta.routes_updated,
+        &aggregate_delta.routes_removed);
     aggregate_delta.path_stretch_gain =
         GetPathStretchGain(route_and_fractions_this, route_and_fractions_other,
                            aggregate_id.GetSPDelay(*graph_));
@@ -292,6 +322,21 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
   out.total_flow_fraction_delta = total_flow_count_delta / total_flow_count;
   out.total_volume_fraction_delta = total_volume_delta / total_volume;
   return out;
+}
+
+std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
+    const {
+  size_t total_added = 0;
+  size_t total_removed = 0;
+  size_t total_updated = 0;
+  for (const auto& aggregate_and_delta : aggregates) {
+    const AggregateDelta& delta = aggregate_and_delta.second;
+    total_added += delta.routes_added;
+    total_removed += delta.routes_removed;
+    total_updated += delta.routes_updated;
+  }
+
+  return {total_added, total_removed, total_updated};
 }
 
 }  // namespace ctr

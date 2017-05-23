@@ -109,7 +109,7 @@ class TrafficMatrix {
 // (RoutingConfigurations).
 struct AggregateDelta {
   // The fraction of the aggregate's total traffic that changed paths.
-  double fraction_delta;
+  double fraction_delta = 0.0;
 
   // For before and after the path stretch is computed as the sum Ps * f over
   // all of the aggregate's paths where Ps is the path's stretch (absolute
@@ -117,7 +117,16 @@ struct AggregateDelta {
   // goes on the path. The difference between the before and after quantities is
   // returned. If this value is positive the aggregate's flows will experience
   // less delay.
-  double path_stretch_gain;
+  double path_stretch_gain = 0.0;
+
+  // New routes added (f == 0 -> f != 0).
+  size_t routes_added = 0;
+
+  // Old routes deleted (f != 0 -> f == 0).
+  size_t routes_removed = 0;
+
+  // Routes updated (f != 0 -> f != 0)
+  size_t routes_updated = 0;
 };
 
 struct RoutingConfigurationDelta {
@@ -131,6 +140,9 @@ struct RoutingConfigurationDelta {
 
   // Per-aggregate deltas.
   std::map<AggregateId, AggregateDelta> aggregates;
+
+  // Returns the number of routed added, removed and updated
+  std::tuple<size_t, size_t, size_t> TotalRoutes() const;
 };
 
 // Extends a TM with for each aggregate a set of paths and a fraction of demand
