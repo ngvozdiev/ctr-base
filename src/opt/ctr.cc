@@ -280,9 +280,6 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       // Each path in each aggregate will have a variable associated with it.
       VariableIndex variable = problem.AddVariable();
       problem.SetVariableRange(variable, 0, 1);
-      //      LOG(ERROR) << "cookie " << cookie << " path " <<
-      //      path->ToStringNoPorts()
-      //                 << " c " << min_range << " " << max_range;
 
       // The cost, delay in seconds.
       double cost = PathCost(path);

@@ -99,7 +99,13 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::Randomize(
 
     nc::net::Bandwidth new_demand = nc::net::Bandwidth::FromBitsPerSecond(
         Pick(demand.bps(), demand_fraction, rnd));
+
     double new_flow_count = Pick(flow_count, flow_count_fraction, rnd);
+    if (flow_count_fraction == std::numeric_limits<double>::max()) {
+      double ratio = new_demand / demand;
+      new_flow_count = ratio * flow_count;
+    }
+
     new_demands[aggregate] = {new_demand, new_flow_count};
   }
 
@@ -217,6 +223,7 @@ static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
   for (const RouteAndFraction& prev_fraction : prev) {
     const nc::net::Walk* prev_path = prev_fraction.first;
 
+    bool diff = false;
     bool found = false;
     for (const RouteAndFraction& next_fraction : next) {
       const nc::net::Walk* next_path = next_fraction.first;
@@ -225,12 +232,16 @@ static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
         found = true;
 
         double f_delta = std::min(prev_fraction.second, next_fraction.second);
+        diff = std::abs(prev_fraction.second - next_fraction.second) > 0.001;
         total += f_delta;
+        break;
       }
     }
 
     if (found) {
-      ++(*update_count);
+      if (diff) {
+        ++(*update_count);
+      }
     } else {
       ++(*remove_count);
     }
@@ -336,7 +347,7 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
     total_updated += delta.routes_updated;
   }
 
-  return {total_added, total_removed, total_updated};
+  return std::make_tuple(total_added, total_removed, total_updated);
 }
 
 }  // namespace ctr

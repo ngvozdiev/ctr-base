@@ -80,7 +80,10 @@ class TrafficMatrix {
 
   // Returns a new traffic matrix with the same aggregates, but
   // 'aggregate_count' aggregates have their demand/flow count +- a fraction of
-  // the demand/flow count in this one.
+  // the demand/flow count in this one. If flow_count_fraction is set to
+  // std::numeric_limits<double>::max() each aggregate's flow count in the new
+  // matrix will be set in a way that preserves the demand/flow_count ratio in
+  // this matrix.
   std::unique_ptr<TrafficMatrix> Randomize(double demand_fraction,
                                            double flow_count_fraction,
                                            size_t aggregate_count,
