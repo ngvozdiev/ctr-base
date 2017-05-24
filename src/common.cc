@@ -106,6 +106,9 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::Randomize(
       new_flow_count = ratio * flow_count;
     }
 
+    LOG(ERROR) << "FC " << aggregate.ToString(*graph_) << " demand "
+               << demand.Mbps() << " -> " << new_demand.Mbps();
+
     new_demands[aggregate] = {new_demand, new_flow_count};
   }
 

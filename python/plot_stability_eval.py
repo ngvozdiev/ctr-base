@@ -3,8 +3,8 @@ import numpy as np
 
 DTYPE = [('id', 'S256'), ('demand_delta', 'f8'), ('demand_count', 'u8'), ('flow_delta', 'f8'), ('fd_p50', 'f8'), ('fd_p90', 'f8'), ('fd_p95', 'f8'), ('fd_p100', 'f8'), ('add_p50', 'f8'), ('add_p90', 'f8'), ('add_p95', 'f8'), ('add_p100', 'f8'), ('up_p50', 'f8'), ('up_p90', 'f8'), ('up_p95', 'f8'), ('up_p100', 'f8'), ('rm_p50', 'f8'), ('rm_p90', 'f8'), ('rm_p95', 'f8'), ('rm_p100', 'f8')]
 
-ctr_data = np.loadtxt('se.data.ctr', dtype=DTYPE)
-b4_data = np.loadtxt('se.data.b4', dtype=DTYPE)
+ctr_data = np.loadtxt('../build/se.data.ctr', dtype=DTYPE)
+b4_data = np.loadtxt('../build/se.data.b4', dtype=DTYPE)
 
 ctr_data.sort(order='demand_delta')
 print ctr_data[-10:]

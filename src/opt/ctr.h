@@ -59,11 +59,17 @@ class CTROptimizerPass {
   // optimization, regardless of where their paths go.
   double OptimizeMinLinkOversubscription();
 
+  // Returns the cost of a path.
+  double PathCost(const nc::net::Walk* path) const;
+
   // The input. Not owned by this class.
   const TrafficMatrix* input_;
 
   // A map of paths that the solver can use. Not owned by this class.
   const CTRPathMap* paths_;
+
+  // The cost of each path. Generated from paths_ upon construction.
+  std::map<const nc::net::Walk*, double> path_cost_map_;
 
   // The graph.
   const nc::net::GraphStorage* graph_;

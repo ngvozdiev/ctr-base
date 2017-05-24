@@ -196,7 +196,7 @@ static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
   std::vector<ctr::AggregateDelta> deltas;
   double worst_total_demand_delta = 0;
   double worst_total_flow_delta = 0;
-  //  size_t worst_demand_i = 0;
+  size_t worst_demand_i = 0;
   std::vector<double> fraction_deltas;
   std::vector<size_t> route_add_counts;
   std::vector<size_t> route_update_counts;
@@ -216,23 +216,27 @@ static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
     //    LOG(INFO) << output->ToString();
     ctr::RoutingConfigurationDelta routing_config_delta =
         baseline->GetDifference(*output);
-    //    for (const auto& aggregate_and_delta :
-    //    routing_config_delta.aggregates) {
-    //      if (aggregate_and_delta.second.fraction_delta > 0.01) {
-    //        LOG(INFO) << "C " <<
-    //        aggregate_and_delta.first.ToString(*tm.graph())
-    //                  << " " << aggregate_and_delta.second.fraction_delta << "
-    //                  "
-    //                  << aggregate_and_delta.second.path_stretch_gain;
-    //      }
-    //    }
+    double total_g = 0;
+    for (const auto& aggregate_and_delta : routing_config_delta.aggregates) {
+      if (aggregate_and_delta.second.fraction_delta > 0.01) {
+        total_g += aggregate_and_delta.second.path_stretch_gain;
+        LOG(INFO) << "C " << aggregate_and_delta.first.ToString(*tm.graph())
+                  << " " << aggregate_and_delta.second.fraction_delta << " "
+                  << aggregate_and_delta.second.path_stretch_gain << " "
+                  << ((nc::FindOrDieNoPrint(rnd_tm->demands(),
+                                            aggregate_and_delta.first)
+                           .first /
+                       rnd_tm->ToDemandMatrix()->TotalLoad()));
+      }
+    }
+    LOG(ERROR) << "TG " << total_g;
 
     double demand_delta = routing_config_delta.total_volume_fraction_delta;
     double flow_delta = routing_config_delta.total_flow_fraction_delta;
 
-    //    if (demand_delta > worst_total_demand_delta) {
-    //      worst_demand_i = i;
-    //    }
+    if (demand_delta > worst_total_demand_delta) {
+      worst_demand_i = i;
+    }
 
     worst_total_demand_delta = std::max(worst_total_demand_delta, demand_delta);
     worst_total_flow_delta = std::max(worst_total_flow_delta, flow_delta);
@@ -259,7 +263,8 @@ static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
             << PercentilesToString(&fraction_deltas) << " "
             << PercentilesToString(&route_add_counts) << " "
             << PercentilesToString(&route_update_counts) << " "
-            << PercentilesToString(&route_remove_counts) << "\n";
+            << PercentilesToString(&route_remove_counts) << " "
+            << worst_demand_i << "\n";
 }
 
 // The TM that we load will have no flow counts. Need some out of thin air.
@@ -288,7 +293,6 @@ int main(int argc, char** argv) {
   std::vector<std::string> nodes_in_order;
   nc::net::GraphBuilder graph_builder = nc::net::LoadRepetitaOrDie(
       nc::File::ReadFileToStringOrDie(FLAGS_topology_file), &nodes_in_order);
-  graph_builder.FuzzLinkDelays(std::chrono::microseconds(100));
   nc::net::GraphStorage graph(graph_builder);
 
   for (const std::string& matrix_file : matrix_files) {
