@@ -11,6 +11,7 @@
 #include "ncode_common/src/net/net_common.h"
 #include "../common.h"
 #include "opt.h"
+#include "oversubscription_model.h"
 
 namespace ctr {
 
@@ -92,13 +93,67 @@ class CTROptimizerPass {
   double initial_obj_;
 };
 
+// A heuristic that tries to generate a new solution from a previous one with as
+// little change as possible.
+class CTRQuickOptimizer {
+ public:
+  CTRQuickOptimizer(PathProvider* path_provider,
+                    const RoutingConfiguration* previous)
+      : path_provider_(path_provider),
+        graph_(previous->graph()),
+        previous_(previous),
+        model_(*previous_) {}
+
+  std::unique_ptr<RoutingConfiguration> Optimize(const TrafficMatrix& tm);
+
+ private:
+  using PathAndLoad = std::pair<const nc::net::Walk*, nc::net::Bandwidth>;
+
+  nc::net::Bandwidth MinFreeCapacity(
+      const nc::net::Links& links,
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const;
+
+  // Tries to fit 'bw' into a series of paths. Will update both 'paths' with the
+  // extra bandwidth per path and 'bw' to reflect how much of it managed to fit.
+  void FindRoom(
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities,
+      nc::net::GraphLinkMap<nc::net::Bandwidth>* extra_capacities,
+      std::vector<PathAndLoad>* paths, nc::net::Bandwidth* bw) const;
+
+  // Returns the set of links that have no capacity left.
+  nc::net::GraphLinkSet LinksWithNoCapacity(
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const;
+
+  // Returns the free capacity on a link.
+  nc::net::Bandwidth FreeCapacityOnLink(
+      nc::net::GraphLinkIndex link,
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
+      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const;
+
+  // Provides paths.
+  PathProvider* path_provider_;
+
+  // The graph.
+  const nc::net::GraphStorage* graph_;
+
+  const RoutingConfiguration* previous_;
+
+  // Helps to figure out how much free capacity there is along paths.
+  OverSubModel model_;
+};
+
 class CTROptimizer : public Optimizer {
  public:
-  CTROptimizer(std::unique_ptr<PathProvider> path_provider)
-      : Optimizer(std::move(path_provider)) {}
+  explicit CTROptimizer(PathProvider* path_provider)
+      : Optimizer(path_provider) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
+
+  std::unique_ptr<RoutingConfiguration> OptimizeWithPrevious(
+      const TrafficMatrix& tm, const RoutingConfiguration& previous) override;
 
  private:
   // Single run of the optimization for given input.

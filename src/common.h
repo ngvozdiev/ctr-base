@@ -167,12 +167,6 @@ class RoutingConfiguration : public TrafficMatrix {
     return configuration_;
   }
 
-  // Produces a new configuration that is a quick update of this one with a new
-  // traffic matrix. Aggregates will be always kept on the same paths unless an
-  // aggregate does not fit. If this is the case will try to find for it the
-  // shortest path that avoids all congestion.
-  std::unique_ptr<RoutingConfiguration> Update(const TrafficMatrix& tm) const;
-
   std::string ToString() const;
 
   // Renders the configuration as a graph on a web page.

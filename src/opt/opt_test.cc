@@ -27,7 +27,7 @@ static nc::net::GraphBuilder GetGraph() {
 
 class TestBase : public ::testing::Test {
  protected:
-  TestBase() : graph_(GetGraph()), tm_(&graph_) {
+  TestBase() : graph_(GetGraph()) {
     path_provider_ = nc::make_unique<PathProvider>(&graph_);
   }
 
@@ -59,26 +59,27 @@ class TestBase : public ::testing::Test {
   }
 
   void AddAggregate(const std::string& src, const std::string& dst,
-                    uint32_t num_flows, nc::net::Bandwidth total_volume) {
+                    uint32_t num_flows, nc::net::Bandwidth total_volume,
+                    TrafficMatrix* tm) {
     AggregateId id(graph_.NodeFromStringOrDie(src),
                    graph_.NodeFromStringOrDie(dst));
-    tm_.AddDemand(id, {total_volume, num_flows});
+    tm->AddDemand(id, {total_volume, num_flows});
   }
 
   std::unique_ptr<PathProvider> path_provider_;
   nc::net::GraphStorage graph_;
-  TrafficMatrix tm_;
 };
 
 class ShortestPathTest : public TestBase {
  protected:
-  ShortestPathTest() : sp_optimizer_(std::move(path_provider_)) {}
+  ShortestPathTest() : sp_optimizer_(path_provider_.get()), tm_(&graph_) {}
 
   void AddSPAggregate(const std::string& src, const std::string& dst) {
-    AddAggregate(src, dst, 1, kDefaultLinkspeed);
+    AddAggregate(src, dst, 1, kDefaultLinkspeed, &tm_);
   }
 
   ShortestPathOptimizer sp_optimizer_;
+  TrafficMatrix tm_;
 };
 
 TEST_F(ShortestPathTest, SingleAggregate) {
@@ -97,24 +98,28 @@ TEST_F(ShortestPathTest, TwoAggregates) {
 
 class B4Test : public TestBase {
  protected:
+  B4Test() : tm_(&graph_) {}
+
   void AddAggregate(const std::string& src, const std::string& dst,
                     nc::net::Bandwidth bw) {
-    TestBase::AddAggregate(src, dst, 1, bw);
+    TestBase::AddAggregate(src, dst, 1, bw, &tm_);
   }
+
+  TrafficMatrix tm_;
 };
 
 // Fits on the shortest path.
 TEST_F(B4Test, SinglePath) {
-  B4Optimizer b4_optimizer(std::move(path_provider_));
+  B4Optimizer b4_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed);
   auto routing = b4_optimizer.Optimize(tm_);
 
   ASSERT_TRUE(HasPath(*routing, "[A->B]", 1.0));
 }
 
-// Does not fit on the shortest path
-TEST_F(B4Test, SinglePathNoFit) {
-  B4Optimizer b4_optimizer(std::move(path_provider_));
+// Does not fit on the shortest path.
+TEST_F(B4Test, SinglePathNoFitLowerCapacity) {
+  B4Optimizer b4_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
   auto routing = b4_optimizer.Optimize(tm_);
 
@@ -122,46 +127,36 @@ TEST_F(B4Test, SinglePathNoFit) {
   ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.166));
 }
 
-// Does not fit on the shortest path, lower link capacity
-TEST_F(B4Test, SinglePathNoFitLowerCapacity) {
-  B4Optimizer b4_optimizer(std::move(path_provider_), 0.9);
-  AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
-  auto routing = b4_optimizer.Optimize(tm_);
-
-  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.75));
-  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.25));
-}
-
 // A couple of aggregates that do not fit on the shortest path
 TEST_F(B4Test, MultiSinglePathNoFit) {
-  B4Optimizer b4_optimizer(std::move(path_provider_), 0.9);
+  B4Optimizer b4_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed * 0.6);
   AddAggregate("A", "C", kDefaultLinkspeed * 0.6);
   auto routing = b4_optimizer.Optimize(tm_);
 
-  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.9 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.3 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 0.9 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.3 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 1 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.2 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 1 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.2 / 1.2));
 }
 
 // A couple of aggregates, one does not fit.
 TEST_F(B4Test, MultiSinglePathOneNoFit) {
-  B4Optimizer b4_optimizer(std::move(path_provider_), 0.9);
+  B4Optimizer b4_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed * 0.3);
   AddAggregate("A", "C", kDefaultLinkspeed * 0.9);
   auto routing = b4_optimizer.Optimize(tm_);
 
   // Should be the same as in the previous test!
-  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.9 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.3 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 0.9 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.3 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 1 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.2 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B, B->C]", 1 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C]", 0.2 / 1.2));
 }
 
 // Traffic does not fit.
 TEST_F(B4Test, NoFit) {
-  B4Optimizer b4_optimizer(std::move(path_provider_));
+  B4Optimizer b4_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed * 3);
   auto routing = b4_optimizer.Optimize(tm_);
 
@@ -171,16 +166,20 @@ TEST_F(B4Test, NoFit) {
 
 class MinMaxTest : public TestBase {
  protected:
+  MinMaxTest() : tm_(&graph_) {}
+
   void AddAggregate(const std::string& src, const std::string& dst,
                     nc::net::Bandwidth bw) {
-    TestBase::AddAggregate(src, dst, 1, bw);
+    TestBase::AddAggregate(src, dst, 1, bw, &tm_);
   }
+
+  TrafficMatrix tm_;
 };
 
 // A single aggregate with 2 disjoint paths through the network. The optimizer
 // should split traffic evenly among the two paths (given enough capacity).
 TEST_F(MinMaxTest, SingleAggregate) {
-  MinMaxOptimizer minmax_optimizer(std::move(path_provider_), 0.9);
+  MinMaxOptimizer minmax_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);
 
@@ -189,7 +188,7 @@ TEST_F(MinMaxTest, SingleAggregate) {
 }
 
 TEST_F(MinMaxTest, TwoAggregates) {
-  MinMaxOptimizer minmax_optimizer(std::move(path_provider_));
+  MinMaxOptimizer minmax_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed);
   AddAggregate("A", "D", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);
@@ -200,7 +199,7 @@ TEST_F(MinMaxTest, TwoAggregates) {
 }
 
 TEST_F(MinMaxTest, TwoAggregatesNoFit) {
-  MinMaxOptimizer minmax_optimizer(std::move(path_provider_));
+  MinMaxOptimizer minmax_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed * 2);
   AddAggregate("A", "D", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);
@@ -214,14 +213,18 @@ TEST_F(MinMaxTest, TwoAggregatesNoFit) {
 
 class CTRTest : public TestBase {
  protected:
+  CTRTest() : tm_(&graph_) {}
+
   void AddAggregate(const std::string& src, const std::string& dst,
                     nc::net::Bandwidth bw) {
-    TestBase::AddAggregate(src, dst, 1, bw);
+    TestBase::AddAggregate(src, dst, 1, bw, &tm_);
   }
+
+  TrafficMatrix tm_;
 };
 
 TEST_F(CTRTest, SingleAggregateFit) {
-  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  CTROptimizer ctr_optimizer(path_provider_.get());
   AddAggregate("A", "C", kDefaultLinkspeed);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -229,7 +232,7 @@ TEST_F(CTRTest, SingleAggregateFit) {
 }
 
 TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
-  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  CTROptimizer ctr_optimizer(path_provider_.get());
   AddAggregate("A", "C", kDefaultLinkspeed * 2);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -241,16 +244,16 @@ TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
 // be loaded up to kDefaultLinkspeed * 0.9 and the rest of the aggregate to end
 // up on the second best path. There should be no oversubscription.
 TEST_F(CTRTest, SingleAggregateTwoPaths) {
-  CTROptimizer ctr_optimizer(std::move(path_provider_), 0.9);
+  CTROptimizer ctr_optimizer(path_provider_.get());
   AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
   auto routing = ctr_optimizer.Optimize(tm_);
 
-  ASSERT_TRUE(HasPath(*routing, "[A->B]", 0.9 / 1.2));
-  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.3 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->B]", 1 / 1.2));
+  ASSERT_TRUE(HasPath(*routing, "[A->D, D->C, C->B]", 0.2 / 1.2));
 }
 
 TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
-  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  CTROptimizer ctr_optimizer(path_provider_.get());
   AddAggregate("A", "C", kDefaultLinkspeed * 3);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -259,7 +262,7 @@ TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
 }
 
 TEST_F(CTRTest, FourAggregates) {
-  CTROptimizer ctr_optimizer(std::move(path_provider_));
+  CTROptimizer ctr_optimizer(path_provider_.get());
   AddAggregate("A", "B", nc::net::Bandwidth::FromKBitsPerSecond(1500));
   AddAggregate("B", "A", nc::net::Bandwidth::FromKBitsPerSecond(200));
   AddAggregate("C", "D", nc::net::Bandwidth::FromKBitsPerSecond(1500));
@@ -275,6 +278,83 @@ TEST_F(CTRTest, FourAggregates) {
 
   auto routing_two = ctr_optimizer.Optimize(tm_);
   ASSERT_TRUE(HasPath(*routing_two, "[A->B]", 0.666));
+}
+
+class CTRQuickTest : public TestBase {
+ protected:
+  CTRQuickTest() : tm_one_(&graph_), tm_two_(&graph_) {}
+
+  TrafficMatrix tm_one_;
+  TrafficMatrix tm_two_;
+};
+
+TEST_F(CTRQuickTest, SingleAggregateFit) {
+  CTROptimizer ctr_optimizer(path_provider_.get());
+  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
+  AddAggregate("A", "C", 1, kDefaultLinkspeed, &tm_two_);
+  auto routing = ctr_optimizer.Optimize(tm_one_);
+
+  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
+  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
+  ASSERT_TRUE(HasPath(*routing_two, "[A->B, B->C]", 1.0));
+}
+
+TEST_F(CTRQuickTest, SingleAggregateTwoPaths) {
+  CTROptimizer ctr_optimizer(path_provider_.get());
+  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
+  AddAggregate("A", "C", 1, kDefaultLinkspeed * 1.5, &tm_two_);
+  auto routing = ctr_optimizer.Optimize(tm_one_);
+
+  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
+  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
+  ASSERT_TRUE(HasPath(*routing_two, "[A->B, B->C]", 0.66));
+  ASSERT_TRUE(HasPath(*routing_two, "[A->D, D->C]", 0.33));
+}
+
+TEST_F(CTRQuickTest, SingleAggregateTwoPathsNoFit) {
+  CTROptimizer ctr_optimizer(path_provider_.get());
+  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
+  AddAggregate("A", "C", 1, kDefaultLinkspeed * 2.5, &tm_two_);
+  auto routing = ctr_optimizer.Optimize(tm_one_);
+
+  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
+  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
+  ASSERT_FALSE(routing_two);
+}
+
+TEST_F(CTRQuickTest, TwoAggregatesTwoPaths) {
+  CTROptimizer ctr_optimizer(path_provider_.get());
+  AddAggregate("A", "B", 1, kDefaultLinkspeed * 0.5, &tm_one_);
+  AddAggregate("D", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
+
+  AddAggregate("A", "B", 1, kDefaultLinkspeed * 0.5, &tm_two_);
+  AddAggregate("D", "C", 1, kDefaultLinkspeed * 1.5, &tm_two_);
+  auto routing = ctr_optimizer.Optimize(tm_one_);
+
+  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
+  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
+
+  ASSERT_TRUE(HasPath(*routing_two, "[A->B]", 1));
+  ASSERT_TRUE(HasPath(*routing_two, "[D->C]", 0.66));
+  ASSERT_TRUE(HasPath(*routing_two, "[D->A, A->B, B->C]", 0.33));
+}
+
+TEST_F(CTRQuickTest, TwoAggregatesReclaim) {
+  CTROptimizer ctr_optimizer(path_provider_.get());
+  AddAggregate("A", "C", 1, kDefaultLinkspeed, &tm_one_);
+  AddAggregate("D", "C", 1, kDefaultLinkspeed, &tm_one_);
+
+  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_two_);
+  AddAggregate("D", "C", 1, kDefaultLinkspeed * 1.5, &tm_two_);
+  auto routing = ctr_optimizer.Optimize(tm_one_);
+
+  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
+  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
+  CHECK(routing_two);
+
+  ASSERT_TRUE(HasPath(*routing_two, "[A->B, B->C]", 1));
+  ASSERT_TRUE(HasPath(*routing_two, "[D->C]", 0.66));
+  ASSERT_TRUE(HasPath(*routing_two, "[D->A, A->B, B->C]", 0.33));
 }
 
 }  // namespace ctr

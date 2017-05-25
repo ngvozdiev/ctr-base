@@ -164,8 +164,7 @@ std::string RoutingConfiguration::ToString() const {
 void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
   using namespace std::chrono;
 
-  // Will assume that we always want to visualize links in their full capacity.
-  OverSubModel model(*this, 1.0);
+  OverSubModel model(*this);
   const nc::net::GraphLinkMap<double>& link_to_load = model.link_to_load();
   const std::map<const nc::net::Walk*, nc::net::Bandwidth> path_to_bw =
       model.per_flow_bandwidth_map();
@@ -435,64 +434,6 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
   }
 
   return std::make_tuple(total_added, total_removed, total_updated);
-}
-
-static nc::net::Bandwidth MinFreeCapacity(
-    const nc::net::GraphStorage& graph, const nc::net::Links& links,
-    const OverSubModel& model,
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities) const {
-  CHECK(!links.empty());
-  nc::net::Bandwidth min_free = nc::net::Bandwidth::Max();
-  for (const nc::net::GraphLinkIndex link : links) {
-    double load = model.link_to_load().GetValueOrDie(link);
-    CHECK(load <= 1 && load >= 0);
-    nc::net::Bandwidth full_capacity = graph.GetLink(link)->bandwidth();
-
-    nc::net::Bandwidth total_load = full_capacity * load;
-    if (extra_capacities.HasValue(link)) {
-      total_load += extra_capacities.GetValueOrDie(link);
-    }
-
-    CHECK(total_load <= full_capacity);
-    nc::net::Bandwidth free = full_capacity - total_load;
-    min_free = std::min(min_free, free);
-  }
-
-  return min_free;
-}
-
-void FindRoom(const std::vector<RouteAndFraction>& routes, nc::net::Bandwidth) {
-
-}
-
-std::unique_ptr<RoutingConfiguration> RoutingConfiguration::Update(
-    const TrafficMatrix& tm) const {
-  std::map<AggregateId, std::vector<RouteAndFraction>> new_configuration;
-  CHECK(tm.demands().size() == demands().size());
-
-  // The model reflects the current state, will use it to get the available
-  // capacity at path.
-  OverSubModel model(*this);
-
-  // Will do this in a two-stage process. Will first migrate the
-  for (const auto& aggregate_and_new_demands : tm.demands()) {
-    const AggregateId& aggregate = aggregate_and_new_demands.first;
-    const DemandAndFlowCount& new_demands = aggregate_and_new_demands.second;
-    const DemandAndFlowCount& current_demands =
-        nc::FindOrDieNoPrint(demands(), aggregate);
-    const std::vector<RouteAndFraction>& current_routes =
-        nc::FindOrDieNoPrint(configuration_, aggregate);
-
-    if (new_demands.first <= current_demands.first) {
-      // The aggregate has either shrunk or remained the same. Will not do
-      // anything---will simply copy over its routes to the new configuration.
-      new_configuration[aggregate] = current_routes;
-    } else {
-      // Need to find place for the new demand. Will:
-      // 1. try to place it on an existing path starting at lowest delay
-      // 2. try to place it on a new path that avoids all congested links
-    }
-  }
 }
 
 }  // namespace ctr

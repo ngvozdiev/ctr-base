@@ -12,8 +12,8 @@ namespace ctr {
 
 class Optimizer {
  public:
-  Optimizer(std::unique_ptr<PathProvider> path_provider)
-      : path_provider_(std::move(path_provider)) {
+  explicit Optimizer(PathProvider* path_provider)
+      : path_provider_(path_provider) {
     CHECK(path_provider_);
     graph_ = path_provider_->graph();
   }
@@ -23,9 +23,17 @@ class Optimizer {
   virtual std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) = 0;
 
+  // Same as optimize, but will also make use of a previous configuration. Not
+  // supported by all optimizers.
+  virtual std::unique_ptr<RoutingConfiguration> OptimizeWithPrevious(
+      const TrafficMatrix& tm, const RoutingConfiguration& previous) {
+    nc::Unused(previous);
+    return Optimize(tm);
+  }
+
  protected:
   // Provides paths to the optimizer.
-  std::unique_ptr<PathProvider> path_provider_;
+  PathProvider* path_provider_;
 
   // The graph.
   const nc::net::GraphStorage* graph_;
@@ -34,8 +42,8 @@ class Optimizer {
 // Only ever assigns aggregates to their single shortest path.
 class ShortestPathOptimizer : public Optimizer {
  public:
-  ShortestPathOptimizer(std::unique_ptr<PathProvider> path_provider)
-      : Optimizer(std::move(path_provider)) {}
+  explicit ShortestPathOptimizer(PathProvider* path_provider)
+      : Optimizer(path_provider) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -48,8 +56,8 @@ class ShortestPathOptimizer : public Optimizer {
 // a given traffic matrix.
 class MinMaxOptimizer : public Optimizer {
  public:
-  MinMaxOptimizer(std::unique_ptr<PathProvider> path_provider)
-      : Optimizer(std::move(path_provider)) {}
+  explicit MinMaxOptimizer(PathProvider* path_provider)
+      : Optimizer(path_provider) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -59,8 +67,8 @@ class MinMaxOptimizer : public Optimizer {
 // set to its flow count from the TM.
 class B4Optimizer : public Optimizer {
  public:
-  B4Optimizer(std::unique_ptr<PathProvider> path_provider)
-      : Optimizer(std::move(path_provider)) {}
+  explicit B4Optimizer(PathProvider* path_provider)
+      : Optimizer(path_provider) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
