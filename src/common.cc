@@ -6,6 +6,8 @@
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/net/algorithm.h"
+#include "ncode_common/src/viz/graph.h"
+#include "opt/oversubscription_model.h"
 
 namespace ctr {
 
@@ -106,8 +108,8 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::Randomize(
       new_flow_count = ratio * flow_count;
     }
 
-    LOG(ERROR) << "FC " << aggregate.ToString(*graph_) << " demand "
-               << demand.Mbps() << " -> " << new_demand.Mbps();
+    //    LOG(ERROR) << "FC " << aggregate.ToString(*graph_) << " demand "
+    //               << demand.Mbps() << " -> " << new_demand.Mbps();
 
     new_demands[aggregate] = {new_demand, new_flow_count};
   }
@@ -157,6 +159,88 @@ std::string RoutingConfiguration::ToString() const {
   }
 
   return nc::StrCat(base_to_string, "\n", nc::Join(out, "\n"));
+}
+
+void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
+  using namespace std::chrono;
+
+  // Will assume that we always want to visualize links in their full capacity.
+  OverSubModel model(*this, 1.0);
+  const nc::net::GraphLinkMap<double>& link_to_load = model.link_to_load();
+  const std::map<const nc::net::Walk*, nc::net::Bandwidth> path_to_bw =
+      model.per_flow_bandwidth_map();
+
+  // Relates each link with the aggregates and paths that cross it. For each
+  // path also records the number of flows.
+  nc::net::GraphLinkMap<std::map<
+      AggregateId, std::vector<std::pair<const nc::net::Walk*, size_t>>>>
+      per_link_state;
+
+  std::vector<nc::viz::PathData> paths;
+  for (const auto& aggregate_and_routes : configuration_) {
+    const AggregateId& aggregate_id = aggregate_and_routes.first;
+    const std::vector<RouteAndFraction>& routes = aggregate_and_routes.second;
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(demands(), aggregate_id);
+
+    for (const RouteAndFraction& route_and_fraction : routes) {
+      std::string label = std::to_string(route_and_fraction.second);
+      paths.emplace_back(route_and_fraction.first, label);
+
+      double fraction = route_and_fraction.second;
+      const nc::net::Walk* path = route_and_fraction.first;
+      for (nc::net::GraphLinkIndex link : path->links()) {
+        std::map<AggregateId,
+                 std::vector<std::pair<const nc::net::Walk*, size_t>>>&
+            aggregates_over_link = per_link_state[link];
+
+        std::vector<std::pair<const nc::net::Walk*, size_t>>& paths_over_link =
+            aggregates_over_link[aggregate_id];
+        paths_over_link.emplace_back(path,
+                                     fraction * demand_and_flow_count.second);
+      }
+    }
+  }
+
+  std::vector<nc::viz::EdgeData> edges;
+  for (const auto& link_and_load : link_to_load) {
+    nc::net::GraphLinkIndex link = link_and_load.first;
+    const nc::net::GraphLink* link_ptr = graph_->GetLink(link);
+    double delay_ms =
+        std::chrono::duration<double, std::milli>(link_ptr->delay()).count();
+    double load = *(link_and_load.second);
+
+    // The tooltip will show the paths that cross the link, grouped by
+    // aggregate, and for each path the number of flows and total volume.
+    const std::map<AggregateId,
+                   std::vector<std::pair<const nc::net::Walk*, size_t>>>&
+        aggregates_over_link = per_link_state.GetValueOrDie(link);
+    std::string tooltip;
+    nc::StrAppend(&tooltip, "Link load: ", load, " out of ",
+                  nc::StrCat(link_ptr->bandwidth().Mbps(), "Mbps, delay: ",
+                             delay_ms, "ms<br>"));
+    for (const auto& aggregate_id_and_paths : aggregates_over_link) {
+      const AggregateId& aggregate_id = aggregate_id_and_paths.first;
+      nc::StrAppend(&tooltip, aggregate_id.ToString(*graph_), ":<br>");
+
+      for (const auto& path_and_flows : aggregate_id_and_paths.second) {
+        const nc::net::Walk* path = path_and_flows.first;
+        uint32_t flow_count = path_and_flows.second;
+        nc::net::Bandwidth per_flow_bw = nc::FindOrDie(path_to_bw, path);
+        nc::net::Bandwidth total_bw = per_flow_bw * flow_count;
+
+        nc::StrAppend(&tooltip, "&nbsp;&nbsp;&nbsp;&nbsp;",
+                      path->ToStringIdsOnly(*graph_), " ", flow_count,
+                      nc::StrCat(" flows ", total_bw.Mbps(), "Mbps<br>"));
+      }
+    }
+
+    std::vector<double> loads = {load};
+    edges.emplace_back(link, loads, tooltip, delay_ms);
+  }
+
+  nc::viz::DisplayMode display_mode("default");
+  nc::viz::GraphToHTML(edges, paths, {display_mode}, *graph_, out);
 }
 
 std::string TrafficMatrix::ToString() const {
@@ -351,6 +435,64 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
   }
 
   return std::make_tuple(total_added, total_removed, total_updated);
+}
+
+static nc::net::Bandwidth MinFreeCapacity(
+    const nc::net::GraphStorage& graph, const nc::net::Links& links,
+    const OverSubModel& model,
+    const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities) const {
+  CHECK(!links.empty());
+  nc::net::Bandwidth min_free = nc::net::Bandwidth::Max();
+  for (const nc::net::GraphLinkIndex link : links) {
+    double load = model.link_to_load().GetValueOrDie(link);
+    CHECK(load <= 1 && load >= 0);
+    nc::net::Bandwidth full_capacity = graph.GetLink(link)->bandwidth();
+
+    nc::net::Bandwidth total_load = full_capacity * load;
+    if (extra_capacities.HasValue(link)) {
+      total_load += extra_capacities.GetValueOrDie(link);
+    }
+
+    CHECK(total_load <= full_capacity);
+    nc::net::Bandwidth free = full_capacity - total_load;
+    min_free = std::min(min_free, free);
+  }
+
+  return min_free;
+}
+
+void FindRoom(const std::vector<RouteAndFraction>& routes, nc::net::Bandwidth) {
+
+}
+
+std::unique_ptr<RoutingConfiguration> RoutingConfiguration::Update(
+    const TrafficMatrix& tm) const {
+  std::map<AggregateId, std::vector<RouteAndFraction>> new_configuration;
+  CHECK(tm.demands().size() == demands().size());
+
+  // The model reflects the current state, will use it to get the available
+  // capacity at path.
+  OverSubModel model(*this);
+
+  // Will do this in a two-stage process. Will first migrate the
+  for (const auto& aggregate_and_new_demands : tm.demands()) {
+    const AggregateId& aggregate = aggregate_and_new_demands.first;
+    const DemandAndFlowCount& new_demands = aggregate_and_new_demands.second;
+    const DemandAndFlowCount& current_demands =
+        nc::FindOrDieNoPrint(demands(), aggregate);
+    const std::vector<RouteAndFraction>& current_routes =
+        nc::FindOrDieNoPrint(configuration_, aggregate);
+
+    if (new_demands.first <= current_demands.first) {
+      // The aggregate has either shrunk or remained the same. Will not do
+      // anything---will simply copy over its routes to the new configuration.
+      new_configuration[aggregate] = current_routes;
+    } else {
+      // Need to find place for the new demand. Will:
+      // 1. try to place it on an existing path starting at lowest delay
+      // 2. try to place it on a new path that avoids all congested links
+    }
+  }
 }
 
 }  // namespace ctr

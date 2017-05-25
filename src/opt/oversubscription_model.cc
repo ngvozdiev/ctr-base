@@ -87,12 +87,11 @@ void OverSubModelPathState::AddLinkState(OverSubModelLinkState* link_state) {
   link_states_in_path_.emplace_back(link_state);
 }
 
-OverSubModel::OverSubModel(const TrafficMatrix& tm,
-                           const RoutingConfiguration& routing,
-                           double capacity_multiplier) {
+OverSubModel::OverSubModel(const RoutingConfiguration& routing)
+    : graph_(routing.graph()) {
   std::map<const nc::net::Walk*, OverSubModelPathState> path_to_state;
   std::map<nc::net::GraphLinkIndex, OverSubModelLinkState> link_to_state;
-  InitState(tm, routing, capacity_multiplier, &path_to_state, &link_to_state);
+  InitState(routing, &path_to_state, &link_to_state);
   PopulateCapacities(&path_to_state, &link_to_state);
 
   for (const auto& path_and_state : path_to_state) {
@@ -100,25 +99,38 @@ OverSubModel::OverSubModel(const TrafficMatrix& tm,
     const OverSubModelPathState& path_state = path_and_state.second;
 
     const DemandAndFlowCount& demand_and_flows =
-        nc::FindOrDieNoPrint(tm.demands(), path_state.aggregate_id());
+        nc::FindOrDieNoPrint(routing.demands(), path_state.aggregate_id());
     double num_flows = demand_and_flows.second * path_state.fraction();
     per_flow_bandwidth_[path] = path_state.bottleneck_rate() / num_flows;
+  }
+
+  for (const auto& link_and_state : link_to_state) {
+    GraphLinkIndex link = link_and_state.first;
+    const OverSubModelLinkState& link_state = link_and_state.second;
+    nc::net::Bandwidth total_over_link = nc::net::Bandwidth::Zero();
+    for (const OverSubModelPathState* path_state :
+         link_state.path_states_over_link()) {
+      total_over_link += path_state->bottleneck_rate();
+    }
+
+    link_to_load_[link] = total_over_link / link_state.original_capacity();
+  }
+
+  for (GraphLinkIndex link : graph_->AllLinks()) {
+    link_to_load_[link];
   }
 }
 
 void OverSubModel::InitState(
-    const TrafficMatrix& tm, const RoutingConfiguration& routing,
-    double capacity_multiplier,
+    const RoutingConfiguration& routing,
     std::map<const nc::net::Walk*, OverSubModelPathState>* path_to_state,
     std::map<nc::net::GraphLinkIndex, OverSubModelLinkState>* link_to_state) {
-  const GraphStorage* graph = tm.graph();
-
   for (const auto& aggregate_and_routes : routing.routes()) {
     const AggregateId& aggregate = aggregate_and_routes.first;
     const std::vector<RouteAndFraction>& routes = aggregate_and_routes.second;
 
     const DemandAndFlowCount& demand_and_flow_count =
-        nc::FindOrDieNoPrint(tm.demands(), aggregate);
+        nc::FindOrDieNoPrint(routing.demands(), aggregate);
     Bandwidth demand = demand_and_flow_count.first;
 
     for (const auto& route_and_fraction : routes) {
@@ -131,9 +143,9 @@ void OverSubModel::InitState(
           OverSubModelPathState(aggregate, fraction, path_demand, path));
 
       for (GraphLinkIndex link_index : path->links()) {
-        const GraphLink* link = graph->GetLink(link_index);
+        const GraphLink* link = graph_->GetLink(link_index);
 
-        Bandwidth capacity = link->bandwidth() * capacity_multiplier;
+        Bandwidth capacity = link->bandwidth();
         OverSubModelLinkState& link_state = nc::LookupOrInsert(
             link_to_state, link_index, OverSubModelLinkState(capacity, link));
         path_state.AddLinkState(&link_state);

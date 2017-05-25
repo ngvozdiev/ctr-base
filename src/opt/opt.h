@@ -12,10 +12,8 @@ namespace ctr {
 
 class Optimizer {
  public:
-  Optimizer(std::unique_ptr<PathProvider> path_provider,
-            double link_capacity_multiplier)
-      : path_provider_(std::move(path_provider)),
-        link_capacity_multiplier_(link_capacity_multiplier) {
+  Optimizer(std::unique_ptr<PathProvider> path_provider)
+      : path_provider_(std::move(path_provider)) {
     CHECK(path_provider_);
     graph_ = path_provider_->graph();
   }
@@ -31,17 +29,13 @@ class Optimizer {
 
   // The graph.
   const nc::net::GraphStorage* graph_;
-
-  // All links' capacity will be multiplied by this number.
-  double link_capacity_multiplier_;
 };
 
 // Only ever assigns aggregates to their single shortest path.
 class ShortestPathOptimizer : public Optimizer {
  public:
-  ShortestPathOptimizer(std::unique_ptr<PathProvider> path_provider,
-                        double link_capacity_multiplier = 1.0)
-      : Optimizer(std::move(path_provider), link_capacity_multiplier) {}
+  ShortestPathOptimizer(std::unique_ptr<PathProvider> path_provider)
+      : Optimizer(std::move(path_provider)) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -54,9 +48,8 @@ class ShortestPathOptimizer : public Optimizer {
 // a given traffic matrix.
 class MinMaxOptimizer : public Optimizer {
  public:
-  MinMaxOptimizer(std::unique_ptr<PathProvider> path_provider,
-                  double link_capacity_multiplier = 1.0)
-      : Optimizer(std::move(path_provider), link_capacity_multiplier) {}
+  MinMaxOptimizer(std::unique_ptr<PathProvider> path_provider)
+      : Optimizer(std::move(path_provider)) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -66,9 +59,8 @@ class MinMaxOptimizer : public Optimizer {
 // set to its flow count from the TM.
 class B4Optimizer : public Optimizer {
  public:
-  B4Optimizer(std::unique_ptr<PathProvider> path_provider,
-              double link_capacity_multiplier = 1.0)
-      : Optimizer(std::move(path_provider), link_capacity_multiplier) {}
+  B4Optimizer(std::unique_ptr<PathProvider> path_provider)
+      : Optimizer(std::move(path_provider)) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;

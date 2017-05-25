@@ -26,7 +26,7 @@ using nc::lp::VariableIndex;
 using PathPtr = const nc::net::Walk*;
 
 static constexpr double kM1 = 1000000000.0;
-static constexpr double kM2 = 0.001;
+static constexpr double kM2 = 0.01;
 static constexpr double kMillion = 1000000.0;
 
 static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
@@ -163,14 +163,14 @@ void CTROptimizer::OptimizePrivate(
 
   std::map<AggregateId, std::vector<RouteAndFraction>> aggregate_outputs;
   while (true) {
-        LOG(INFO) << "New pass";
+    //    LOG(INFO) << "New pass";
     bool added_any_paths = AddFreePaths(
         links_with_no_capcity, aggregates_ordered, &ksp_indices, &path_map);
     if (!added_any_paths) {
       break;
     }
 
-    CTROptimizerPass pass(&input, &path_map, graph_, link_capacity_multiplier_);
+    CTROptimizerPass pass(&input, &path_map, graph_);
     RunOutput& run_output = pass.run_output();
     double obj_value = run_output.obj_value;
     CHECK(obj_value != std::numeric_limits<double>::max());
@@ -183,8 +183,8 @@ void CTROptimizer::OptimizePrivate(
       break;
     }
 
-        LOG(INFO) << obj_value << " vs " << prev_obj_value << " lnc "
-                  << links_with_no_capcity.Count() << " remainder ";
+    //    LOG(INFO) << obj_value << " vs " << prev_obj_value << " lnc "
+    //              << links_with_no_capcity.Count() << " remainder ";
 
     prev_obj_value = obj_value;
     max_oversubscription = run_output.max_oversubscription;
@@ -193,8 +193,8 @@ void CTROptimizer::OptimizePrivate(
     }
   }
 
-    LOG(INFO) << "FUBAR pass done obj " << prev_obj_value << " max os "
-              << max_oversubscription;
+  //  LOG(INFO) << "FUBAR pass done obj " << prev_obj_value << " max os "
+  //            << max_oversubscription;
 
   for (auto& aggregate_and_output : aggregate_outputs) {
     out->AddRouteAndFraction(aggregate_and_output.first,
@@ -232,37 +232,39 @@ struct PathAndCost {
 // Given a path map will return a map with path costs the costs will be unique
 // and (mostly) the same as each path's delay in ms. Paths will be at least
 // step_size apart.
-static std::map<const nc::net::Walk*, double> PathCostMap(
-    const CTRPathMap& paths, double step_size = 0.001) {
-  using namespace std::chrono;
-
-  std::map<nc::net::Delay, std::vector<const nc::net::Walk*>> paths_by_delay;
-  for (const auto& aggregate_and_paths : paths) {
-    for (const nc::net::Walk* path : aggregate_and_paths.second) {
-      paths_by_delay[path->delay()].emplace_back(path);
-    }
-  }
-
-  std::map<const nc::net::Walk*, double> out;
-  // Now that we have grouped the paths we will go through the unique delay
-  // values in order (just iterate over the map) and assign costs.
-  double total = 0;
-  auto it = paths_by_delay.begin();
-  while (it != paths_by_delay.end()) {
-    double base_cost = duration_cast<milliseconds>(it->first).count();
-    const std::vector<const nc::net::Walk*>& paths_at_cost = it->second;
-    total = std::max(base_cost, total);
-
-    for (const nc::net::Walk* path : paths_at_cost) {
-      out[path] = total;
-      total += step_size;
-    }
-
-    ++it;
-  }
-
-  return out;
-}
+// static std::map<const nc::net::Walk*, double> PathCostMap(
+//    const CTRPathMap& paths, double step_size = 0.001) {
+//  using namespace std::chrono;
+//
+//  std::map<nc::net::Delay, std::vector<const nc::net::Walk*>> paths_by_delay;
+//  for (const auto& aggregate_and_paths : paths) {
+//    for (const nc::net::Walk* path : aggregate_and_paths.second) {
+//      paths_by_delay[path->delay()].emplace_back(path);
+//    }
+//  }
+//
+//  std::map<const nc::net::Walk*, double> out;
+//  // Now that we have grouped the paths we will go through the unique delay
+//  // values in order (just iterate over the map) and assign costs.
+//  double total = 0;
+//  auto it = paths_by_delay.begin();
+//  while (it != paths_by_delay.end()) {
+//    double base_cost =
+//        std::chrono::duration<double, std::milli>(it->first).count();
+//    const std::vector<const nc::net::Walk*>& paths_at_cost = it->second;
+//    total = std::max(base_cost, total);
+//
+//    for (const nc::net::Walk* path : paths_at_cost) {
+//      CHECK(total != 0);
+//      out[path] = total;
+//      total += step_size;
+//    }
+//
+//    ++it;
+//  }
+//
+//  return out;
+//}
 
 static double GetFraction(const PathAndCost& path_and_cost,
                           const Solution& solution) {
@@ -270,8 +272,15 @@ static double GetFraction(const PathAndCost& path_and_cost,
   return solution.VariableValue(path_variable);
 }
 
-double CTROptimizerPass::PathCost(const nc::net::Walk* path) const {
-  return nc::FindOrDie(path_cost_map_, path);
+static size_t PathCostRounded(const nc::net::Walk* path) {
+  double delay_ms =
+      std::chrono::duration<double, std::milli>(path->delay()).count();
+  size_t cost = static_cast<size_t>(delay_ms / 2);
+  return std::max(1ul, cost);
+}
+
+static double PathCostUnrounded(const nc::net::Walk* path) {
+  return std::chrono::duration<double, std::milli>(path->delay()).count();
 }
 
 double CTROptimizerPass::OptimizeMinLinkOversubscription() {
@@ -321,11 +330,10 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       problem.SetVariableRange(variable, 0, 1);
 
       // The cost, delay in seconds.
-      double cost = PathCost(path);
-      double uniqueness_weight =
-          kM2 * flow_count * cost / PathCost(shortest_path);
-      problem.SetObjectiveCoefficient(variable,
-                                      flow_count * cost + uniqueness_weight);
+      double uniqueness_weight = kM2 * flow_count * PathCostUnrounded(path) /
+                                 PathCostUnrounded(shortest_path);
+      problem.SetObjectiveCoefficient(
+          variable, flow_count * PathCostRounded(path) + uniqueness_weight);
 
       PathAndCost path_and_cost(aggregate_id, variable,
                                 demand_and_flow_count.first, path);
@@ -374,9 +382,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
                                 oversubscription_var, 1);
     problem_matrix.emplace_back(oversubscription_var_constraint,
                                 max_oversubscription_var, -1);
-
-    double link_capacity_mbps =
-        link->bandwidth().bps() / kMillion * link_capacity_multiplier_;
+    double link_capacity_mbps = link->bandwidth().Mbps();
 
     // If there is frozen capacity along the link will deduct it now.
     if (frozen_capacity_.HasValue(link_index)) {
@@ -403,10 +409,10 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   auto problem_constructed_at = high_resolution_clock::now();
   milliseconds problem_construction_duration =
       duration_cast<milliseconds>(problem_constructed_at - start_at);
-    LOG(INFO) << nc::Substitute(
-        "Problem constructed in $0ms, non-zero matrix elements $1, paths $2",
-        duration_cast<milliseconds>(problem_construction_duration).count(),
-        problem_matrix.size(), total_paths);
+  //  LOG(INFO) << nc::Substitute(
+  //      "Problem constructed in $0ms, non-zero matrix elements $1, paths $2",
+  //      duration_cast<milliseconds>(problem_construction_duration).count(),
+  //      problem_matrix.size(), total_paths);
 
   std::unique_ptr<Solution> solution = problem.Solve();
 
@@ -428,11 +434,11 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   auto problem_solved_at = high_resolution_clock::now();
   milliseconds problem_solution_duration =
       duration_cast<milliseconds>(problem_solved_at - problem_constructed_at);
-    LOG(INFO) << nc::Substitute(
-        "Problem solved in $0ms obj $1 paths $2, max os $3",
-        duration_cast<milliseconds>(problem_solution_duration).count(),
-        solution->ObjectiveValue(), total_paths,
-        latest_run_max_oversubscription_);
+  //  LOG(INFO) << nc::Substitute(
+  //      "Problem solved in $0ms obj $1 paths $2, max os $3",
+  //      duration_cast<milliseconds>(problem_solution_duration).count(),
+  //      solution->ObjectiveValue(), total_paths,
+  //      latest_run_max_oversubscription_);
 
   std::map<AggregateId, std::set<PathPtr>>
       aggregate_to_max_oversubscribed_paths;
@@ -469,9 +475,9 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       }
     }
 
-    double load_fraction =
-        total_load / (link->bandwidth().bps() * link_capacity_multiplier_);
-    if (oversubscription > 1.0001 || load_fraction >= 0.99) {
+    double load_fraction = total_load / link->bandwidth().bps();
+    if (oversubscription > 1.0 || load_fraction >= 1.0) {
+      //      if (oversubscription > 1.0) {
       links_with_no_capacity_.Insert(link_index);
       //      LOG(ERROR) << "L " << link->ToString();
     }
@@ -517,8 +523,9 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     }
   }
 
-  LOG(INFO) << "Frozen " << frozen_aggregates_.size() << "/" << paths_->size()
-            << " aggregates";
+  //  LOG(INFO) << "Frozen " << frozen_aggregates_.size() << "/" <<
+  //  paths_->size()
+  //            << " aggregates";
 
   // Populate the outputs for all frozen aggregates.
   for (const auto& aggregate_and_paths : aggregate_to_paths) {
@@ -560,24 +567,24 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   auto solution_obtained_at = high_resolution_clock::now();
   milliseconds solution_obtain_duration =
       duration_cast<milliseconds>(solution_obtained_at - problem_solved_at);
-    LOG(INFO) << nc::Substitute(
-        "Solution obtained in $0ms",
-        duration_cast<milliseconds>(solution_obtain_duration).count());
+  //  LOG(INFO) << nc::Substitute(
+  //      "Solution obtained in $0ms",
+  //      duration_cast<milliseconds>(solution_obtain_duration).count());
 
   return solution->ObjectiveValue() - link_to_paths.Count();
 }
 
 CTROptimizerPass::CTROptimizerPass(const TrafficMatrix* input,
                                    const CTRPathMap* paths,
-                                   const nc::net::GraphStorage* graph,
-                                   double link_capacity_multiplier)
+                                   const nc::net::GraphStorage* graph)
     : input_(input),
       paths_(paths),
       graph_(graph),
-      latest_run_max_oversubscription_(0),
-      link_capacity_multiplier_(link_capacity_multiplier) {
-  path_cost_map_ = PathCostMap(*paths);
-  FreezeSinglePathAggregates();
+      latest_run_max_oversubscription_(0) {
+  //  path_cost_map_ = PathCostMap(*paths);
+  //  FreezeSinglePathAggregates();
+  initial_obj_ = 0;
+  initial_oversubscription_ = 0;
   Optimize();
 }
 
@@ -589,6 +596,7 @@ void CTROptimizerPass::Optimize() {
     CHECK(obj_value != std::numeric_limits<double>::max());
 
     if (num_passes == 0) {
+      //      run_output_.obj_value = obj_value;
       run_output_.obj_value = std::max(obj_value, initial_obj_);
       run_output_.max_oversubscription =
           std::max(initial_oversubscription_, latest_run_max_oversubscription_);
@@ -623,7 +631,7 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
         nc::FindOrDieNoPrint(input_->demands(), aggregate);
     PathPtr path = paths.front();
     double flow_count = input.second;
-    total_cost += flow_count * PathCost(path) + flow_count * kM2;
+    total_cost += flow_count * PathCostRounded(path) + flow_count * kM2;
 
     std::vector<RouteAndFraction>& aggregate_paths =
         run_output_.aggregate_outputs[aggregate];
@@ -643,20 +651,19 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
     const nc::net::GraphLink* link = graph_->GetLink(link_index);
 
     double raw_capacity = link->bandwidth().bps();
-    double capacity = (raw_capacity * link_capacity_multiplier_);
-    double oversub = frozen_capacity / capacity;
-    max_oversub = std::max(max_oversub, oversub);
+    double load_fraction = frozen_capacity / raw_capacity;
+    max_oversub = std::max(max_oversub, load_fraction);
 
-    if (oversub > 0.999) {
+    if (load_fraction >= 1.0) {
       links_with_no_capacity_.Insert(link_index);
     }
   }
   initial_oversubscription_ = std::max(1.0, max_oversub);
   initial_obj_ = total_cost + (initial_oversubscription_ - 1) * kM1;
 
-    LOG(INFO) << "Frozen " << num_frozen
-              << " aggregates with 1 path, initial oversubscription "
-              << initial_oversubscription_ << " initial obj " << initial_obj_;
+  //  LOG(INFO) << "Frozen " << num_frozen
+  //            << " aggregates with 1 path, initial oversubscription "
+  //            << initial_oversubscription_ << " initial obj " << initial_obj_;
 }
 
 }  // namespace nc

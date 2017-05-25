@@ -36,9 +36,8 @@ std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
 
 class MinMaxMCProblem : public nc::lp::MCProblem {
  public:
-  MinMaxMCProblem(const nc::net::GraphStorage* graph_storage,
-                  double capacity_multiplier = 1.0)
-      : nc::lp::MCProblem({}, graph_storage, capacity_multiplier) {}
+  MinMaxMCProblem(const nc::net::GraphStorage* graph_storage)
+      : nc::lp::MCProblem({}, graph_storage) {}
 
   double Solve(
       std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths) {
@@ -107,7 +106,7 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
 
 std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     const TrafficMatrix& tm) {
-  MinMaxMCProblem problem(graph_, link_capacity_multiplier_);
+  MinMaxMCProblem problem(graph_);
 
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
@@ -287,8 +286,7 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
 
     link_states.emplace(
         std::piecewise_construct, std::forward_as_tuple(link_index),
-        std::forward_as_tuple(
-            link_index, link->bandwidth().bps() * link_capacity_multiplier_));
+        std::forward_as_tuple(link_index, link->bandwidth().bps()));
   }
 
   // A constraint to avoid congested links.

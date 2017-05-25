@@ -32,8 +32,7 @@ struct RunOutput {
 class CTROptimizerPass {
  public:
   CTROptimizerPass(const TrafficMatrix* input, const CTRPathMap* paths,
-                   const nc::net::GraphStorage* graph,
-                   double link_capacity_multiplier);
+                   const nc::net::GraphStorage* graph);
 
   const nc::net::GraphLinkSet& links_with_no_capacity() const {
     return links_with_no_capacity_;
@@ -58,9 +57,6 @@ class CTROptimizerPass {
   // freeze_all argument will cause all aggregates to be frozen after the
   // optimization, regardless of where their paths go.
   double OptimizeMinLinkOversubscription();
-
-  // Returns the cost of a path.
-  double PathCost(const nc::net::Walk* path) const;
 
   // The input. Not owned by this class.
   const TrafficMatrix* input_;
@@ -94,16 +90,12 @@ class CTROptimizerPass {
 
   // Objective function value after all single-path aggregates have been frozen.
   double initial_obj_;
-
-  // All links capacities' will be multiplied by this number.
-  double link_capacity_multiplier_;
 };
 
 class CTROptimizer : public Optimizer {
  public:
-  CTROptimizer(std::unique_ptr<PathProvider> path_provider,
-               double link_capacity_multiplier = 1.0)
-      : Optimizer(std::move(path_provider), link_capacity_multiplier) {}
+  CTROptimizer(std::unique_ptr<PathProvider> path_provider)
+      : Optimizer(std::move(path_provider)) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;

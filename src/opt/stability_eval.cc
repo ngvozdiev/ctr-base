@@ -1,24 +1,31 @@
 #include <gflags/gflags.h>
 #include <stddef.h>
 #include <algorithm>
+#include <cstdint>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <random>
 #include <string>
+#include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
+#include "ncode_common/src/lp/mc_flow.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/strutil.h"
+#include "ncode_common/src/viz/web_page.h"
 #include "../common.h"
 #include "ctr.h"
+#include "opt.h"
 #include "path_provider.h"
 
 DEFINE_string(topology_file, "", "A topology file");
@@ -202,6 +209,10 @@ static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
   std::vector<size_t> route_update_counts;
   std::vector<size_t> route_remove_counts;
 
+  nc::viz::HtmlPage before_page;
+  baseline->ToHTML(&before_page);
+  nc::File::WriteStringToFile(before_page.Construct(), "before.html");
+
   //  LOG(INFO) << baseline->ToString();
 
   for (size_t i = 0; i < FLAGS_try_count; ++i) {
@@ -231,9 +242,13 @@ static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
     }
     LOG(ERROR) << "TG " << total_g;
 
+    nc::viz::HtmlPage page;
+    output->ToHTML(&page);
+    nc::File::WriteStringToFile(page.Construct(), "after.html");
+
     double demand_delta = routing_config_delta.total_volume_fraction_delta;
     double flow_delta = routing_config_delta.total_flow_fraction_delta;
-
+    //
     if (demand_delta > worst_total_demand_delta) {
       worst_demand_i = i;
     }

@@ -36,7 +36,6 @@ class OverSubModelLinkState {
   nc::net::Bandwidth original_capacity() const { return original_capacity_; }
 
  private:
-
   // The original capacity of this link state.
   const nc::net::Bandwidth original_capacity_;
 
@@ -91,8 +90,7 @@ class OverSubModelPathState {
 // loaded each link is and what its "oversubscription" value is.
 class OverSubModel {
  public:
-  OverSubModel(const TrafficMatrix& tm, const RoutingConfiguration& routing,
-               double capacity_multiplier);
+  OverSubModel(const RoutingConfiguration& routing);
 
   // The bandwidth a flow that is on a path is expected to get. If the network
   // is oversubscribed this will be less than the flow's demand (the total
@@ -102,11 +100,15 @@ class OverSubModel {
     return per_flow_bandwidth_;
   }
 
+  // Returns a map with each link's load. The load will never exceed 1.
+  const nc::net::GraphLinkMap<double>& link_to_load() const {
+    return link_to_load_;
+  }
+
  private:
   // Initializes state for a subset of the aggregates.
   void InitState(
-      const TrafficMatrix& tm, const RoutingConfiguration& routing,
-      double capacity_multiplier,
+      const RoutingConfiguration& routing,
       std::map<const nc::net::Walk*, OverSubModelPathState>* path_to_state,
       std::map<nc::net::GraphLinkIndex, OverSubModelLinkState>* link_to_state);
 
@@ -117,6 +119,11 @@ class OverSubModel {
       std::map<nc::net::GraphLinkIndex, OverSubModelLinkState>* link_to_state);
 
   std::map<const nc::net::Walk*, nc::net::Bandwidth> per_flow_bandwidth_;
+
+  nc::net::GraphLinkMap<double> link_to_load_;
+
+  // The graph.
+  const nc::net::GraphStorage* graph_;
 };
 
 }  // namespace fubarizer
