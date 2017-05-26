@@ -1,30 +1,41 @@
 #ifndef CTR_OPT_COMPARE_H
 #define CTR_OPT_COMPARE_H
 
-#include "../common.h"
-#include "opt.h"
+#include "ncode_common/src/viz/grapher.h"
+
+namespace ctr {
+class RoutingConfiguration;
+struct RoutingConfigurationDelta;
+} /* namespace ctr */
 
 namespace ctr {
 
-// Returns a single line with the following space-separated information:
-// number of aggregates
-// distribution of absolute path stretches in ms (100 percentile values)
+// An array with the following fields:
+// distribution of absolute path stretches in ms (101 percentile values)
 // distribution of relative path stretches
 // distribution of numbers of paths per aggregate
 // distribution of link utilization
 // distribution of unmet demand per link
-std::string DumpRoutingInfo(const RoutingConfiguration& routing);
+class RoutingConfigInfo : public nc::viz::NpyArray {
+ public:
+  RoutingConfigInfo();
 
-// Returns a single line with space-separated information comparing two routing
-// configurations.
+  void Add(const RoutingConfiguration& routing);
+};
+
+// Information about the difference between two routing configs. Has fields:
 // fraction of total volume that changed paths
 // fraction of total flow count that changed paths
-// distribution of per-aggregate fraction changes
 // number of route adds
 // number of route updates
 // number of route removals
-std::string DumpRoutingDelta(const RoutingConfiguration& routing_one,
-                             const RoutingConfiguration& routing_two);
+// distribution of per-aggregate fraction changes
+class RoutingConfigDeltaInfo : public nc::viz::NpyArray {
+ public:
+  RoutingConfigDeltaInfo();
+
+  void Add(const RoutingConfigurationDelta& delta);
+};
 
 }  // namespace ctr
 

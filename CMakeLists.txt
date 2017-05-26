@@ -53,8 +53,8 @@ SET(BUILD_TESTING False)
 add_subdirectory(external/gflags)
 SET(BUILD_TESTING ${OLD_BUILD_TESTING})
 
-set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h)
-add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc ${CTR_BASE_HEADER_FILES})
+set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h)
+add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc ${CTR_BASE_HEADER_FILES})
 target_link_libraries(ctr_base ncode)
 
 add_executable(stability_eval src/opt/stability_eval.cc)
