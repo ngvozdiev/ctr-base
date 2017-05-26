@@ -6,37 +6,25 @@
 
 namespace ctr {
 
-// Performance of a single optimizer on a single TM.
-class PerOptimizerSummary {
- public:
-  PerOptimizerSummary(const TrafficMatrix& input,
-                      const RoutingConfiguration& output,
-                      double link_scale_factor, uint64_t processing_time_ms);
+// Returns a single line with the following space-separated information:
+// number of aggregates
+// distribution of absolute path stretches in ms (100 percentile values)
+// distribution of relative path stretches
+// distribution of numbers of paths per aggregate
+// distribution of link utilization
+// distribution of unmet demand per link
+std::string DumpRoutingInfo(const RoutingConfiguration& routing);
 
-  void SaveStats(const std::string& file_prefix) const;
-
-  std::vector<double> LinkUtilization() const;
-
- private:
-  // Per-flow path stretch.
-  std::vector<double> path_stretches_;
-  std::vector<double> path_stretches_rel_;
-
-  // Link utilization, first is flow over link, second is link capacity.
-  std::vector<std::pair<double, double>> link_loads_;
-
-  // Number of paths per aggregate.
-  std::vector<double> num_paths_;
-
-  // Unmet demand.
-  std::vector<double> unmet_demand_;
-
-  // Time to run the optimizer.
-  uint64_t processing_time_ms_;
-
-  // Number of aggregates.
-  uint64_t aggregate_count_;
-};
+// Returns a single line with space-separated information comparing two routing
+// configurations.
+// fraction of total volume that changed paths
+// fraction of total flow count that changed paths
+// distribution of per-aggregate fraction changes
+// number of route adds
+// number of route updates
+// number of route removals
+std::string DumpRoutingDelta(const RoutingConfiguration& routing_one,
+                             const RoutingConfiguration& routing_two);
 
 }  // namespace ctr
 
