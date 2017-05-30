@@ -66,6 +66,25 @@ std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
   return nc::make_unique<nc::lp::DemandMatrix>(std::move(elements), graph_);
 }
 
+std::unique_ptr<TrafficMatrix> TrafficMatrix::ScaleDemands(
+    double factor, const std::set<AggregateId>& to_scale) const {
+  std::map<AggregateId, DemandAndFlowCount> new_demands;
+  for (const auto& aggregate_and_demand : demands_) {
+    const AggregateId& aggregate = aggregate_and_demand.first;
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_and_demand.second;
+    if (!to_scale.empty() && !nc::ContainsKey(to_scale, aggregate)) {
+      new_demands[aggregate] = demand_and_flow_count;
+      continue;
+    }
+
+    new_demands[aggregate] = {demand_and_flow_count.first * factor,
+                              demand_and_flow_count.second};
+  }
+
+  return nc::make_unique<TrafficMatrix>(graph_, new_demands);
+}
+
 static double Pick(double current, double fraction, std::mt19937* rnd) {
   double delta = current * fraction;
   double low = current - delta;
@@ -374,6 +393,30 @@ static double GetPathStretchGain(const std::vector<RouteAndFraction>& lhs,
                                  nc::net::Delay sp_delay) {
   return GetWeightedPathStretch(lhs, sp_delay) -
          GetWeightedPathStretch(rhs, sp_delay);
+}
+
+double RoutingConfiguration::PathStretchFraction() const {
+  double total_on_sp = 0;
+  double total = 0;
+  for (const auto& aggregate_id_and_routes : configuration_) {
+    const AggregateId& aggregate_id = aggregate_id_and_routes.first;
+    nc::net::Delay sp_delay = aggregate_id.GetSPDelay(*graph_);
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(demands(), aggregate_id);
+
+    for (const RouteAndFraction& route_and_fraction :
+         aggregate_id_and_routes.second) {
+      const nc::net::Walk* path = route_and_fraction.first;
+      nc::net::Delay path_delay = path->delay();
+      double fraction = route_and_fraction.second;
+      double num_flows = demand_and_flow_count.second * fraction;
+
+      total += sp_delay.count() * num_flows;
+      total_on_sp += path_delay.count() * num_flows;
+    }
+  }
+
+  return total / total_on_sp;
 }
 
 RoutingConfigurationDelta RoutingConfiguration::GetDifference(

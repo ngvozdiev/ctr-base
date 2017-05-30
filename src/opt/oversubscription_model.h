@@ -105,6 +105,11 @@ class OverSubModel {
     return link_to_load_;
   }
 
+  // The set of aggregates that do not fit.
+  const std::set<AggregateId>& aggregates_no_fit() const {
+    return aggregates_no_fit_;
+  }
+
  private:
   // Initializes state for a subset of the aggregates.
   void InitState(
@@ -121,6 +126,10 @@ class OverSubModel {
   std::map<const nc::net::Walk*, nc::net::Bandwidth> per_flow_bandwidth_;
 
   nc::net::GraphLinkMap<double> link_to_load_;
+
+  // The set of aggregates that have at least one path go over a link that does
+  // not fit.
+  std::set<AggregateId> aggregates_no_fit_;
 
   // The graph.
   const nc::net::GraphStorage* graph_;

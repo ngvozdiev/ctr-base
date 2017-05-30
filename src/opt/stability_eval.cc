@@ -22,50 +22,116 @@
 #include "opt_compare.h"
 #include "path_provider.h"
 
-DEFINE_string(topology_file, "", "A topology file");
-DEFINE_string(matrices, "", "One or more matrices");
+DEFINE_string(topology_files, "", "A list of topology files");
 DEFINE_double(demand_fraction, 0.05, "By how much to vary demand");
 DEFINE_double(flow_count_fraction, std::numeric_limits<double>::max(),
               "By how much to vary flow counts. If set to max will update flow "
               "counts to be proportional to demand");
 DEFINE_uint64(aggregate_count, 1, "How many aggregates to change");
 DEFINE_uint64(try_count, 1, "How many tries to perform");
-DEFINE_string(opt, "CTR", "Optimizer to run. One of CTR,MinMax,B4");
 DEFINE_uint64(seed, 1ul, "Seed to use for the RNG");
 
-template <typename T>
-static std::string PercentilesToString(
-    std::vector<T>* values,
-    const std::vector<size_t>& percenile_indices = {50, 90, 95, 100}) {
-  std::vector<T> percentiles = nc::Percentiles(values);
-  std::vector<std::string> out;
-  for (size_t p : percenile_indices) {
-    CHECK(p <= 100);
-    out.emplace_back(std::to_string(percentiles[p]));
-  }
-
-  return nc::Join(out, " ");
+static bool Fits(const ctr::RoutingConfiguration& routing) {
+  const std::set<ctr::AggregateId>& aggregates_no_fit =
+      ctr::OverSubModel(routing).aggregates_no_fit();
+  return aggregates_no_fit.empty();
 }
 
-static void ParseMatrix(const std::string& tm_id, const ctr::TrafficMatrix& tm,
-                        size_t seed, ctr::Optimizer* optimizer,
-                        ctr::RoutingConfigInfo* output_info,
-                        ctr::RoutingConfigDeltaInfo* delta_info) {
-  std::unique_ptr<ctr::RoutingConfiguration> baseline = optimizer->Optimize(tm);
-  for (size_t i = 0; i < FLAGS_try_count; ++i) {
-    std::mt19937 rnd(seed + i);
-    auto rnd_tm = tm.Randomize(FLAGS_demand_fraction, FLAGS_flow_count_fraction,
-                               FLAGS_aggregate_count, &rnd);
-    if (!rnd_tm->ToDemandMatrix()->IsFeasible({})) {
+// Runs B4. If B4 is unable to fit the traffic will scale the matrix down to the
+// point where it can.
+static std::pair<std::unique_ptr<ctr::RoutingConfiguration>,
+                 std::unique_ptr<ctr::RoutingConfiguration>>
+RunB4(const ctr::TrafficMatrix& tm, ctr::PathProvider* path_provider,
+      std::mt19937* rnd, double* scale_factor) {
+  ctr::B4Optimizer b4_optimizer(path_provider);
+  //  std::unique_ptr<ctr::TrafficMatrix> scaled_tm =
+  //      nc::make_unique<ctr::TrafficMatrix>(tm.graph(), tm.demands());
+  //  while (true) {
+  //    auto before = b4_optimizer.Optimize(*scaled_tm);
+  //    std::set<ctr::AggregateId> aggregates_no_fit =
+  //        ctr::OverSubModel(*before).aggregates_no_fit();
+  //    if (!aggregates_no_fit.empty()) {
+  //      scaled_tm = scaled_tm->ScaleDemands(0.95, aggregates_no_fit);
+  //      continue;
+  //    }
+  //
+  //    auto rnd_tm =
+  //        scaled_tm->Randomize(FLAGS_demand_fraction,
+  //        FLAGS_flow_count_fraction,
+  //                             FLAGS_aggregate_count, rnd);
+  //    auto after = b4_optimizer.Optimize(*rnd_tm);
+  //    aggregates_no_fit = ctr::OverSubModel(*after).aggregates_no_fit();
+  //    if (!aggregates_no_fit.empty()) {
+  //      scaled_tm = scaled_tm->ScaleDemands(0.95, aggregates_no_fit);
+  //      continue;
+  //    }
+  //
+  //    return {std::move(before), std::move(after)};
+  //  }
+
+  double scale = 1.01;
+  while (scale > 0) {
+    // Will scale it down by 1%.
+    scale -= 0.01;
+
+    auto scaled_tm = tm.ScaleDemands(scale, {});
+    // B4 should run fine on both the scaled and the randomized TMs.
+    auto before = b4_optimizer.Optimize(*scaled_tm);
+    if (!Fits(*before)) {
       continue;
     }
 
-    auto output = optimizer->Optimize(*rnd_tm);
-    ctr::RoutingConfigurationDelta routing_config_delta =
-        baseline->GetDifference(*output);
-    delta_info->Add(routing_config_delta);
-    output_info->Add(*output);
+    auto rnd_tm =
+        scaled_tm->Randomize(FLAGS_demand_fraction, FLAGS_flow_count_fraction,
+                             FLAGS_aggregate_count, rnd);
+    auto after = b4_optimizer.Optimize(*rnd_tm);
+    if (!Fits(*after)) {
+      continue;
+    }
+
+    *scale_factor = scale;
+    return {std::move(before), std::move(after)};
   }
+
+  LOG(FATAL) << "Should not happen";
+  return {};
+}
+
+static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
+                        ctr::PathProvider* path_provider,
+                        ctr::RoutingConfigDeltaInfo* b4_delta_info,
+                        ctr::RoutingConfigDeltaInfo* ctr_delta_info,
+                        ctr::RoutingConfigDeltaInfo* ctr_delta_h_info,
+                        double* scale_factor) {
+  std::mt19937 rnd(seed);
+  auto b4_before_and_after = RunB4(tm, path_provider, &rnd, scale_factor);
+  ctr::RoutingConfigurationDelta b4_delta =
+      b4_before_and_after.first->GetDifference(*b4_before_and_after.second);
+
+  // Need to also generate before/after for CTR using the same TMs as B4.
+  ctr::CTROptimizer ctr_optimizer(path_provider);
+  auto ctr_before = ctr_optimizer.Optimize(*b4_before_and_after.first);
+  auto ctr_after = ctr_optimizer.Optimize(*b4_before_and_after.second);
+  ctr::RoutingConfigurationDelta ctr_delta =
+      ctr_before->GetDifference(*ctr_after);
+
+  nc::viz::HtmlPage page1;
+  ctr_before->ToHTML(&page1);
+  nc::File::WriteStringToFile(page1.Construct(), "before.html");
+
+  nc::viz::HtmlPage page2;
+  ctr_after->ToHTML(&page2);
+  nc::File::WriteStringToFile(page2.Construct(), "after.html");
+
+  // Will also run with a heuristic.
+  auto ctr_after_h = ctr_optimizer.OptimizeWithPrevious(
+      *b4_before_and_after.second, *ctr_before);
+  ctr::RoutingConfigurationDelta ctr_delta_h =
+      ctr_before->GetDifference(*ctr_after_h);
+
+  b4_delta_info->Add(b4_delta);
+  ctr_delta_info->Add(ctr_delta);
+  ctr_delta_h_info->Add(ctr_delta_h);
 }
 
 // The TM that we load will have no flow counts. Need some out of thin air.
@@ -79,48 +145,75 @@ static std::map<nc::lp::SrcAndDst, size_t> GetFlowCountMap(
   return out;
 }
 
+static std::vector<std::string> GetTopologyFiles() {
+  std::vector<std::string> out;
+  std::vector<std::string> split = nc::Split(FLAGS_topology_files, ",");
+  for (const std::string& piece : split) {
+    std::vector<std::string> files = nc::Glob(piece);
+    out.insert(out.end(), files.begin(), files.end());
+  }
+
+  return out;
+}
+
+static std::vector<std::string> GetMatrixFiles(
+    const std::string& topology_file) {
+  std::string matrix_location =
+      nc::StringReplace(topology_file, ".graph", ".*.demands", true);
+  return nc::Glob(matrix_location);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  CHECK(!FLAGS_topology_file.empty());
+  std::vector<std::string> topology_files = GetTopologyFiles();
+  CHECK(!topology_files.empty());
 
-  std::vector<std::string> matrix_files;
-  std::vector<std::string> to_glob = nc::Split(FLAGS_matrices, ",");
-  for (const std::string string_to_glob : to_glob) {
-    std::vector<std::string> globbed = nc::Glob(string_to_glob);
-    matrix_files.insert(matrix_files.end(), globbed.begin(), globbed.end());
-  }
-  CHECK(!matrix_files.empty());
+  ctr::RoutingConfigDeltaInfo b4_delta_info;
+  ctr::RoutingConfigDeltaInfo ctr_delta_info;
+  ctr::RoutingConfigDeltaInfo ctr_delta_h_info;
 
-  std::vector<std::string> nodes_in_order;
-  nc::net::GraphBuilder graph_builder = nc::net::LoadRepetitaOrDie(
-      nc::File::ReadFileToStringOrDie(FLAGS_topology_file), &nodes_in_order);
-  nc::net::GraphStorage graph(graph_builder);
+  // Extra info for each run.
+  nc::viz::NpyArray extra_info(
+      {{"topology", nc::viz::NpyArray::STRING},
+       {"tm", nc::viz::NpyArray::STRING},
+       {"seed", nc::viz::NpyArray::UINT64},
+       {"downscale_factor", nc::viz::NpyArray::DOUBLE}});
 
-  ctr::RoutingConfigInfo output_info;
-  ctr::RoutingConfigDeltaInfo delta_info;
+  for (const std::string& topology_file : topology_files) {
+    std::vector<std::string> nodes_in_order;
+    nc::net::GraphBuilder graph_builder = nc::net::LoadRepetitaOrDie(
+        nc::File::ReadFileToStringOrDie(topology_file), &nodes_in_order);
+    nc::net::GraphStorage graph(graph_builder);
 
-  for (const std::string& matrix_file : matrix_files) {
-    auto demand_matrix = nc::lp::DemandMatrix::LoadRepetitaOrDie(
-        nc::File::ReadFileToStringOrDie(matrix_file), nodes_in_order, &graph);
-    ctr::TrafficMatrix traffic_matrix(*demand_matrix,
-                                      GetFlowCountMap(*demand_matrix));
-
-    ctr::PathProvider path_provider(&graph);
-    std::unique_ptr<ctr::Optimizer> optimizer;
-    if (FLAGS_opt == "CTR") {
-      optimizer = nc::make_unique<ctr::CTROptimizer>(&path_provider);
-    } else if (FLAGS_opt == "MinMax") {
-      optimizer = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider);
-    } else if (FLAGS_opt == "B4") {
-      optimizer = nc::make_unique<ctr::B4Optimizer>(&path_provider);
-    } else {
-      LOG(FATAL) << "Unknown optimizer";
+    std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
+    if (matrix_files.empty()) {
+      LOG(ERROR) << "No matrices for " << topology_file;
+      continue;
     }
 
-    ParseMatrix(nc::StrCat(FLAGS_topology_file, ":", matrix_file),
-                traffic_matrix, FLAGS_seed, optimizer.get(), &output_info,
-                &delta_info);
+    for (const std::string& matrix_file : matrix_files) {
+      LOG(INFO) << "Processing " << topology_file << " : " << matrix_file;
+      auto demand_matrix = nc::lp::DemandMatrix::LoadRepetitaOrDie(
+          nc::File::ReadFileToStringOrDie(matrix_file), nodes_in_order, &graph);
+      ctr::TrafficMatrix traffic_matrix(*demand_matrix,
+                                        GetFlowCountMap(*demand_matrix));
+
+      ctr::PathProvider path_provider(&graph);
+      for (size_t i = 0; i < FLAGS_try_count; ++i) {
+        size_t seed = FLAGS_seed + i;
+        double scale_factor;
+        ParseMatrix(traffic_matrix, seed, &path_provider, &b4_delta_info,
+                    &ctr_delta_info, &ctr_delta_h_info, &scale_factor);
+        extra_info.AddRow({topology_file, matrix_file, seed, scale_factor});
+      }
+    }
   }
 
-  nc::viz::NpyArray::Combine(output_info, delta_info).ToDisk("test_out");
+  auto combined = nc::viz::NpyArray::Combine(
+      nc::viz::NpyArray::Combine(
+          nc::viz::NpyArray::Combine(
+              extra_info, b4_delta_info.AddPrefixToFieldNames("b4_")),
+          ctr_delta_info.AddPrefixToFieldNames("ctr_")),
+      ctr_delta_h_info.AddPrefixToFieldNames("ctrh_"));
+  combined.ToDisk("out");
 }

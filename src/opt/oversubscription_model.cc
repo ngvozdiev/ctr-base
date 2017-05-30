@@ -102,6 +102,9 @@ OverSubModel::OverSubModel(const RoutingConfiguration& routing)
         nc::FindOrDieNoPrint(routing.demands(), path_state.aggregate_id());
     double num_flows = demand_and_flows.second * path_state.fraction();
     per_flow_bandwidth_[path] = path_state.bottleneck_rate() / num_flows;
+    if (path_state.bottleneck_rate() < path_state.path_demand()) {
+      aggregates_no_fit_.insert(path_state.aggregate_id());
+    }
   }
 
   for (const auto& link_and_state : link_to_state) {

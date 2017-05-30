@@ -854,7 +854,6 @@ std::unique_ptr<RoutingConfiguration> CTROptimizer::OptimizeWithPrevious(
   CTRQuickOptimizer quick_op(path_provider_, &previous);
   auto out = quick_op.Optimize(tm);
   if (!out) {
-    LOG(ERROR) << "Unable to estimate";
     return Optimize(tm);
   }
 

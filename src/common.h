@@ -76,6 +76,11 @@ class TrafficMatrix {
   void AddDemand(const AggregateId& aggregate_id,
                  const DemandAndFlowCount& demand_and_flow_count);
 
+  // Scales demands by a factor. If no aggregates are specified will scale all
+  // aggregates.
+  std::unique_ptr<TrafficMatrix> ScaleDemands(
+      double factor, const std::set<AggregateId>& to_scale) const;
+
   // A DemandMatrix is similar to TrafficMatrix, but has no flow counts.
   std::unique_ptr<nc::lp::DemandMatrix> ToDemandMatrix() const;
 
@@ -176,6 +181,11 @@ class RoutingConfiguration : public TrafficMatrix {
   // Both should have the same aggregates.
   RoutingConfigurationDelta GetDifference(
       const RoutingConfiguration& other) const;
+
+  // Returns sum of all flows' delay / sum of delay of all flows if they only
+  // used their shortest path. Will be 1 if all flows are on their shortest
+  // path. Cannot be less than 1.
+  double PathStretchFraction() const;
 
  private:
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;
