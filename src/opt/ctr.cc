@@ -841,7 +841,13 @@ std::unique_ptr<RoutingConfiguration> CTRQuickOptimizer::Optimize(
 
     std::vector<RouteAndFraction> to_update;
     for (const auto& path_and_load : new_routes) {
-      to_update.emplace_back(path_and_load.first, path_and_load.second / total);
+      double fraction = path_and_load.second / total;
+      if (fraction == 0) {
+        LOG(INFO) << "Ignoring zero fraction path " << path_and_load.second;
+        continue;
+      }
+
+      to_update.emplace_back(path_and_load.first, fraction);
     }
     out->AddRouteAndFraction(aggregate, to_update);
   }

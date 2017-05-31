@@ -86,10 +86,7 @@ class TrafficMatrix {
 
   // Returns a new traffic matrix with the same aggregates, but
   // 'aggregate_count' aggregates have their demand/flow count +- a fraction of
-  // the demand/flow count in this one. If flow_count_fraction is set to
-  // std::numeric_limits<double>::max() each aggregate's flow count in the new
-  // matrix will be set in a way that preserves the demand/flow_count ratio in
-  // this matrix.
+  // the demand/flow count in this one.
   std::unique_ptr<TrafficMatrix> Randomize(double demand_fraction,
                                            double flow_count_fraction,
                                            size_t aggregate_count,
@@ -99,6 +96,9 @@ class TrafficMatrix {
 
   // Dumps the entire TM to string.
   std::string ToString() const;
+
+  // Dumps a single aggregate from the TM to string.
+  std::string AggregateToString(const AggregateId& aggregate) const;
 
   // Prints a summary of the TM.
   std::string SummaryToString() const;
@@ -119,14 +119,6 @@ class TrafficMatrix {
 struct AggregateDelta {
   // The fraction of the aggregate's total traffic that changed paths.
   double fraction_delta = 0.0;
-
-  // For before and after the path stretch is computed as the sum Ps * f over
-  // all of the aggregate's paths where Ps is the path's stretch (absolute
-  // difference from shortest path) and f is the fraction of the traffic that
-  // goes on the path. The difference between the before and after quantities is
-  // returned. If this value is positive the aggregate's flows will experience
-  // less delay.
-  double path_stretch_gain = 0.0;
 
   // New routes added (f == 0 -> f != 0).
   size_t routes_added = 0;
@@ -173,6 +165,8 @@ class RoutingConfiguration : public TrafficMatrix {
   }
 
   std::string ToString() const;
+
+  std::string AggregateToString(const AggregateId& aggregate) const;
 
   // Renders the configuration as a graph on a web page.
   void ToHTML(nc::viz::HtmlPage* out) const;

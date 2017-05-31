@@ -110,7 +110,7 @@ class B4Test : public TestBase {
 
 // Fits on the shortest path.
 TEST_F(B4Test, SinglePath) {
-  B4Optimizer b4_optimizer(path_provider_.get());
+  B4Optimizer b4_optimizer(path_provider_.get(), false);
   AddAggregate("A", "B", kDefaultLinkspeed);
   auto routing = b4_optimizer.Optimize(tm_);
 
@@ -119,7 +119,7 @@ TEST_F(B4Test, SinglePath) {
 
 // Does not fit on the shortest path.
 TEST_F(B4Test, SinglePathNoFitLowerCapacity) {
-  B4Optimizer b4_optimizer(path_provider_.get());
+  B4Optimizer b4_optimizer(path_provider_.get(), false);
   AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
   auto routing = b4_optimizer.Optimize(tm_);
 
@@ -129,7 +129,7 @@ TEST_F(B4Test, SinglePathNoFitLowerCapacity) {
 
 // A couple of aggregates that do not fit on the shortest path
 TEST_F(B4Test, MultiSinglePathNoFit) {
-  B4Optimizer b4_optimizer(path_provider_.get());
+  B4Optimizer b4_optimizer(path_provider_.get(), false);
   AddAggregate("A", "B", kDefaultLinkspeed * 0.6);
   AddAggregate("A", "C", kDefaultLinkspeed * 0.6);
   auto routing = b4_optimizer.Optimize(tm_);
@@ -142,7 +142,7 @@ TEST_F(B4Test, MultiSinglePathNoFit) {
 
 // A couple of aggregates, one does not fit.
 TEST_F(B4Test, MultiSinglePathOneNoFit) {
-  B4Optimizer b4_optimizer(path_provider_.get());
+  B4Optimizer b4_optimizer(path_provider_.get(), false);
   AddAggregate("A", "B", kDefaultLinkspeed * 0.3);
   AddAggregate("A", "C", kDefaultLinkspeed * 0.9);
   auto routing = b4_optimizer.Optimize(tm_);
@@ -156,7 +156,7 @@ TEST_F(B4Test, MultiSinglePathOneNoFit) {
 
 // Traffic does not fit.
 TEST_F(B4Test, NoFit) {
-  B4Optimizer b4_optimizer(path_provider_.get());
+  B4Optimizer b4_optimizer(path_provider_.get(), false);
   AddAggregate("A", "B", kDefaultLinkspeed * 3);
   auto routing = b4_optimizer.Optimize(tm_);
 

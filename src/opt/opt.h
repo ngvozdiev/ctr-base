@@ -67,11 +67,16 @@ class MinMaxOptimizer : public Optimizer {
 // set to its flow count from the TM.
 class B4Optimizer : public Optimizer {
  public:
-  explicit B4Optimizer(PathProvider* path_provider)
-      : Optimizer(path_provider) {}
+  explicit B4Optimizer(PathProvider* path_provider,
+                       bool flow_count_as_fair_share)
+      : Optimizer(path_provider),
+        flow_count_as_fair_share_(flow_count_as_fair_share) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
+
+ private:
+  bool flow_count_as_fair_share_;
 };
 
 }  // namespace ctr

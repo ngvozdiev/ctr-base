@@ -193,11 +193,12 @@ struct B4LinkState {
 class B4AggregateState {
  public:
   B4AggregateState(const AggregateId& aggregate_id,
-                   const DemandAndFlowCount& demand_and_flow_count)
+                   const DemandAndFlowCount& demand_and_flow_count,
+                   double fair_share)
       : aggregate_id_(aggregate_id),
         demand_(demand_and_flow_count.first),
         current_path_(nullptr),
-        fair_share_(demand_and_flow_count.second) {
+        fair_share_(fair_share) {
     fair_share_ratio_ = demand_.bps() / fair_share_;
   }
 
@@ -299,7 +300,13 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
     const DemandAndFlowCount& demand_and_flow_count =
         aggregate_and_demand.second;
 
-    aggregate_states.emplace_back(aggregate_id, demand_and_flow_count);
+    double fair_share = 1.0;
+    if (flow_count_as_fair_share_) {
+      fair_share = demand_and_flow_count.second;
+    }
+
+    aggregate_states.emplace_back(aggregate_id, demand_and_flow_count,
+                                  fair_share);
     B4AggregateState& aggregate_state = aggregate_states.back();
 
     const nc::net::Walk* path =

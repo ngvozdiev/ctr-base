@@ -122,14 +122,6 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::Randomize(
         Pick(demand.bps(), demand_fraction, rnd));
 
     double new_flow_count = Pick(flow_count, flow_count_fraction, rnd);
-    if (flow_count_fraction == std::numeric_limits<double>::max()) {
-      double ratio = new_demand / demand;
-      new_flow_count = ratio * flow_count;
-    }
-
-    //    LOG(ERROR) << "FC " << aggregate.ToString(*graph_) << " demand "
-    //               << demand.Mbps() << " -> " << new_demand.Mbps();
-
     new_demands[aggregate] = {new_demand, new_flow_count};
   }
 
@@ -163,21 +155,40 @@ std::string RoutingConfiguration::ToString() const {
   std::vector<std::string> out;
   for (const auto& aggregate_and_routes : configuration_) {
     const AggregateId& aggregate = aggregate_and_routes.first;
-    const std::vector<RouteAndFraction>& routes = aggregate_and_routes.second;
-
-    std::vector<std::string> routes_str;
-    for (const RouteAndFraction& route_and_fraction : routes) {
-      std::string route_str =
-          nc::StrCat(route_and_fraction.first->ToStringNoPorts(*graph_), ":",
-                     route_and_fraction.second);
-      routes_str.emplace_back(route_str);
-    }
-
-    out.emplace_back(nc::StrCat(aggregate.ToString(*graph_), " -> ",
-                                nc::Join(routes_str, ",")));
+    out.emplace_back(AggregateToString(aggregate));
   }
 
   return nc::StrCat(base_to_string, "\n", nc::Join(out, "\n"));
+}
+
+std::string RoutingConfiguration::AggregateToString(
+    const AggregateId& aggregate) const {
+  const std::vector<RouteAndFraction>& routes =
+      nc::FindOrDieNoPrint(configuration_, aggregate);
+  const DemandAndFlowCount& demand_and_flows =
+      nc::FindOrDieNoPrint(demands(), aggregate);
+
+  std::vector<std::string> routes_str;
+  double total_contribution = 0;
+  for (const RouteAndFraction& route_and_fraction : routes) {
+    const nc::net::Walk* path = route_and_fraction.first;
+    double fraction = route_and_fraction.second;
+
+    double delay_ms =
+        std::chrono::duration<double, std::milli>(path->delay()).count();
+    double flow_count = demand_and_flows.second * fraction;
+    double contribution = delay_ms * flow_count;
+    total_contribution += contribution;
+
+    std::string route_str =
+        nc::StrCat(path->ToStringNoPorts(*graph_), " : ", fraction,
+                   " (contribution ", contribution, "ms)");
+    routes_str.emplace_back(route_str);
+  }
+
+  return nc::StrCat(aggregate.ToString(*graph_), " -> ",
+                    nc::Join(routes_str, ","), " (total ", total_contribution,
+                    "ms)");
 }
 
 void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
@@ -265,18 +276,21 @@ std::string TrafficMatrix::ToString() const {
   std::vector<std::string> out;
   for (const auto& aggregate_and_demand : demands_) {
     const AggregateId& aggregate = aggregate_and_demand.first;
-    const DemandAndFlowCount& demand_and_flows_count =
-        aggregate_and_demand.second;
-
-    nc::net::Bandwidth demand = demand_and_flows_count.first;
-    size_t flow_count = demand_and_flows_count.second;
-
-    out.emplace_back(nc::StrCat(aggregate.ToString(*graph_), " -> ",
-                                demand.Mbps(), "Mbps ",
-                                std::to_string(flow_count), " flows"));
+    out.emplace_back(AggregateToString(aggregate));
   }
 
   return nc::Join(out, "\n");
+}
+
+std::string TrafficMatrix::AggregateToString(
+    const AggregateId& aggregate) const {
+  const DemandAndFlowCount& demand_and_flows_count =
+      nc::FindOrDieNoPrint(demands_, aggregate);
+  nc::net::Bandwidth demand = demand_and_flows_count.first;
+  size_t flow_count = demand_and_flows_count.second;
+
+  return nc::StrCat(aggregate.ToString(*graph_), " -> ", demand.Mbps(), "Mbps ",
+                    std::to_string(flow_count), " flows");
 }
 
 std::string TrafficMatrix::SummaryToString() const {
@@ -370,31 +384,6 @@ static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
   return 1 - total;
 }
 
-static double GetWeightedPathStretch(
-    const std::vector<RouteAndFraction>& routes, nc::net::Delay sp_delay) {
-  double sp_delay_sec = std::chrono::duration<double>(sp_delay).count();
-
-  double total = 0;
-  for (const RouteAndFraction& route_and_fraction : routes) {
-    const nc::net::Walk* path = route_and_fraction.first;
-    double path_delay_sec =
-        std::chrono::duration<double>(path->delay()).count();
-    double stretch = path_delay_sec - sp_delay_sec;
-    CHECK(stretch >= 0);
-
-    total += stretch * route_and_fraction.second;
-  }
-
-  return total;
-}
-
-static double GetPathStretchGain(const std::vector<RouteAndFraction>& lhs,
-                                 const std::vector<RouteAndFraction>& rhs,
-                                 nc::net::Delay sp_delay) {
-  return GetWeightedPathStretch(lhs, sp_delay) -
-         GetWeightedPathStretch(rhs, sp_delay);
-}
-
 double RoutingConfiguration::PathStretchFraction() const {
   double total_on_sp = 0;
   double total = 0;
@@ -440,19 +429,19 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
         route_and_fractions_this, route_and_fractions_other,
         &aggregate_delta.routes_added, &aggregate_delta.routes_updated,
         &aggregate_delta.routes_removed);
-    aggregate_delta.path_stretch_gain =
-        GetPathStretchGain(route_and_fractions_this, route_and_fractions_other,
-                           aggregate_id.GetSPDelay(*graph_));
 
     const DemandAndFlowCount& demand_and_flow_count_this =
         nc::FindOrDieNoPrint(demands(), aggregate_id);
     const DemandAndFlowCount& demand_and_flow_count_other =
         nc::FindOrDieNoPrint(other.demands(), aggregate_id);
 
-    size_t flow_count = std::max(demand_and_flow_count_this.second,
-                                 demand_and_flow_count_other.second);
-    nc::net::Bandwidth volume = std::max(demand_and_flow_count_this.first,
-                                         demand_and_flow_count_other.first);
+    //    size_t flow_count = std::max(demand_and_flow_count_this.second,
+    //                                 demand_and_flow_count_other.second);
+    //    nc::net::Bandwidth volume = std::max(demand_and_flow_count_this.first,
+    //                                         demand_and_flow_count_other.first);
+    size_t flow_count = demand_and_flow_count_other.second;
+    nc::net::Bandwidth volume = demand_and_flow_count_other.first;
+
     total_flow_count_delta += aggregate_delta.fraction_delta * flow_count;
     total_flow_count += flow_count;
     total_volume_delta += volume * aggregate_delta.fraction_delta;
