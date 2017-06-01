@@ -33,7 +33,8 @@ struct RunOutput {
 class CTROptimizerPass {
  public:
   CTROptimizerPass(const TrafficMatrix* input, const CTRPathMap* paths,
-                   const nc::net::GraphStorage* graph);
+                   const nc::net::GraphStorage* graph,
+                   const RoutingConfiguration* base_solution);
 
   const nc::net::GraphLinkSet& links_with_no_capacity() const {
     return links_with_no_capacity_;
@@ -59,14 +60,17 @@ class CTROptimizerPass {
   // optimization, regardless of where their paths go.
   double OptimizeMinLinkOversubscription();
 
+  // Returns a limit on the fraction of an aggregate's traffic that can go on a
+  // path. Will use base_solution_ to do so if available. If base_solution_ is
+  // null will always return 1.
+  double PathLimitFraction(const AggregateId& aggregate,
+                           const nc::net::Walk* path) const;
+
   // The input. Not owned by this class.
   const TrafficMatrix* input_;
 
   // A map of paths that the solver can use. Not owned by this class.
   const CTRPathMap* paths_;
-
-  // The cost of each path. Generated from paths_ upon construction.
-  std::map<const nc::net::Walk*, double> path_cost_map_;
 
   // The graph.
   const nc::net::GraphStorage* graph_;
@@ -91,6 +95,11 @@ class CTROptimizerPass {
 
   // Objective function value after all single-path aggregates have been frozen.
   double initial_obj_;
+
+  // Each aggregate's path fractions will be set to never exceed the ones in
+  // this solution, if present. The exception is the aggregate's longest path in
+  // base_solution_. Paths that are not in base_solution_ are not limited.
+  const RoutingConfiguration* base_solution_;
 };
 
 // A heuristic that tries to generate a new solution from a previous one with as
@@ -157,9 +166,10 @@ class CTROptimizer : public Optimizer {
 
  private:
   // Single run of the optimization for given input.
-  void OptimizePrivate(const TrafficMatrix& input,
-                       const std::vector<AggregateId>& aggregates_ordered,
-                       RoutingConfiguration* out);
+  double OptimizePrivate(const TrafficMatrix& input,
+                         const std::vector<AggregateId>& aggregates_ordered,
+                         const RoutingConfiguration* base_solution,
+                         RoutingConfiguration* out);
 
   // Prioritizes the aggregates from an input. Aggregates that are more
   // important are at the start of the returned list.
@@ -170,6 +180,7 @@ class CTROptimizer : public Optimizer {
   // path that has some free capacity. Returns whether it added any paths.
   bool AddFreePaths(const nc::net::GraphLinkSet& links_with_no_capacity,
                     const std::vector<AggregateId>& aggregates_ordered,
+                    const RoutingConfiguration* base_solution,
                     std::map<AggregateId, size_t>* ksp_indices,
                     CTRPathMap* out);
 

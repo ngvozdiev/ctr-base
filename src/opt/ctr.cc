@@ -37,6 +37,7 @@ static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
 bool CTROptimizer::AddFreePaths(
     const nc::net::GraphLinkSet& links_with_no_capacity,
     const std::vector<AggregateId>& aggregates_ordered,
+    const RoutingConfiguration* base_solution,
     std::map<AggregateId, size_t>* ksp_indices, CTRPathMap* out) {
   bool free_paths_added = false;
 
@@ -129,7 +130,20 @@ std::unique_ptr<RoutingConfiguration> CTROptimizer::Optimize(
   std::vector<AggregateId> aggregates_ordered = PrioritizeAggregates(tm);
 
   auto out = nc::make_unique<RoutingConfiguration>(tm);
-  OptimizePrivate(tm, aggregates_ordered, out.get());
+  OptimizePrivate(tm, aggregates_ordered, nullptr, out.get());
+  return out;
+}
+
+std::unique_ptr<RoutingConfiguration> CTROptimizer::OptimizeWithPrevious(
+    const TrafficMatrix& tm, const RoutingConfiguration& previous) {
+  std::vector<AggregateId> aggregates_ordered = PrioritizeAggregates(tm);
+
+  auto out = nc::make_unique<RoutingConfiguration>(tm);
+  double os = OptimizePrivate(tm, aggregates_ordered, &previous, out.get());
+  if (os > 1) {
+    return Optimize(tm);
+  }
+
   return out;
 }
 
@@ -148,12 +162,12 @@ std::vector<AggregateId> CTROptimizer::PrioritizeAggregates(
   return all_aggregates;
 }
 
-void CTROptimizer::OptimizePrivate(
+double CTROptimizer::OptimizePrivate(
     const TrafficMatrix& input,
     const std::vector<AggregateId>& aggregates_ordered,
-    RoutingConfiguration* out) {
+    const RoutingConfiguration* base_solution, RoutingConfiguration* out) {
   CTRPathMap path_map;
-  nc::net::GraphLinkSet links_with_no_capcity;
+  nc::net::GraphLinkSet links_with_no_capacity;
   double prev_obj_value = std::numeric_limits<double>::max();
   double max_oversubscription = 0;
 
@@ -165,18 +179,18 @@ void CTROptimizer::OptimizePrivate(
   while (true) {
     //    LOG(INFO) << "New pass";
     bool added_any_paths = AddFreePaths(
-        links_with_no_capcity, aggregates_ordered, &ksp_indices, &path_map);
+        links_with_no_capacity, aggregates_ordered, &ksp_indices, &path_map);
     if (!added_any_paths) {
       break;
     }
 
-    CTROptimizerPass pass(&input, &path_map, graph_);
+    CTROptimizerPass pass(&input, &path_map, graph_, base_solution);
     RunOutput& run_output = pass.run_output();
     double obj_value = run_output.obj_value;
     CHECK(obj_value != std::numeric_limits<double>::max());
 
     aggregate_outputs = std::move(run_output.aggregate_outputs);
-    links_with_no_capcity = pass.links_with_no_capacity();
+    links_with_no_capacity = pass.links_with_no_capacity();
 
     double delta = (obj_value - prev_obj_value) / obj_value;
     if (std::abs(delta) < 0.001) {
@@ -193,13 +207,15 @@ void CTROptimizer::OptimizePrivate(
     }
   }
 
-  //  LOG(INFO) << "FUBAR pass done obj " << prev_obj_value << " max os "
-  //            << max_oversubscription;
+  //  CLOG(INFO, RED) << "FUBAR pass done obj " << prev_obj_value << " max os "
+  //                  << max_oversubscription;
 
   for (auto& aggregate_and_output : aggregate_outputs) {
     out->AddRouteAndFraction(aggregate_and_output.first,
                              aggregate_and_output.second);
   }
+
+  return max_oversubscription;
 }
 
 struct PathAndCost {
@@ -272,12 +288,12 @@ static double GetFraction(const PathAndCost& path_and_cost,
   return solution.VariableValue(path_variable);
 }
 
-static size_t PathCostRounded(const nc::net::Walk* path) {
-  double delay_ms =
-      std::chrono::duration<double, std::milli>(path->delay()).count();
-  size_t cost = static_cast<size_t>(delay_ms);
-  return std::max(1ul, cost);
-}
+// static size_t PathCostRounded(const nc::net::Walk* path) {
+//  double delay_ms =
+//      std::chrono::duration<double, std::milli>(path->delay()).count();
+//  size_t cost = static_cast<size_t>(delay_ms / 100);
+//  return std::max(1ul, cost);
+//}
 
 static double PathCostUnrounded(const nc::net::Walk* path) {
   return std::chrono::duration<double, std::milli>(path->delay()).count();
@@ -323,17 +339,24 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
 
     CHECK(!paths.empty());
     PathPtr shortest_path = paths.front();
-
     for (PathPtr path : paths) {
+      double path_cap = PathLimitFraction(aggregate_id, path);
+
+      //      LOG(ERROR) << path->ToStringNoPorts(*graph_) << " cap " <<
+      //      path_cap;
+      if (path_cap == 0) {
+        continue;
+      }
+
       // Each path in each aggregate will have a variable associated with it.
       VariableIndex variable = problem.AddVariable();
-      problem.SetVariableRange(variable, 0, 1);
+      problem.SetVariableRange(variable, 0, path_cap);
 
       // The cost, delay in seconds.
       double uniqueness_weight = kM2 * flow_count * PathCostUnrounded(path) /
                                  PathCostUnrounded(shortest_path);
       problem.SetObjectiveCoefficient(
-          variable, flow_count * PathCostRounded(path) + uniqueness_weight);
+          variable, flow_count * PathCostUnrounded(path) + uniqueness_weight);
 
       PathAndCost path_and_cost(aggregate_id, variable,
                                 demand_and_flow_count.first, path);
@@ -406,9 +429,9 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   problem.SetMatrix(problem_matrix);
   // problem.DumpToFile(ncode::Substitute("dump_it_$0.lp", iteration));
 
-  auto problem_constructed_at = high_resolution_clock::now();
-  milliseconds problem_construction_duration =
-      duration_cast<milliseconds>(problem_constructed_at - start_at);
+  //  auto problem_constructed_at = high_resolution_clock::now();
+  //  milliseconds problem_construction_duration =
+  //      duration_cast<milliseconds>(problem_constructed_at - start_at);
   //  LOG(INFO) << nc::Substitute(
   //      "Problem constructed in $0ms, non-zero matrix elements $1, paths $2",
   //      duration_cast<milliseconds>(problem_construction_duration).count(),
@@ -431,17 +454,17 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   latest_run_max_oversubscription_ =
       solution->VariableValue(max_oversubscription_var);
 
-  auto problem_solved_at = high_resolution_clock::now();
-  milliseconds problem_solution_duration =
-      duration_cast<milliseconds>(problem_solved_at - problem_constructed_at);
+  //  auto problem_solved_at = high_resolution_clock::now();
+  //  milliseconds problem_solution_duration =
+  //      duration_cast<milliseconds>(problem_solved_at -
+  //      problem_constructed_at);
   //  LOG(INFO) << nc::Substitute(
   //      "Problem solved in $0ms obj $1 paths $2, max os $3",
   //      duration_cast<milliseconds>(problem_solution_duration).count(),
   //      solution->ObjectiveValue(), total_paths,
   //      latest_run_max_oversubscription_);
 
-  std::map<AggregateId, std::set<PathPtr>>
-      aggregate_to_max_oversubscribed_paths;
+  std::set<AggregateId> max_oversubscribed_aggregates;
   for (const auto& link_and_paths : link_to_paths) {
     nc::net::GraphLinkIndex link_index = link_and_paths.first;
     const nc::net::GraphLink* link = graph_->GetLink(link_index);
@@ -467,8 +490,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       total_load += total_volume * fraction;
 
       if (eq) {
-        aggregate_to_max_oversubscribed_paths[aggregate_id].insert(
-            path_over_link.path);
+        max_oversubscribed_aggregates.emplace(aggregate_id);
         //        LOG(ERROR) << "    FP " <<
         //        path_over_link.path->ToStringNoPorts(*graph_)
         //                   << " tv " << total_volume << " f " << fraction;
@@ -479,29 +501,36 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     if (oversubscription > 1.0 || load_fraction >= 1.0) {
       //      if (oversubscription > 1.0) {
       links_with_no_capacity_.Insert(link_index);
-      //      LOG(ERROR) << "L " << link->ToString();
+      //      CLOG(ERROR, GREEN) << "Link with no capacity " <<
+      //      link->ToString();
     }
   }
 
-  for (const auto& aggregate_and_paths : aggregate_to_paths) {
-    const AggregateId& aggregate_id = aggregate_and_paths.first;
-    const std::vector<PathAndCost>& paths = aggregate_and_paths.second;
-
-    std::set<PathPtr> all_paths_in_aggregate;
-    for (const PathAndCost& path_and_cost : paths) {
-      if (GetFraction(path_and_cost, *solution) == 0) {
-        continue;
-      }
-
-      all_paths_in_aggregate.insert(path_and_cost.path);
-    }
-
-    const std::set<PathPtr>& oversubscribed_paths =
-        aggregate_to_max_oversubscribed_paths[aggregate_id];
-    if (all_paths_in_aggregate == oversubscribed_paths) {
-      frozen_aggregates_.insert(aggregate_id);
-    }
+  for (const AggregateId& aggregate : max_oversubscribed_aggregates) {
+    //    LOG(ERROR) << "FROZEN " << aggregate.ToString(*graph_);
+    frozen_aggregates_.insert(aggregate);
   }
+
+  //  for (const auto& aggregate_and_paths : aggregate_to_paths) {
+  //    const AggregateId& aggregate_id = aggregate_and_paths.first;
+  //    const std::vector<PathAndCost>& paths = aggregate_and_paths.second;
+  //
+  //    std::set<PathPtr> all_paths_in_aggregate;
+  //    for (const PathAndCost& path_and_cost : paths) {
+  //      if (GetFraction(path_and_cost, *solution) == 0) {
+  //        continue;
+  //      }
+  //
+  //      all_paths_in_aggregate.insert(path_and_cost.path);
+  //    }
+  //
+  //    const std::set<PathPtr>& oversubscribed_paths =
+  //        aggregate_to_max_oversubscribed_paths[aggregate_id];
+  //    if (all_paths_in_aggregate == oversubscribed_paths) {
+  //      LOG(ERROR) << "FROZEN " << aggregate_id.ToString(*graph_);
+  //      frozen_aggregates_.insert(aggregate_id);
+  //    }
+  //  }
 
   // Will also freeze all aggregates whose all paths go over links with no
   // capacity, as this would render the next iteration unfeasible.
@@ -564,9 +593,9 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     }
   }
 
-  auto solution_obtained_at = high_resolution_clock::now();
-  milliseconds solution_obtain_duration =
-      duration_cast<milliseconds>(solution_obtained_at - problem_solved_at);
+  //  auto solution_obtained_at = high_resolution_clock::now();
+  //  milliseconds solution_obtain_duration =
+  //      duration_cast<milliseconds>(solution_obtained_at - problem_solved_at);
   //  LOG(INFO) << nc::Substitute(
   //      "Solution obtained in $0ms",
   //      duration_cast<milliseconds>(solution_obtain_duration).count());
@@ -576,16 +605,43 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
 
 CTROptimizerPass::CTROptimizerPass(const TrafficMatrix* input,
                                    const CTRPathMap* paths,
-                                   const nc::net::GraphStorage* graph)
+                                   const nc::net::GraphStorage* graph,
+                                   const RoutingConfiguration* base_solution)
     : input_(input),
       paths_(paths),
       graph_(graph),
-      latest_run_max_oversubscription_(0) {
+      latest_run_max_oversubscription_(0),
+      base_solution_(base_solution) {
   //  path_cost_map_ = PathCostMap(*paths);
-  //  FreezeSinglePathAggregates();
-  initial_obj_ = 0;
-  initial_oversubscription_ = 0;
+  FreezeSinglePathAggregates();
+  //  initial_obj_ = 0;
+  //  initial_oversubscription_ = 0;
   Optimize();
+}
+
+double CTROptimizerPass::PathLimitFraction(const AggregateId& aggregate,
+                                           const nc::net::Walk* path) const {
+  if (base_solution_ == nullptr) {
+    // The path is not limited.
+    return 1.0;
+  }
+
+  const std::vector<RouteAndFraction>& previous_paths =
+      base_solution_->FindRoutesOrDie(aggregate);
+  CHECK(!previous_paths.empty());
+
+  for (size_t i = 0; i < previous_paths.size() - 1; ++i) {
+    // If the path is not the aggregate's longest path we will limit it to its
+    // current value.
+    const RouteAndFraction& route_and_fraction = previous_paths[i];
+    if (route_and_fraction.first == path ||
+        *route_and_fraction.first == *path) {
+      return route_and_fraction.second;
+    }
+  }
+
+  LOG(FATAL) << "Should not happen";
+  return 1.0;
 }
 
 void CTROptimizerPass::Optimize() {
@@ -609,7 +665,7 @@ void CTROptimizerPass::Optimize() {
     }
 
     if (frozen_aggregates_.size() <= num_frozen_before) {
-      //      LOG(INFO) << "Unable to freeze more aggregates";
+      LOG(ERROR) << "Unable to freeze more aggregates";
       run_output_.obj_value = std::numeric_limits<double>::max();
       break;
     }
@@ -631,7 +687,7 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
         nc::FindOrDieNoPrint(input_->demands(), aggregate);
     PathPtr path = paths.front();
     double flow_count = input.second;
-    total_cost += flow_count * PathCostRounded(path) + flow_count * kM2;
+    total_cost += flow_count * PathCostUnrounded(path) + flow_count * kM2;
 
     std::vector<RouteAndFraction>& aggregate_paths =
         run_output_.aggregate_outputs[aggregate];
@@ -850,17 +906,6 @@ std::unique_ptr<RoutingConfiguration> CTRQuickOptimizer::Optimize(
       to_update.emplace_back(path_and_load.first, fraction);
     }
     out->AddRouteAndFraction(aggregate, to_update);
-  }
-
-  return out;
-}
-
-std::unique_ptr<RoutingConfiguration> CTROptimizer::OptimizeWithPrevious(
-    const TrafficMatrix& tm, const RoutingConfiguration& previous) {
-  CTRQuickOptimizer quick_op(path_provider_, &previous);
-  auto out = quick_op.Optimize(tm);
-  if (!out) {
-    return Optimize(tm);
   }
 
   return out;
