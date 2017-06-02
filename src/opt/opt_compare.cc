@@ -165,6 +165,8 @@ static nc::viz::NpyArray::Types GetRCDTypes() {
   using namespace nc::viz;
   NpyArray::Types types = {{"volume_delta", NpyArray::DOUBLE},
                            {"flow_count_delta", NpyArray::DOUBLE},
+                           {"volume_delta_lp", NpyArray::DOUBLE},
+                           {"flow_count_delta_lp", NpyArray::DOUBLE},
                            {"add_count", NpyArray::UINT32},
                            {"update_count", NpyArray::UINT32},
                            {"remove_count", NpyArray::UINT32}};
@@ -196,7 +198,13 @@ void RoutingConfigDeltaInfo::Add(const RoutingConfigurationDelta& delta) {
   std::tie(route_adds, route_removals, route_updates) = delta.TotalRoutes();
 
   std::vector<nc::viz::NpyArray::StringOrNumeric> row = {
-      demand_delta, flow_delta, route_adds, route_updates, route_removals};
+      delta.total_volume_fraction_delta,
+      delta.total_flow_fraction_delta,
+      delta.total_volume_fraction_on_longer_path,
+      delta.total_flow_fraction_on_longer_path,
+      route_adds,
+      route_updates,
+      route_removals};
   for (double v : fraction_deltas_p) {
     row.emplace_back(v);
   }

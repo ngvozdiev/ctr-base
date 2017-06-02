@@ -55,10 +55,10 @@ SET(BUILD_TESTING ${OLD_BUILD_TESTING})
 
 set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h)
 add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc ${CTR_BASE_HEADER_FILES})
-target_link_libraries(ctr_base ncode)
+target_link_libraries(ctr_base ncode gflags)
 
 add_executable(stability_eval src/opt/stability_eval.cc)
-target_link_libraries(stability_eval ctr_base gflags)
+target_link_libraries(stability_eval ctr_base)
 
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)

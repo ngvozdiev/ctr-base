@@ -333,12 +333,52 @@ std::string TrafficMatrix::SummaryToString() const {
       flow_counts_str);
 }
 
-static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
-                               const std::vector<RouteAndFraction>& next,
-                               size_t* add_count, size_t* update_count,
-                               size_t* remove_count) {
-  // Will get the difference as 1 - fraction that stays on the same path.
-  double total = 0;
+const nc::net::Walk* PickPath(const std::vector<RouteAndFraction>& routes,
+                              double init_p) {
+  double p = init_p;
+  for (const auto& route : routes) {
+    double f = route.second;
+    if (p < f) {
+      return route.first;
+    }
+
+    p -= f;
+  }
+
+  LOG(FATAL) << "Should not happen";
+  return nullptr;
+}
+
+static constexpr size_t kTryCount = 1000;
+
+static std::pair<double, double> GetFractionDelta(
+    const std::vector<RouteAndFraction>& prev,
+    const std::vector<RouteAndFraction>& next) {
+  std::mt19937 rnd(1);
+  std::uniform_real_distribution<double> dist(0, 1.0);
+
+  double change_count = 0;
+  double on_longer_path_count = 0;
+  for (size_t i = 0; i < kTryCount; ++i) {
+    double p = dist(rnd);
+    const nc::net::Walk* p1 = PickPath(prev, p);
+    const nc::net::Walk* p2 = PickPath(next, p);
+
+    if (*p1 != *p2) {
+      ++change_count;
+      if (p2->delay() > p1->delay()) {
+        ++on_longer_path_count;
+      }
+    }
+  }
+
+  return {change_count / kTryCount, on_longer_path_count / kTryCount};
+}
+
+static void GetRouteCounts(const std::vector<RouteAndFraction>& prev,
+                           const std::vector<RouteAndFraction>& next,
+                           size_t* add_count, size_t* update_count,
+                           size_t* remove_count) {
   for (const RouteAndFraction& prev_fraction : prev) {
     const nc::net::Walk* prev_path = prev_fraction.first;
 
@@ -350,9 +390,7 @@ static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
       if (*prev_path == *next_path) {
         found = true;
 
-        double f_delta = std::min(prev_fraction.second, next_fraction.second);
         diff = std::abs(prev_fraction.second - next_fraction.second) > 0.001;
-        total += f_delta;
         break;
       }
     }
@@ -380,8 +418,6 @@ static double GetFractionDelta(const std::vector<RouteAndFraction>& prev,
       ++(*add_count);
     }
   }
-
-  return 1 - total;
 }
 
 double RoutingConfiguration::PathStretchFraction() const {
@@ -414,8 +450,11 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
 
   size_t total_flow_count = 0;
   double total_flow_count_delta = 0;
+  double total_flow_count_delta_longer_path = 0;
   nc::net::Bandwidth total_volume = nc::net::Bandwidth::Zero();
   nc::net::Bandwidth total_volume_delta = nc::net::Bandwidth::Zero();
+  nc::net::Bandwidth total_volume_delta_longer_path =
+      nc::net::Bandwidth::Zero();
   CHECK(other.configuration_.size() == configuration_.size());
   for (const auto& aggregate_id_and_routes : configuration_) {
     const AggregateId& aggregate_id = aggregate_id_and_routes.first;
@@ -425,31 +464,37 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
         nc::FindOrDieNoPrint(other.configuration_, aggregate_id);
 
     AggregateDelta& aggregate_delta = out.aggregates[aggregate_id];
-    aggregate_delta.fraction_delta = GetFractionDelta(
-        route_and_fractions_this, route_and_fractions_other,
-        &aggregate_delta.routes_added, &aggregate_delta.routes_updated,
-        &aggregate_delta.routes_removed);
+    std::tie(aggregate_delta.fraction_delta,
+             aggregate_delta.fraction_on_longer_path) =
+        GetFractionDelta(route_and_fractions_this, route_and_fractions_other);
 
-    const DemandAndFlowCount& demand_and_flow_count_this =
-        nc::FindOrDieNoPrint(demands(), aggregate_id);
+    GetRouteCounts(route_and_fractions_this, route_and_fractions_other,
+                   &aggregate_delta.routes_added,
+                   &aggregate_delta.routes_updated,
+                   &aggregate_delta.routes_removed);
+
     const DemandAndFlowCount& demand_and_flow_count_other =
         nc::FindOrDieNoPrint(other.demands(), aggregate_id);
 
-    //    size_t flow_count = std::max(demand_and_flow_count_this.second,
-    //                                 demand_and_flow_count_other.second);
-    //    nc::net::Bandwidth volume = std::max(demand_and_flow_count_this.first,
-    //                                         demand_and_flow_count_other.first);
     size_t flow_count = demand_and_flow_count_other.second;
     nc::net::Bandwidth volume = demand_and_flow_count_other.first;
 
     total_flow_count_delta += aggregate_delta.fraction_delta * flow_count;
+    total_flow_count_delta_longer_path +=
+        aggregate_delta.fraction_on_longer_path * flow_count;
     total_flow_count += flow_count;
+    total_volume_delta_longer_path +=
+        volume * aggregate_delta.fraction_on_longer_path;
     total_volume_delta += volume * aggregate_delta.fraction_delta;
     total_volume += volume;
   }
 
   out.total_flow_fraction_delta = total_flow_count_delta / total_flow_count;
   out.total_volume_fraction_delta = total_volume_delta / total_volume;
+  out.total_flow_fraction_on_longer_path =
+      total_flow_count_delta_longer_path / total_flow_count;
+  out.total_volume_fraction_on_longer_path =
+      total_volume_delta_longer_path / total_volume;
   return out;
 }
 

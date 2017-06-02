@@ -123,6 +123,7 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
                         ctr::RoutingConfigDeltaInfo* ctr_delta_p_info,
                         ctr::RoutingConfigDeltaInfo* ctr_delta_h_info,
                         double* scale_factor) {
+//  LOG(ERROR) << "seed " << seed;
   std::mt19937 rnd(seed);
   auto b4_before_and_after = RunB4(tm, path_provider, &rnd, scale_factor);
   ctr::RoutingConfigurationDelta b4_delta =
@@ -144,23 +145,23 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   auto ctr_after_p = ctr_optimizer.Optimize(*tm_proportionately_scaled);
   ctr::RoutingConfigurationDelta ctr_delta_p =
       ctr_before->GetDifference(*ctr_after_p);
-  PrintDelta(*ctr_before, *ctr_after_p);
+//  PrintDelta(*ctr_before, *ctr_after_p);
 
-  nc::viz::HtmlPage page_before;
-  ctr_before->ToHTML(&page_before);
-  nc::File::WriteStringToFile(page_before.Construct(), "before.html");
-
-  nc::viz::HtmlPage page_after;
-  ctr_after_p->ToHTML(&page_after);
-  nc::File::WriteStringToFile(page_after.Construct(), "after.html");
+//  nc::viz::HtmlPage page_before;
+//  ctr_before->ToHTML(&page_before);
+//  nc::File::WriteStringToFile(page_before.Construct(), "before.html");
+//
+//  nc::viz::HtmlPage page_after;
+//  ctr_after_p->ToHTML(&page_after);
+//  nc::File::WriteStringToFile(page_after.Construct(), "after.html");
 
   // Will also run with a heuristic.
   auto ctr_after_h = ctr_optimizer.OptimizeWithPrevious(
       *tm_proportionately_scaled, *ctr_before);
   ctr::RoutingConfigurationDelta ctr_delta_h =
       ctr_before->GetDifference(*ctr_after_h);
-  LOG(ERROR) << "Heuristic:";
-  PrintDelta(*ctr_before, *ctr_after_h);
+//  LOG(ERROR) << "Heuristic:";
+//  PrintDelta(*ctr_before, *ctr_after_h);
 
   b4_delta_info->Add(b4_delta);
   ctr_delta_info->Add(ctr_delta);
@@ -212,6 +213,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> nodes_in_order;
     nc::net::GraphBuilder graph_builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file), &nodes_in_order);
+    graph_builder.RemoveMultipleLinks();
     nc::net::GraphStorage graph(graph_builder);
 
     std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);

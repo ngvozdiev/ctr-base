@@ -120,6 +120,10 @@ struct AggregateDelta {
   // The fraction of the aggregate's total traffic that changed paths.
   double fraction_delta = 0.0;
 
+  // The fraction of the aggregate's total traffic that was sent on a longer
+  // path.
+  double fraction_on_longer_path = 0.0;
+
   // New routes added (f == 0 -> f != 0).
   size_t routes_added = 0;
 
@@ -131,13 +135,17 @@ struct AggregateDelta {
 };
 
 struct RoutingConfigurationDelta {
-  // Fraction of total flows that changed path. Each aggregate's flow count is
-  // assumed to be the max of the flow count before and after.
+  // Fraction of total flows that changed path.
   double total_flow_fraction_delta;
 
-  // Fraction of total volume that changed path. Each aggregate's volume is
-  // assumed to be the max of the volume before and after.
+  // Fraction of total volume that changed path.
   double total_volume_fraction_delta;
+
+  // Fraction of total flows that changed to a longer path.
+  double total_flow_fraction_on_longer_path;
+
+  // Fraction of total volume that changed to a longer path.
+  double total_volume_fraction_on_longer_path;
 
   // Per-aggregate deltas.
   std::map<AggregateId, AggregateDelta> aggregates;

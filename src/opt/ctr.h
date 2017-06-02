@@ -179,10 +179,7 @@ class CTROptimizer : public Optimizer {
   // For each aggregate will add all paths up to and including the lowest delay
   // path that has some free capacity. Returns whether it added any paths.
   bool AddFreePaths(const nc::net::GraphLinkSet& links_with_no_capacity,
-                    const std::vector<AggregateId>& aggregates_ordered,
-                    const RoutingConfiguration* base_solution,
-                    std::map<AggregateId, size_t>* ksp_indices,
-                    CTRPathMap* out);
+                    const std::vector<AggregateId>& aggregates_ordered);
 
   // If the total number of paths that will go to the optimizer exceeds this
   // limit only the next best free path will be added, as opposed to all k
@@ -198,6 +195,13 @@ class CTROptimizer : public Optimizer {
   // After this limit is reached, paths will be added in a way that does not
   // ensure optimality of the solution.
   size_t per_aggregate_path_limit_ = 1000;
+
+  // Paths for the optimization. Potentially extended by calls to Optimize.
+  CTRPathMap path_map_;
+
+  // Need some place to remember where in the order of K shortest paths we have
+  // gone up to for each aggregate.
+  std::map<AggregateId, size_t> ksp_indices_;
 };
 
 }  // namespace ctr
