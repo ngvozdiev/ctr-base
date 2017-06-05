@@ -147,6 +147,13 @@ struct RoutingConfigurationDelta {
   // Fraction of total volume that changed to a longer path.
   double total_volume_fraction_on_longer_path;
 
+  // The sum of delays experienced by all flows is D. This is
+  // (D_new - D_old) / D_old
+  double total_per_flow_delay_delta;
+
+  // Same as above, but absolute. D_new - D_old.
+  nc::net::Delay total_per_flow_delay_delta_absolute;
+
   // Per-aggregate deltas.
   std::map<AggregateId, AggregateDelta> aggregates;
 
@@ -174,7 +181,8 @@ class RoutingConfiguration : public TrafficMatrix {
 
   std::string ToString() const;
 
-  std::string AggregateToString(const AggregateId& aggregate) const;
+  std::string AggregateToString(const AggregateId& aggregate,
+                                double* aggregate_contribution = nullptr) const;
 
   // Renders the configuration as a graph on a web page.
   void ToHTML(nc::viz::HtmlPage* out) const;
@@ -184,10 +192,8 @@ class RoutingConfiguration : public TrafficMatrix {
   RoutingConfigurationDelta GetDifference(
       const RoutingConfiguration& other) const;
 
-  // Returns sum of all flows' delay / sum of delay of all flows if they only
-  // used their shortest path. Will be 1 if all flows are on their shortest
-  // path. Cannot be less than 1.
-  double PathStretchFraction() const;
+  // Returns sum of all flows' delay.
+  nc::net::Delay TotalPerFlowDelay() const;
 
  private:
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;

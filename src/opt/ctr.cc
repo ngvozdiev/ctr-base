@@ -29,7 +29,7 @@ using nc::lp::VariableIndex;
 using PathPtr = const nc::net::Walk*;
 
 static constexpr double kM1 = 1000000000.0;
-static constexpr double kM2 = 0.01;
+static constexpr double kM2 = 0.001;
 static constexpr double kMillion = 1000000.0;
 
 static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
@@ -638,10 +638,13 @@ CTROptimizerPass::CTROptimizerPass(const TrafficMatrix* input,
       graph_(graph),
       latest_run_max_oversubscription_(0),
       base_solution_(base_solution) {
-  //  path_cost_map_ = PathCostMap(*paths);
-  FreezeSinglePathAggregates();
-  //  initial_obj_ = 0;
-  //  initial_oversubscription_ = 0;
+//  if (base_solution == nullptr) {
+//    FreezeSinglePathAggregates();
+//  } else {
+    initial_obj_ = 0;
+    initial_oversubscription_ = 0;
+//  }
+
   Optimize();
 }
 
@@ -742,6 +745,10 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
 
     if (load_fraction >= 1.0) {
       links_with_no_capacity_.Insert(link_index);
+
+      if (FLAGS_debug_ctr) {
+        CLOG(ERROR, GREEN) << "Link with no capacity (i) " << link->ToString();
+      }
     }
   }
   initial_oversubscription_ = std::max(1.0, max_oversub);

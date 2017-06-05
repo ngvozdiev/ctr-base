@@ -165,8 +165,8 @@ static nc::viz::NpyArray::Types GetRCDTypes() {
   using namespace nc::viz;
   NpyArray::Types types = {{"volume_delta", NpyArray::DOUBLE},
                            {"flow_count_delta", NpyArray::DOUBLE},
-                           {"volume_delta_lp", NpyArray::DOUBLE},
-                           {"flow_count_delta_lp", NpyArray::DOUBLE},
+                           {"volume_delta_longer_path", NpyArray::DOUBLE},
+                           {"flow_count_delta_longer_path", NpyArray::DOUBLE},
                            {"add_count", NpyArray::UINT32},
                            {"update_count", NpyArray::UINT32},
                            {"remove_count", NpyArray::UINT32}};
@@ -182,8 +182,7 @@ RoutingConfigDeltaInfo::RoutingConfigDeltaInfo()
     : nc::viz::NpyArray(GetRCDTypes()) {}
 
 void RoutingConfigDeltaInfo::Add(const RoutingConfigurationDelta& delta) {
-  double demand_delta = delta.total_volume_fraction_delta;
-  double flow_delta = delta.total_flow_fraction_delta;
+  using namespace std::chrono;
 
   std::vector<double> fraction_deltas;
   for (const auto& aggregate_id_and_delta : delta.aggregates) {

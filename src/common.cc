@@ -153,16 +153,20 @@ const std::vector<RouteAndFraction>& RoutingConfiguration::FindRoutesOrDie(
 std::string RoutingConfiguration::ToString() const {
   std::string base_to_string = TrafficMatrix::ToString();
   std::vector<std::string> out;
+  double total = 0;
   for (const auto& aggregate_and_routes : configuration_) {
     const AggregateId& aggregate = aggregate_and_routes.first;
-    out.emplace_back(AggregateToString(aggregate));
+    double aggregate_contribution;
+    out.emplace_back(AggregateToString(aggregate, &aggregate_contribution));
+    total += aggregate_contribution;
   }
 
-  return nc::StrCat(base_to_string, "\n", nc::Join(out, "\n"));
+  return nc::StrCat(base_to_string, "\n", nc::Join(out, "\n"), "\ntotal: ", total,
+                    "\n");
 }
 
 std::string RoutingConfiguration::AggregateToString(
-    const AggregateId& aggregate) const {
+    const AggregateId& aggregate, double* aggregate_contribution) const {
   const std::vector<RouteAndFraction>& routes =
       nc::FindOrDieNoPrint(configuration_, aggregate);
   const DemandAndFlowCount& demand_and_flows =
@@ -184,6 +188,10 @@ std::string RoutingConfiguration::AggregateToString(
         nc::StrCat(path->ToStringNoPorts(*graph_), " : ", fraction,
                    " (contribution ", contribution, "ms)");
     routes_str.emplace_back(route_str);
+  }
+
+  if (aggregate_contribution != nullptr) {
+    *aggregate_contribution = total_contribution;
   }
 
   return nc::StrCat(aggregate.ToString(*graph_), " -> ",
@@ -420,12 +428,10 @@ static void GetRouteCounts(const std::vector<RouteAndFraction>& prev,
   }
 }
 
-double RoutingConfiguration::PathStretchFraction() const {
-  double total_on_sp = 0;
+nc::net::Delay RoutingConfiguration::TotalPerFlowDelay() const {
   double total = 0;
   for (const auto& aggregate_id_and_routes : configuration_) {
     const AggregateId& aggregate_id = aggregate_id_and_routes.first;
-    nc::net::Delay sp_delay = aggregate_id.GetSPDelay(*graph_);
     const DemandAndFlowCount& demand_and_flow_count =
         nc::FindOrDieNoPrint(demands(), aggregate_id);
 
@@ -436,12 +442,11 @@ double RoutingConfiguration::PathStretchFraction() const {
       double fraction = route_and_fraction.second;
       double num_flows = demand_and_flow_count.second * fraction;
 
-      total += sp_delay.count() * num_flows;
-      total_on_sp += path_delay.count() * num_flows;
+      total += path_delay.count() * num_flows;
     }
   }
 
-  return total / total_on_sp;
+  return nc::net::Delay(static_cast<size_t>(total));
 }
 
 RoutingConfigurationDelta RoutingConfiguration::GetDifference(
@@ -488,6 +493,12 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
     total_volume_delta += volume * aggregate_delta.fraction_delta;
     total_volume += volume;
   }
+
+  nc::net::Delay total_delay = TotalPerFlowDelay();
+  nc::net::Delay total_delay_other = TotalPerFlowDelay();
+  out.total_per_flow_delay_delta_absolute = total_delay_other - total_delay;
+  out.total_per_flow_delay_delta = (total_delay_other - total_delay).count() /
+                                   static_cast<double>(total_delay.count());
 
   out.total_flow_fraction_delta = total_flow_count_delta / total_flow_count;
   out.total_volume_fraction_delta = total_volume_delta / total_volume;
