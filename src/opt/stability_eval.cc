@@ -124,6 +124,7 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
                         ctr::RoutingConfigDeltaInfo* ctr_delta_h_info,
                         double* scale_factor, double* b4_delay_delta,
                         double* h_delay_delta) {
+  //  LOG(ERROR) << "seed " << seed;
   std::mt19937 rnd(seed);
   auto b4_before_and_after = RunB4(tm, path_provider, &rnd, scale_factor);
   ctr::RoutingConfigurationDelta b4_delta =
@@ -138,18 +139,21 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   ctr::CTROptimizer ctr_optimizer(path_provider);
   auto ctr_before = ctr_optimizer.Optimize(*tm_before);
 
+  //  CLOG(ERROR, RED) << "Running CTR";
   ctr::CTROptimizer ctr_optimizer_two(path_provider);
   auto ctr_after = ctr_optimizer_two.Optimize(*tm_after);
   ctr::RoutingConfigurationDelta ctr_delta =
       ctr_before->GetDifference(*ctr_after);
-  PrintDelta(*ctr_before, *ctr_after);
-  LOG(ERROR) << "\n\n";
+  //  PrintDelta(*ctr_before, *ctr_after);
+  //  LOG(ERROR) << "\n\n";
 
   // Will run with the proportionately scaled matrix.
   ctr::CTROptimizer ctr_optimizer_three(path_provider);
   auto ctr_after_p = ctr_optimizer_three.Optimize(*tm_proportionately_scaled);
   ctr::RoutingConfigurationDelta ctr_delta_p =
       ctr_before->GetDifference(*ctr_after_p);
+
+  //  CLOG(ERROR, RED) << "Running H";
 
   //  nc::viz::HtmlPage page_before;
   //  ctr_before->ToHTML(&page_before);
@@ -163,8 +167,8 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   auto ctr_after_h = ctr_optimizer.OptimizeWithPrevious(*tm_after, *ctr_before);
   ctr::RoutingConfigurationDelta ctr_delta_h =
       ctr_before->GetDifference(*ctr_after_h);
-  LOG(ERROR) << "Heuristic:";
-  PrintDelta(*ctr_before, *ctr_after_h);
+  //  LOG(ERROR) << "Heuristic:";
+  //  PrintDelta(*ctr_before, *ctr_after_h);
 
   nc::net::Delay best_delay = ctr_after->TotalPerFlowDelay();
   nc::net::Delay b4_delay = b4_before_and_after.second->TotalPerFlowDelay();
@@ -181,8 +185,8 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   //  CHECK(b4_delay >= best_delay) << b4_delay.count() << " vs "
   //                                << best_delay.count();
   //
-  CHECK(h_delay >= best_delay) << h_delay.count() << " vs "
-                               << best_delay.count();
+  //  CHECK(h_delay >= best_delay) << h_delay.count() << " vs "
+  //                               << best_delay.count();
 
   b4_delta_info->Add(b4_delta);
   ctr_delta_info->Add(ctr_delta);
