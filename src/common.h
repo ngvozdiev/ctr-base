@@ -195,6 +195,9 @@ class RoutingConfiguration : public TrafficMatrix {
   // Returns sum of all flows' delay.
   nc::net::Delay TotalPerFlowDelay() const;
 
+  // Makes a copy.
+  std::unique_ptr<RoutingConfiguration> Copy() const;
+
  private:
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;
 };

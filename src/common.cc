@@ -161,8 +161,8 @@ std::string RoutingConfiguration::ToString() const {
     total += aggregate_contribution;
   }
 
-  return nc::StrCat(base_to_string, "\n", nc::Join(out, "\n"), "\ntotal: ", total,
-                    "\n");
+  return nc::StrCat(base_to_string, "\n", nc::Join(out, "\n"), "\ntotal: ",
+                    total, "\n");
 }
 
 std::string RoutingConfiguration::AggregateToString(
@@ -447,6 +447,13 @@ nc::net::Delay RoutingConfiguration::TotalPerFlowDelay() const {
   }
 
   return nc::net::Delay(static_cast<size_t>(total));
+}
+
+std::unique_ptr<RoutingConfiguration> RoutingConfiguration::Copy() const {
+  auto out = nc::make_unique<RoutingConfiguration>(
+      *static_cast<const TrafficMatrix*>(this));
+  out->configuration_ = configuration_;
+  return out;
 }
 
 RoutingConfigurationDelta RoutingConfiguration::GetDifference(

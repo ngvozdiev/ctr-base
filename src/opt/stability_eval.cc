@@ -120,7 +120,6 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
                         ctr::PathProvider* path_provider,
                         ctr::RoutingConfigDeltaInfo* b4_delta_info,
                         ctr::RoutingConfigDeltaInfo* ctr_delta_info,
-                        ctr::RoutingConfigDeltaInfo* ctr_delta_p_info,
                         ctr::RoutingConfigDeltaInfo* ctr_delta_h_info,
                         double* scale_factor, double* b4_delay_delta,
                         double* h_delay_delta) {
@@ -132,14 +131,11 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
 
   const ctr::TrafficMatrix* tm_before = b4_before_and_after.first.get();
   const ctr::TrafficMatrix* tm_after = b4_before_and_after.second.get();
-  std::unique_ptr<ctr::TrafficMatrix> tm_proportionately_scaled =
-      ScaleFlowCountsProportionaltely(*tm_before, *tm_after);
 
   // Need to also generate before/after for CTR using the same TMs as B4.
   ctr::CTROptimizer ctr_optimizer(path_provider);
   auto ctr_before = ctr_optimizer.Optimize(*tm_before);
 
-  //  CLOG(ERROR, RED) << "Running CTR";
   ctr::CTROptimizer ctr_optimizer_two(path_provider);
   auto ctr_after = ctr_optimizer_two.Optimize(*tm_after);
   ctr::RoutingConfigurationDelta ctr_delta =
@@ -164,7 +160,7 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   //  nc::File::WriteStringToFile(page_after.Construct(), "after.html");
 
   // Will also run with a heuristic.
-  auto ctr_after_h = ctr_optimizer.OptimizeWithPrevious(*tm_after, *ctr_before);
+  auto ctr_after_h = ctr_optimizer.Optimize(*tm_after);
   ctr::RoutingConfigurationDelta ctr_delta_h =
       ctr_before->GetDifference(*ctr_after_h);
   //  LOG(ERROR) << "Heuristic:";
@@ -249,7 +245,6 @@ int main(int argc, char** argv) {
 
     ctr::RoutingConfigDeltaInfo b4_delta_info;
     ctr::RoutingConfigDeltaInfo ctr_delta_info;
-    ctr::RoutingConfigDeltaInfo ctr_delta_p_info;
     ctr::RoutingConfigDeltaInfo ctr_delta_h_info;
 
     // Extra info for each run.

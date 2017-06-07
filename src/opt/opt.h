@@ -23,14 +23,6 @@ class Optimizer {
   virtual std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) = 0;
 
-  // Same as optimize, but will also make use of a previous configuration. Not
-  // supported by all optimizers.
-  virtual std::unique_ptr<RoutingConfiguration> OptimizeWithPrevious(
-      const TrafficMatrix& tm, const RoutingConfiguration& previous) {
-    nc::Unused(previous);
-    return Optimize(tm);
-  }
-
  protected:
   // Provides paths to the optimizer.
   PathProvider* path_provider_;

@@ -31,11 +31,26 @@ using PathPtr = const nc::net::Walk*;
 static constexpr double kM1 = 1000000000.0;
 static constexpr double kM2 = 0.001;
 static constexpr double kMillion = 1000000.0;
-static constexpr double kLinkFullThreshold = 1.05;
+static constexpr double kLinkFullThreshold = 1.0;
 
 static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
                             const nc::net::Walk& path) {
   return !path.ContainsAny(links_with_no_capacity);
+}
+
+static void PrintPathMap(const CTRPathMap& path_map,
+                         const nc::net::GraphStorage& graph) {
+  for (const auto& aggregate_and_paths : path_map) {
+    const AggregateId& id = aggregate_and_paths.first;
+    const std::vector<const nc::net::Walk*>& paths = aggregate_and_paths.second;
+    std::vector<std::string> paths_v;
+    for (const nc::net::Walk* path : paths) {
+      paths_v.emplace_back(path->ToStringNoPorts(graph));
+    }
+
+    LOG(ERROR) << id.ToString(graph) << " : " << paths.size() << " "
+               << nc::Join(paths_v, ",");
+  }
 }
 
 bool CTROptimizer::AddFreePaths(
@@ -143,24 +158,50 @@ bool CTROptimizer::AddFreePaths(
 
 std::unique_ptr<RoutingConfiguration> CTROptimizer::Optimize(
     const TrafficMatrix& tm) {
-  std::vector<AggregateId> aggregates_ordered = PrioritizeAggregates(tm);
-
-  auto out = nc::make_unique<RoutingConfiguration>(tm);
-  OptimizePrivate(tm, aggregates_ordered, nullptr, out.get());
-  return out;
+  auto to_return = LimitedUnlimitedDispatch(tm);
+  previous_ = to_return->Copy();
+  return to_return;
 }
 
-std::unique_ptr<RoutingConfiguration> CTROptimizer::OptimizeWithPrevious(
-    const TrafficMatrix& tm, const RoutingConfiguration& previous) {
+std::unique_ptr<RoutingConfiguration> CTROptimizer::LimitedUnlimitedDispatch(
+    const TrafficMatrix& tm) {
   std::vector<AggregateId> aggregates_ordered = PrioritizeAggregates(tm);
 
-  auto out = nc::make_unique<RoutingConfiguration>(tm);
-  double os = OptimizePrivate(tm, aggregates_ordered, &previous, out.get());
-  if (os > 1) {
-    return Optimize(tm);
+  // Will first do an unlimited pass.
+  auto out_unlimited = nc::make_unique<RoutingConfiguration>(tm);
+  double unlimited_oversubscription =
+      OptimizePrivate(tm, aggregates_ordered, false, out_unlimited.get());
+  if (unlimited_oversubscription > 1) {
+    return out_unlimited;
   }
 
-  return out;
+  if (!previous_) {
+    return out_unlimited;
+  }
+
+  auto out_limited = nc::make_unique<RoutingConfiguration>(tm);
+  double limited_oversubscription =
+      OptimizePrivate(tm, aggregates_ordered, true, out_limited.get());
+  if (limited_oversubscription > 1) {
+    return out_unlimited;
+  }
+
+  nc::net::Delay total_unlimited_delay = out_unlimited->TotalPerFlowDelay();
+  nc::net::Delay total_limited_delay = out_limited->TotalPerFlowDelay();
+  if (total_limited_delay < total_unlimited_delay) {
+    LOG(ERROR) << "Limited optimization did better than unlimited one. Should "
+                  "not happen.";
+    return out_limited;
+  }
+
+  nc::net::Delay delta = total_limited_delay - total_unlimited_delay;
+  double delta_fraction =
+      delta.count() / static_cast<double>(total_limited_delay.count());
+  if (delta_fraction > unlimited_threshold_) {
+    return out_unlimited;
+  }
+
+  return out_limited;
 }
 
 std::vector<AggregateId> CTROptimizer::PrioritizeAggregates(
@@ -180,8 +221,8 @@ std::vector<AggregateId> CTROptimizer::PrioritizeAggregates(
 
 double CTROptimizer::OptimizePrivate(
     const TrafficMatrix& input,
-    const std::vector<AggregateId>& aggregates_ordered,
-    const RoutingConfiguration* base_solution, RoutingConfiguration* out) {
+    const std::vector<AggregateId>& aggregates_ordered, bool use_previous,
+    RoutingConfiguration* out) {
   nc::net::GraphLinkSet links_with_no_capacity;
   double prev_obj_value = std::numeric_limits<double>::max();
   double max_oversubscription = 0;
@@ -195,21 +236,21 @@ double CTROptimizer::OptimizePrivate(
     bool added_any_paths =
         AddFreePaths(links_with_no_capacity, aggregates_ordered);
     if (pass_count != 0 && !added_any_paths) {
+      if (FLAGS_debug_ctr) {
+        LOG(INFO) << "Unable to add more paths";
+      }
       break;
     }
 
-    CTROptimizerPass pass(&input, &path_map_, graph_, base_solution);
+    CTROptimizerPass pass(&input, &path_map_, graph_, use_previous && previous_
+                                                          ? previous_.get()
+                                                          : nullptr);
     RunOutput& run_output = pass.run_output();
     double obj_value = run_output.obj_value;
     CHECK(obj_value != std::numeric_limits<double>::max());
 
     aggregate_outputs = std::move(run_output.aggregate_outputs);
     links_with_no_capacity = pass.links_with_no_capacity();
-
-    double delta = (obj_value - prev_obj_value) / obj_value;
-    if (std::abs(delta) < 0.001) {
-      break;
-    }
 
     if (FLAGS_debug_ctr) {
       LOG(INFO) << obj_value << " vs " << prev_obj_value
@@ -218,9 +259,12 @@ double CTROptimizer::OptimizePrivate(
 
     prev_obj_value = obj_value;
     max_oversubscription = run_output.max_oversubscription;
-    //    if (max_oversubscription <= 1.0) {
-    //      break;
-    //    }
+    if (max_oversubscription <= 1.0) {
+      if (FLAGS_debug_ctr) {
+        LOG(INFO) << "Managed to fit traffic";
+      }
+      break;
+    }
 
     ++pass_count;
   }

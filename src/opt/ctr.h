@@ -161,15 +161,14 @@ class CTROptimizer : public Optimizer {
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
 
-  std::unique_ptr<RoutingConfiguration> OptimizeWithPrevious(
-      const TrafficMatrix& tm, const RoutingConfiguration& previous) override;
-
  private:
+  std::unique_ptr<RoutingConfiguration> LimitedUnlimitedDispatch(
+      const TrafficMatrix& tm);
+
   // Single run of the optimization for given input.
   double OptimizePrivate(const TrafficMatrix& input,
                          const std::vector<AggregateId>& aggregates_ordered,
-                         const RoutingConfiguration* base_solution,
-                         RoutingConfiguration* out);
+                         bool use_previous, RoutingConfiguration* out);
 
   // Prioritizes the aggregates from an input. Aggregates that are more
   // important are at the start of the returned list.
@@ -196,12 +195,19 @@ class CTROptimizer : public Optimizer {
   // ensure optimality of the solution.
   size_t per_aggregate_path_limit_ = 1000;
 
+  // How far away does the unlimited solution need to be from the limited one in
+  // order to use the unlimited.
+  double unlimited_threshold_ = 0.01;
+
   // Paths for the optimization. Potentially extended by calls to Optimize.
   CTRPathMap path_map_;
 
   // Need some place to remember where in the order of K shortest paths we have
   // gone up to for each aggregate.
   std::map<AggregateId, size_t> ksp_indices_;
+
+  // Holds a copy of the most recent return value of Optimize.
+  std::unique_ptr<RoutingConfiguration> previous_;
 };
 
 }  // namespace ctr
