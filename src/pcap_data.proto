@@ -1,0 +1,108 @@
+syntax = "proto3";
+package ctr;
+
+message TCPSYNFlowSummary {
+  // True if the first packet the flow has seen is a SYN without an
+  // ACK. False if it is SYN/ACK
+  bool pure_syn_seen = 1;
+
+  // IPv4 source and destination addresses.
+  uint32 source = 2;
+  uint32 destination = 3;
+
+  // TCP source and destination ports.
+  uint32 src_port = 4;
+  uint32 dst_port = 5;
+
+  // RTT estimate based on the handshake (diff between first packet
+  // that carries a SYN and the next packet).
+  uint64 syn_rtt_estimate_nanos = 6;
+
+  // RTT estimate based on the FIN. Not always available, set to 0 if not.
+  uint64 fin_rtt_estimate_nanos = 7;
+
+  // TTL value of the first packet from this flow (the one that
+  // carries either a SYN or a SYN/ACK).
+  uint32 first_packet_ttl = 8;
+
+  // Total number of bytes/pkts seen.
+  uint64 bytes_seen = 9;
+  uint64 pkts_seen = 10;
+};
+
+// Binned data for a SubTrace. The trace is split into bins of given
+// size, and the number of bytes/pkts seen in each bin is recorded.
+message PBBinnedData {
+  // How long each bin is.
+  uint64 bin_size_ms = 1;
+
+  // Bytes per bin.
+  repeated uint64 bytes_binned = 2;
+
+  // Packets per bin.
+  repeated uint64 packets_binned = 3;
+
+  // Number of flows per bin. This is expected number of flows
+  // (bin_size_ms / (total flow duration)), not just a count of all
+  // flows seen.
+  repeated uint64 expected_flows_binned = 4;
+};
+
+message PBTraceSubdivision {
+  // 1/n of all flows in the original trace will be used. This number
+  // should be at least 1.
+  uint32 downscale_n = 1;
+
+  // Indices of the bins to pick. At the very least this should
+  // contain a single element.
+  repeated uint32 downscale_indices = 2;
+}
+
+message PBTraceId {
+  // Timestamp when the trace was started (in milliseconds since
+  // Epoch).
+  uint32 year = 1;
+  uint32 month = 2;
+  uint32 day = 3;
+
+  // The physical location where the trace was taken. A human-readable
+  // string.
+  string location = 4;
+
+  // A list of downscale statements. If this is non-empty the list
+  // will be processed in order, the output of each will be added to the next.
+  repeated PBTraceSubdivision subdivisions = 5;
+}
+
+// Fraction of flows that have RTT less than threshold_ms.
+message PBDataTraceLocalFraction {
+  double fraction_local = 1;
+  uint32 threshold_ms = 2;
+}
+
+// A single entry in the store. The store is serialized as a sequence
+// of those entries, each preceded by its size.
+message PBPcapDataTrace {
+  // The trace id.
+  PBTraceId id = 1;
+
+  // A list of .pcap files, in the order they should be read. The
+  // paths are usually relative, not absolute.
+  repeated string pcap_files = 3;
+
+  // A file with a summary of the TCP flows in the whole trace. The
+  // summary file is just a series of TCPSYNFlowSummary messages. Only
+  // flows for which there is a SYN or a SYN/ACK in the trace are
+  // recorded.
+  string tcp_syn_flow_summary_file = 4;
+
+  // A file that describes a binned version of the trace. A series of
+  // PBBinnedData messages.
+  string binned_data_file = 7;
+  
+  // Local fractions.
+  repeated PBDataTraceLocalFraction local_fractions = 10;
+
+  // Optional tag that is attached to the trace.
+  string tag = 11;
+};

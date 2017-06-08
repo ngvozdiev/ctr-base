@@ -202,5 +202,49 @@ class RoutingConfiguration : public TrafficMatrix {
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;
 };
 
+// For an aggregate combines binned history and flow count. The history spans
+// bin_size * bins.size() time.
+class AggregateHistory {
+ public:
+  AggregateHistory(const std::vector<uint64_t>& bins,
+                   std::chrono::milliseconds bin_size, uint64_t flow_count)
+      : bins_(bins), bin_size_(bin_size), flow_count_(flow_count) {}
+
+  // The mean rate.
+  nc::net::Bandwidth mean_rate() const;
+
+  // The max rate.
+  nc::net::Bandwidth max_rate() const;
+
+  // Maximum queue size at a given rate.
+  std::chrono::milliseconds MaxQueueAtRate(nc::net::Bandwidth bandwidth) const;
+
+  // Returns a vector with the per-second mean rates.
+  std::vector<nc::net::Bandwidth> PerSecondMeans() const;
+
+  // Adds the given rate to all bins.
+  AggregateHistory AddRate(nc::net::Bandwidth rate) const;
+
+  const std::vector<uint64_t>& bins() const { return bins_; }
+
+  void SetBin(size_t i, uint64_t value) { bins_[i] = value; }
+
+  void set_flow_count(uint64_t flow_count) { flow_count_ = flow_count; }
+
+  std::chrono::milliseconds bin_size() const { return bin_size_; }
+
+  uint64_t flow_count() const { return flow_count_; }
+
+ private:
+  // Bytes transmitted per bin in this aggregate's history.
+  std::vector<uint64_t> bins_;
+
+  // How long each bin lasts.
+  std::chrono::milliseconds bin_size_;
+
+  // Number of flows.
+  uint64_t flow_count_;
+};
+
 }  // namespace ctr
 #endif

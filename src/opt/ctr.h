@@ -161,9 +161,16 @@ class CTROptimizer : public Optimizer {
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
 
+  // The first result returned is the same as from Optimize. The second is the
+  // solution without stability limits applied (true optimal).
+  std::pair<std::unique_ptr<RoutingConfiguration>,
+            std::unique_ptr<RoutingConfiguration>>
+  OptimizeAndReturnUnlimitedRun(const TrafficMatrix& tm);
+
  private:
   std::unique_ptr<RoutingConfiguration> LimitedUnlimitedDispatch(
-      const TrafficMatrix& tm);
+      const TrafficMatrix& tm,
+      std::unique_ptr<RoutingConfiguration>* unlimited_run);
 
   // Single run of the optimization for given input.
   double OptimizePrivate(const TrafficMatrix& input,

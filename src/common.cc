@@ -531,4 +531,76 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
   return std::make_tuple(total_added, total_removed, total_updated);
 }
 
+nc::net::Bandwidth AggregateHistory::mean_rate() const {
+  using namespace std::chrono;
+  milliseconds total_time = bins_.size() * bin_size_;
+  double total_bytes = 0;
+  for (uint64_t bin : bins_) {
+    total_bytes += bin;
+  }
+
+  double total_time_sec = duration_cast<duration<double>>(total_time).count();
+  return nc::net::Bandwidth::FromBitsPerSecond((total_bytes * 8.0) /
+                                               total_time_sec);
+}
+
+nc::net::Bandwidth AggregateHistory::max_rate() const {
+  using namespace std::chrono;
+
+  uint64_t max_bin = *std::max_element(bins_.begin(), bins_.end());
+  double total_time_sec = duration_cast<duration<double>>(bin_size_).count();
+  return nc::net::Bandwidth::FromBitsPerSecond((max_bin * 8.0) /
+                                               total_time_sec);
+}
+
+std::chrono::milliseconds AggregateHistory::MaxQueueAtRate(
+    nc::net::Bandwidth bandwidth) const {
+  double bins_in_second = 1000.0 / bin_size_.count();
+  double bytes_per_bin = (bandwidth.bps() / 8.0) / bins_in_second;
+
+  double max_time_to_drain = 0;
+  double leftover = 0;
+  for (uint64_t bin : bins_) {
+    leftover += (bin - bytes_per_bin);
+    leftover = std::max(0.0, leftover);
+
+    double time_to_drain_sec = leftover * 8.0 / bandwidth.bps();
+    if (max_time_to_drain < time_to_drain_sec) {
+      max_time_to_drain = time_to_drain_sec;
+    }
+  }
+
+  return std::chrono::milliseconds(
+      static_cast<uint64_t>(max_time_to_drain * 1000));
+}
+
+std::vector<nc::net::Bandwidth> AggregateHistory::PerSecondMeans() const {
+  CHECK(1000 % bin_size_.count() == 0);
+  size_t bins_in_second = 1000 / bin_size_.count();
+
+  std::vector<nc::net::Bandwidth> out;
+  uint64_t current_bytes = 0;
+  for (size_t i = 0; i < bins_.size(); ++i) {
+    current_bytes += bins_[i];
+    if ((i + 1) % bins_in_second == 0) {
+      out.emplace_back(
+          nc::net::Bandwidth::FromBitsPerSecond(current_bytes * 8));
+      current_bytes = 0;
+    }
+  }
+
+  return out;
+}
+
+AggregateHistory AggregateHistory::AddRate(nc::net::Bandwidth rate) const {
+  double bins_in_second = 1000.0 / bin_size_.count();
+  double bytes_per_bin = (rate.bps() / 8.0) / bins_in_second;
+  std::vector<uint64_t> bins_copy = bins_;
+  for (uint64_t& bin : bins_copy) {
+    bin += bytes_per_bin;
+  }
+
+  return {bins_copy, bin_size_, flow_count_};
+}
+
 }  // namespace ctr

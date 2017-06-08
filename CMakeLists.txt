@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 2.8.7)
 
-# If there is already a target called ncode_common someone has already
+# If there is already a target called ncode_base someone has already
 # added this project. Will ignore.
 if(TARGET ctr_base)
   return()
 endif(TARGET ctr_base)
 
 project(CTR)
+set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_extensions)
 option(CTR_BASE_DISABLE_TESTS "If tests should be compiled or not" ON)
 option(CTR_BASE_DEBUG "A debug build" OFF)
 option(CTR_BASE_ASAN "Compile with ASAN on" OFF)
@@ -47,19 +48,27 @@ if (NOT TARGET ncode_common)
    add_subdirectory(${CMAKE_BINARY_DIR}/external/ncode_common)
 endif()
 
+find_package(Protobuf REQUIRED)
+find_package(FFTW REQUIRED)
+include_directories(${PROTOBUF_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${FFTW_INCLUDES})
 include_directories(${CMAKE_SOURCE_DIR}/external ${CMAKE_BINARY_DIR}/external)
 SET(OLD_BUILD_TESTING ${BUILD_TESTING})
 SET(BUILD_TESTING False)
 add_subdirectory(external/gflags)
 SET(BUILD_TESTING ${OLD_BUILD_TESTING})
 
-set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h)
-add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc ${CTR_BASE_HEADER_FILES})
-target_link_libraries(ctr_base ncode gflags)
+PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
+set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h src/pcap_data.h src/flow_counter.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h)
+add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc src/pcap_data.cc src/flow_counter.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc)
+target_link_libraries(ctr_base ncode gflags ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
 
 add_executable(stability_eval src/opt/stability_eval.cc)
 target_link_libraries(stability_eval ctr_base)
 
+add_executable(multi_rate_eval src/prob_model/multi_rate_eval.cc)
+target_link_libraries(multi_rate_eval ctr_base)
+
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)
+   add_test_exec(dist_model_test src/prob_model/dist_model_test.cc ctr_base)
 endif()

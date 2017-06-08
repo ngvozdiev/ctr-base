@@ -38,21 +38,6 @@ static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
   return !path.ContainsAny(links_with_no_capacity);
 }
 
-static void PrintPathMap(const CTRPathMap& path_map,
-                         const nc::net::GraphStorage& graph) {
-  for (const auto& aggregate_and_paths : path_map) {
-    const AggregateId& id = aggregate_and_paths.first;
-    const std::vector<const nc::net::Walk*>& paths = aggregate_and_paths.second;
-    std::vector<std::string> paths_v;
-    for (const nc::net::Walk* path : paths) {
-      paths_v.emplace_back(path->ToStringNoPorts(graph));
-    }
-
-    LOG(ERROR) << id.ToString(graph) << " : " << paths.size() << " "
-               << nc::Join(paths_v, ",");
-  }
-}
-
 bool CTROptimizer::AddFreePaths(
     const nc::net::GraphLinkSet& links_with_no_capacity,
     const std::vector<AggregateId>& aggregates_ordered) {
@@ -158,19 +143,33 @@ bool CTROptimizer::AddFreePaths(
 
 std::unique_ptr<RoutingConfiguration> CTROptimizer::Optimize(
     const TrafficMatrix& tm) {
-  auto to_return = LimitedUnlimitedDispatch(tm);
+  auto to_return = LimitedUnlimitedDispatch(tm, nullptr);
   previous_ = to_return->Copy();
   return to_return;
 }
 
+std::pair<std::unique_ptr<RoutingConfiguration>,
+          std::unique_ptr<RoutingConfiguration>>
+CTROptimizer::OptimizeAndReturnUnlimitedRun(const TrafficMatrix& tm) {
+  std::unique_ptr<RoutingConfiguration> unlimited_run_output;
+  auto output = LimitedUnlimitedDispatch(tm, &unlimited_run_output);
+  previous_ = output->Copy();
+  return {std::move(output), std::move(unlimited_run_output)};
+}
+
 std::unique_ptr<RoutingConfiguration> CTROptimizer::LimitedUnlimitedDispatch(
-    const TrafficMatrix& tm) {
+    const TrafficMatrix& tm,
+    std::unique_ptr<RoutingConfiguration>* unlimited_run) {
   std::vector<AggregateId> aggregates_ordered = PrioritizeAggregates(tm);
 
   // Will first do an unlimited pass.
   auto out_unlimited = nc::make_unique<RoutingConfiguration>(tm);
   double unlimited_oversubscription =
       OptimizePrivate(tm, aggregates_ordered, false, out_unlimited.get());
+  if (unlimited_run != nullptr) {
+    *unlimited_run = out_unlimited->Copy();
+  }
+
   if (unlimited_oversubscription > 1) {
     return out_unlimited;
   }

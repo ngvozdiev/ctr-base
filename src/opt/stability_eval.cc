@@ -120,10 +120,9 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
                         ctr::PathProvider* path_provider,
                         ctr::RoutingConfigDeltaInfo* b4_delta_info,
                         ctr::RoutingConfigDeltaInfo* ctr_delta_info,
-                        ctr::RoutingConfigDeltaInfo* ctr_delta_h_info,
+                        ctr::RoutingConfigDeltaInfo* ctr_delta_limits_info,
                         double* scale_factor, double* b4_delay_delta,
                         double* h_delay_delta) {
-  //  LOG(ERROR) << "seed " << seed;
   std::mt19937 rnd(seed);
   auto b4_before_and_after = RunB4(tm, path_provider, &rnd, scale_factor);
   ctr::RoutingConfigurationDelta b4_delta =
@@ -136,58 +135,29 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   ctr::CTROptimizer ctr_optimizer(path_provider);
   auto ctr_before = ctr_optimizer.Optimize(*tm_before);
 
-  ctr::CTROptimizer ctr_optimizer_two(path_provider);
-  auto ctr_after = ctr_optimizer_two.Optimize(*tm_after);
+  // Will also run with a heuristic.
+  std::unique_ptr<ctr::RoutingConfiguration> ctr_after_with_limits;
+  std::unique_ptr<ctr::RoutingConfiguration> ctr_after;
+  std::tie(ctr_after_with_limits, ctr_after) =
+      ctr_optimizer.OptimizeAndReturnUnlimitedRun(*tm_after);
+
+  ctr::RoutingConfigurationDelta ctr_delta_limits =
+      ctr_before->GetDifference(*ctr_after_with_limits);
   ctr::RoutingConfigurationDelta ctr_delta =
       ctr_before->GetDifference(*ctr_after);
-  //  PrintDelta(*ctr_before, *ctr_after);
-  //  LOG(ERROR) << "\n\n";
-
-  // Will run with the proportionately scaled matrix.
-  ctr::CTROptimizer ctr_optimizer_three(path_provider);
-  auto ctr_after_p = ctr_optimizer_three.Optimize(*tm_proportionately_scaled);
-  ctr::RoutingConfigurationDelta ctr_delta_p =
-      ctr_before->GetDifference(*ctr_after_p);
-
-  //  CLOG(ERROR, RED) << "Running H";
-
-  //  nc::viz::HtmlPage page_before;
-  //  ctr_before->ToHTML(&page_before);
-  //  nc::File::WriteStringToFile(page_before.Construct(), "before.html");
-  //
-  //  nc::viz::HtmlPage page_after;
-  //  ctr_after_p->ToHTML(&page_after);
-  //  nc::File::WriteStringToFile(page_after.Construct(), "after.html");
-
-  // Will also run with a heuristic.
-  auto ctr_after_h = ctr_optimizer.Optimize(*tm_after);
-  ctr::RoutingConfigurationDelta ctr_delta_h =
-      ctr_before->GetDifference(*ctr_after_h);
-  //  LOG(ERROR) << "Heuristic:";
-  //  PrintDelta(*ctr_before, *ctr_after_h);
 
   nc::net::Delay best_delay = ctr_after->TotalPerFlowDelay();
   nc::net::Delay b4_delay = b4_before_and_after.second->TotalPerFlowDelay();
-  nc::net::Delay h_delay = ctr_after_h->TotalPerFlowDelay();
+  nc::net::Delay limits_delay = ctr_after_with_limits->TotalPerFlowDelay();
 
   *b4_delay_delta =
       (b4_delay - best_delay).count() / static_cast<double>(best_delay.count());
-  *h_delay_delta =
-      (h_delay - best_delay).count() / static_cast<double>(best_delay.count());
-
-  //  LOG(ERROR) << ctr_after_h->ToString();
-  //  LOG(ERROR) << ctr_after->ToString();
-
-  //  CHECK(b4_delay >= best_delay) << b4_delay.count() << " vs "
-  //                                << best_delay.count();
-  //
-  //  CHECK(h_delay >= best_delay) << h_delay.count() << " vs "
-  //                               << best_delay.count();
+  *h_delay_delta = (limits_delay - best_delay).count() /
+                   static_cast<double>(best_delay.count());
 
   b4_delta_info->Add(b4_delta);
   ctr_delta_info->Add(ctr_delta);
-  ctr_delta_p_info->Add(ctr_delta_p);
-  ctr_delta_h_info->Add(ctr_delta_h);
+  ctr_delta_limits_info->Add(ctr_delta_limits);
 }
 
 // The TM that we load will have no flow counts. Need some out of thin air.
@@ -245,7 +215,7 @@ int main(int argc, char** argv) {
 
     ctr::RoutingConfigDeltaInfo b4_delta_info;
     ctr::RoutingConfigDeltaInfo ctr_delta_info;
-    ctr::RoutingConfigDeltaInfo ctr_delta_h_info;
+    ctr::RoutingConfigDeltaInfo ctr_delta_limits_info;
 
     // Extra info for each run.
     nc::viz::NpyArray extra_info(
@@ -277,9 +247,8 @@ int main(int argc, char** argv) {
         double ctr_h_total_delay_delta = 0.0;
 
         ParseMatrix(*scaled_tm, seed, &path_provider, &b4_delta_info,
-                    &ctr_delta_info, &ctr_delta_p_info, &ctr_delta_h_info,
-                    &scale_factor, &b4_total_delay_delta,
-                    &ctr_h_total_delay_delta);
+                    &ctr_delta_info, &ctr_delta_limits_info, &scale_factor,
+                    &b4_total_delay_delta, &ctr_h_total_delay_delta);
         extra_info.AddRow({topology_file, matrix_file, seed, scale_factor,
                            b4_total_delay_delta, ctr_h_total_delay_delta});
       }
@@ -287,13 +256,11 @@ int main(int argc, char** argv) {
 
     b4_delta_info.AddPrefixToFieldNames("b4_");
     ctr_delta_info.AddPrefixToFieldNames("ctr_");
-    ctr_delta_h_info.AddPrefixToFieldNames("ctrh_");
-    ctr_delta_p_info.AddPrefixToFieldNames("ctrp_");
+    ctr_delta_limits_info.AddPrefixToFieldNames("ctr_limits_");
 
     extra_info.Combine(b4_delta_info)
         .Combine(ctr_delta_info)
-        .Combine(ctr_delta_h_info)
-        .Combine(ctr_delta_p_info);
+        .Combine(ctr_delta_limits_info);
     extra_info.ToDisk("out", topology_file != topology_files.front());
   }
 }
