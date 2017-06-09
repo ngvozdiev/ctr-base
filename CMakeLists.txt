@@ -68,6 +68,9 @@ target_link_libraries(stability_eval ctr_base)
 add_executable(multi_rate_eval src/prob_model/multi_rate_eval.cc)
 target_link_libraries(multi_rate_eval ctr_base)
 
+add_executable(pcap_data_util src/pcap_data_util)
+target_link_libraries(pcap_data_util ctr_base)
+
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)
    add_test_exec(dist_model_test src/prob_model/dist_model_test.cc ctr_base)

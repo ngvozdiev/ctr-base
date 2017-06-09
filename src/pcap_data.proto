@@ -86,4 +86,18 @@ message PBPcapDataTrace {
   // The total trace is split into this many sub-traces. Each
   // sub-trace will have bin_cunt PBBin messages.
   uint64 split_count = 7;
+
+  // Where, relative to the end of PBPcapDataTrace the series of PBBin
+  // messages starts. There are as many offsets as there are splits,
+  // first one is always 0.
+  repeated fixed64 binned_data_start_offsets = 8;
+
+  // Where, relative to the end of PBPcapDataTrace the series of
+  // TCPSYNFlowSummary messages starts.
+  fixed64 flow_summaries_start_offset = 9;
+
+  // Offset from the end of PBPcapDataTrace to the end of the last
+  // TCPFlowSynSummary message. Can be used to quickly skip to the
+  // next trace in a serialized trace store.
+  fixed64 flow_summaries_end_offset = 10;
 };
