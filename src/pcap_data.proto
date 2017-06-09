@@ -32,31 +32,19 @@ message TCPSYNFlowSummary {
 
 // Binned data for a SubTrace. The trace is split into bins of given
 // size, and the number of bytes/pkts seen in each bin is recorded.
-message PBBinnedData {
-  // How long each bin is.
-  uint64 bin_size_ms = 1;
-
+message PBBin {
   // Bytes per bin.
-  repeated uint64 bytes_binned = 2;
+  uint64 byte_count = 1;
 
   // Packets per bin.
-  repeated uint64 packets_binned = 3;
+  uint64 packet_count = 2;
 
-  // Number of flows per bin. This is expected number of flows
-  // (bin_size_ms / (total flow duration)), not just a count of all
-  // flows seen.
-  repeated uint64 expected_flows_binned = 4;
+  // Number of SYNs seen during the bin.
+  uint64 enter_flow_count = 3;
+
+  // Number of FINs seen during the bin. 
+  uint64 exit_flow_count = 4;
 };
-
-message PBTraceSubdivision {
-  // 1/n of all flows in the original trace will be used. This number
-  // should be at least 1.
-  uint32 downscale_n = 1;
-
-  // Indices of the bins to pick. At the very least this should
-  // contain a single element.
-  repeated uint32 downscale_indices = 2;
-}
 
 message PBTraceId {
   // Timestamp when the trace was started (in milliseconds since
@@ -68,20 +56,15 @@ message PBTraceId {
   // The physical location where the trace was taken. A human-readable
   // string.
   string location = 4;
-
-  // A list of downscale statements. If this is non-empty the list
-  // will be processed in order, the output of each will be added to the next.
-  repeated PBTraceSubdivision subdivisions = 5;
 }
 
-// Fraction of flows that have RTT less than threshold_ms.
-message PBDataTraceLocalFraction {
-  double fraction_local = 1;
-  uint32 threshold_ms = 2;
-}
-
-// A single entry in the store. The store is serialized as a sequence
-// of those entries, each preceded by its size.
+// A single entry in the store. The store is serialized in one big
+// file as follows:
+// 1. A PBPcapDataTrace entry that describes a trace.
+// 2. A series of PBBin messages for the trace.
+// 3. A series of TCPSYNFlowSummary messages for the trace.
+// 4. Another trace's PBPcapDataTrace
+// 5. ...
 message PBPcapDataTrace {
   // The trace id.
   PBTraceId id = 1;
@@ -90,19 +73,17 @@ message PBPcapDataTrace {
   // paths are usually relative, not absolute.
   repeated string pcap_files = 3;
 
-  // A file with a summary of the TCP flows in the whole trace. The
-  // summary file is just a series of TCPSYNFlowSummary messages. Only
-  // flows for which there is a SYN or a SYN/ACK in the trace are
-  // recorded.
-  string tcp_syn_flow_summary_file = 4;
+  // How many flows the trace has. Only flows for which there is a SYN
+  // or a SYN/ACK in the trace are recorded.
+  uint64 tcp_syn_flow_summary_count = 4;
 
-  // A file that describes a binned version of the trace. A series of
-  // PBBinnedData messages.
-  string binned_data_file = 7;
+  // Each of the PBBin messages will have a bin size of this.
+  uint64 bin_size_micros = 5;
+
+  // Number of PBBin messages per sub-trace.
+  uint64 bin_count = 6;
   
-  // Local fractions.
-  repeated PBDataTraceLocalFraction local_fractions = 10;
-
-  // Optional tag that is attached to the trace.
-  string tag = 11;
+  // The total trace is split into this many sub-traces. Each
+  // sub-trace will have bin_cunt PBBin messages.
+  uint64 split_count = 7;
 };
