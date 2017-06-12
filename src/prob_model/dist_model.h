@@ -1,5 +1,5 @@
-#ifndef FUBAR_DIST_MODEL_H
-#define FUBAR_DIST_MODEL_H
+#ifndef CTR_DIST_MODEL_H
+#define CTR_DIST_MODEL_H
 
 #include <fftw3.h>
 #include <stddef.h>
@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <condition_variable>
 #include <random>
 #include <string>
 #include <utility>
@@ -17,6 +16,7 @@
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/thread_runner.h"
+#include "../common.h"
 
 namespace ctr {
 class AggregateHistory;
@@ -211,7 +211,8 @@ class ProbModel {
     }
   }
 
-  void AddAggregate(AggregateId aggregate_id, const AggregateHistory* history);
+  void AddAggregate(const AggregateId& aggregate_id,
+                    const AggregateHistory* history);
 
   // Answers to multiple queries. Item i in the return vector corresponds to
   // query i in 'queries'. If the last argument is not null, will populate it

@@ -319,7 +319,7 @@ ProbModel::AggregateState::AggregateState(const AggregateHistory* history,
   distribution.CacheCumulativeProbabilities();
 }
 
-void ProbModel::AddAggregate(uint64_t aggregate_id,
+void ProbModel::AddAggregate(const AggregateId& aggregate_id,
                              const AggregateHistory* history) {
   aggregate_states_.emplace(
       std::piecewise_construct, std::forward_as_tuple(aggregate_id),
@@ -332,10 +332,10 @@ std::chrono::milliseconds ProbModel::GetBinSize(
 
   milliseconds bin_size = milliseconds::max();
   for (const auto& aggregate_and_fraction : query.aggregates) {
-    uint64_t aggregate_id = aggregate_and_fraction.first;
+    const AggregateId& aggregate_id = aggregate_and_fraction.first;
 
     const AggregateState& aggregate_state =
-        nc::FindOrDie(aggregate_states_, aggregate_id);
+        nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
     const AggregateHistory* history = aggregate_state.history;
 
     if (bin_size == milliseconds::max()) {
@@ -357,10 +357,10 @@ std::vector<uint64_t> ProbModel::SumUpBins(const ProbModelQuery& query,
 
   *max_sum = 0;
   for (const auto& aggregate_and_fraction : query.aggregates) {
-    uint64_t aggregate_id = aggregate_and_fraction.first;
+    const AggregateId& aggregate_id = aggregate_and_fraction.first;
     double fraction = aggregate_and_fraction.second;
     const AggregateState& aggregate_state =
-        nc::FindOrDie(aggregate_states_, aggregate_id);
+        nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
     const AggregateHistory* history = aggregate_state.history;
 
     double max_bin = 0;
@@ -416,11 +416,11 @@ nc::net::Bandwidth ProbModel::OptimalRate(
   microseconds split_total = microseconds::zero();
 
   for (const auto& aggregate_and_fraction : query.aggregates) {
-    uint64_t aggregate_id = aggregate_and_fraction.first;
+    const AggregateId& aggregate_id = aggregate_and_fraction.first;
     double fraction = aggregate_and_fraction.second;
 
     const AggregateState& aggregate_state =
-        nc::FindOrDie(aggregate_states_, aggregate_id);
+        nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
     if (fraction != 1) {
       // This will be slow -- the distribution in aggregate_state is the one
       // that has the entire aggregate, not just a fraction of it. If we need

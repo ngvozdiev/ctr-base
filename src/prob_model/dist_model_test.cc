@@ -57,6 +57,10 @@ static ProbModelConfig GetDefaultConfig() {
   return config;
 }
 
+static AggregateId AggId(uint64_t id) {
+  return AggregateId(nc::net::GraphNodeIndex(id), nc::net::GraphNodeIndex(id));
+}
+
 class ProbModelFixture : public ::testing::Test {
  protected:
   ProbModelFixture() : model_(GetDefaultConfig()) {}
@@ -64,7 +68,8 @@ class ProbModelFixture : public ::testing::Test {
   void AddAggregate(uint64_t id, const std::vector<uint64_t>& bins_bytes) {
     auto new_history = nc::make_unique<AggregateHistory>(
         bins_bytes, kDefaultBinSize, kDefaultFlowCount);
-    model_.AddAggregate(id, new_history.get());
+
+    model_.AddAggregate(AggId(id), new_history.get());
     histories_.emplace_back(std::move(new_history));
   }
 
@@ -110,8 +115,8 @@ TEST_F(ProbModelFixture, SingleAggregate) {
       nc::net::Bandwidth::FromBitsPerSecond(100000 * 8);
 
   std::vector<ProbModelReply> out =
-      model_.Query({{ProbModelQuery::BOTH, {{1, 1.0}}, rate},
-                    {ProbModelQuery::BOTH, {{1, 1.0}}, rate_too_low}});
+      model_.Query({{ProbModelQuery::BOTH, {{AggId(1), 1.0}}, rate},
+                    {ProbModelQuery::BOTH, {{AggId(1), 1.0}}, rate_too_low}});
   std::vector<bool> model = {true, false};
   ASSERT_TRUE(OutputOk(model, out));
 }
@@ -122,7 +127,7 @@ TEST_F(ProbModelFixture, SingleAggregateSplit) {
       nc::net::Bandwidth::FromBitsPerSecond(100000 * 10 * 4);
 
   std::vector<ProbModelReply> out =
-      model_.Query({{ProbModelQuery::BOTH, {{1, 0.5}}, rate}});
+      model_.Query({{ProbModelQuery::BOTH, {{AggId(1), 0.5}}, rate}});
   std::vector<bool> model = {true};
   ASSERT_TRUE(OutputOk(model, out));
 }
@@ -135,7 +140,7 @@ TEST_F(ProbModelFixture, SingleAggregateSplitTimings) {
       nc::net::Bandwidth::FromBitsPerSecond(100000 * 10 * 4);
 
   std::vector<ProbModelTimingData> timing_data;
-  model_.Query({{ProbModelQuery::BOTH, {{1, 0.5}}, rate}}, &timing_data);
+  model_.Query({{ProbModelQuery::BOTH, {{AggId(1), 0.5}}, rate}}, &timing_data);
   ASSERT_EQ(1ul, timing_data.size());
   ASSERT_NE(microseconds::zero(), timing_data[0].queue_simulation);
   ASSERT_NE(microseconds::zero(), timing_data[0].split_aggregates);
@@ -161,13 +166,13 @@ TEST_F(ProbModelFixture, MultiAggregate) {
       nc::net::Bandwidth::FromBitsPerSecond(1000 * 10 * 8 * 10000ul);
 
   std::vector<ProbModelReply> out =
-      model_.Query({{ProbModelQuery::BOTH, {{1, 1.0}}, single_rate}});
+      model_.Query({{ProbModelQuery::BOTH, {{AggId(1), 1.0}}, single_rate}});
   std::vector<bool> model = {true};
   ASSERT_TRUE(OutputOk(model, out));
 
-  std::vector<std::pair<uint64_t, double>> all_aggregates;
+  std::vector<std::pair<AggregateId, double>> all_aggregates;
   for (size_t i = 0; i < 10000; ++i) {
-    all_aggregates.emplace_back(i, 1.0);
+    all_aggregates.emplace_back(AggId(i), 1.0);
   }
 
   std::vector<ProbModelTimingData> timing_data;

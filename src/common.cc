@@ -603,4 +603,15 @@ AggregateHistory AggregateHistory::AddRate(nc::net::Bandwidth rate) const {
   return {bins_copy, bin_size_, flow_count_};
 }
 
+AggregateHistory AggregateHistory::SubtractRate(nc::net::Bandwidth rate) const {
+  double bins_in_second = 1000.0 / bin_size_.count();
+  double bytes_per_bin = (rate.bps() / 8.0) / bins_in_second;
+  std::vector<uint64_t> bins_copy = bins_;
+  for (uint64_t& bin : bins_copy) {
+    bin -= bytes_per_bin;
+  }
+
+  return {bins_copy, bin_size_, flow_count_};
+}
+
 }  // namespace ctr

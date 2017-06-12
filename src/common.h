@@ -225,6 +225,9 @@ class AggregateHistory {
   // Adds the given rate to all bins.
   AggregateHistory AddRate(nc::net::Bandwidth rate) const;
 
+  // Removes the given rate from all bins.
+  AggregateHistory SubtractRate(nc::net::Bandwidth rate) const;
+
   const std::vector<uint64_t>& bins() const { return bins_; }
 
   void SetBin(size_t i, uint64_t value) { bins_[i] = value; }

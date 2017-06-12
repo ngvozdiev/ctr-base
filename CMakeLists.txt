@@ -58,8 +58,8 @@ add_subdirectory(external/gflags)
 SET(BUILD_TESTING ${OLD_BUILD_TESTING})
 
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
-set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h src/pcap_data.h src/flow_counter.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h)
-add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc src/pcap_data.cc src/flow_counter.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc)
+set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h src/pcap_data.h src/flow_counter.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h)
+add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc src/pcap_data.cc src/flow_counter.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc src/mean_est/mean_est.cc)
 target_link_libraries(ctr_base ncode gflags ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
 
 add_executable(stability_eval src/opt/stability_eval.cc)
@@ -67,6 +67,9 @@ target_link_libraries(stability_eval ctr_base)
 
 add_executable(multi_rate_eval src/prob_model/multi_rate_eval.cc)
 target_link_libraries(multi_rate_eval ctr_base)
+
+add_executable(mean_est_eval src/mean_est/mean_est_eval.cc)
+target_link_libraries(mean_est_eval ctr_base)
 
 add_executable(pcap_data_util src/pcap_data_util)
 target_link_libraries(pcap_data_util ctr_base)

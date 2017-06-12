@@ -58,37 +58,29 @@ class TraceId {
   uint16_t day_;
 };
 
-class PcapDataTraceBin {
- public:
+struct PcapDataTraceBin {
+  PcapDataTraceBin() : bytes(0), packets(0), flows_enter(0), flows_exit(0) {}
+
   PcapDataTraceBin(const PBBin& bin_pb)
-      : bytes_(bin_pb.byte_count()),
-        packets_(bin_pb.packet_count()),
-        flows_enter_(bin_pb.enter_flow_count()),
-        flows_exit_(bin_pb.exit_flow_count()) {}
+      : bytes(bin_pb.byte_count()),
+        packets(bin_pb.packet_count()),
+        flows_enter(bin_pb.enter_flow_count()),
+        flows_exit(bin_pb.exit_flow_count()) {}
 
   PcapDataTraceBin(uint64_t bytes, uint64_t packets, uint64_t flows_enter,
                    uint64_t flows_exit)
-      : bytes_(bytes),
-        packets_(packets),
-        flows_enter_(flows_enter),
-        flows_exit_(flows_exit) {}
-
-  uint64_t bytes() const { return bytes_; }
-
-  uint64_t flows_enter() const { return flows_enter_; }
-
-  uint64_t flows_exit() const { return flows_exit_; }
-
-  uint64_t packets() const { return packets_; }
+      : bytes(bytes),
+        packets(packets),
+        flows_enter(flows_enter),
+        flows_exit(flows_exit) {}
 
   // Combines this bin with another.
   void Combine(const PcapDataTraceBin& other);
 
- private:
-  uint64_t bytes_ = 0;
-  uint64_t packets_ = 0;
-  uint64_t flows_enter_ = 0;
-  uint64_t flows_exit_ = 0;
+  uint64_t bytes = 0;
+  uint64_t packets = 0;
+  uint64_t flows_enter = 0;
+  uint64_t flows_exit = 0;
 };
 
 class PcapDataTrace;
@@ -136,8 +128,17 @@ class BinSequence {
   // Returns another BinSequence with the same traces, but a smaller range.
   BinSequence LimitRange(size_t start_bin, size_t end_bin) const;
 
+  // Optionally rebins the trace and returns the bins. If 'bin_size' is equal to
+  // this trace's base bin size (returned by bin_size()) no rebinning will
+  // happen. If it is a multiple of the base bin size will combine every N bins.
+  std::vector<PcapDataTraceBin> AccumulateBins(
+      std::chrono::microseconds bin_size) const;
+
  private:
-  std::vector<PcapDataTraceBin> AccumulateBins() const;
+  // Combines every 'bin_size_multiplier' bins into a PcapDataTraceBin and
+  // returns the sequence.
+  std::vector<PcapDataTraceBin> AccumulateBinsPrivate(
+      size_t bin_size_multiplier) const;
 
   // Defines a range.
   size_t start_bin_;
@@ -217,6 +218,12 @@ class PcapTraceStore {
   const PcapDataTrace& GetTraceOrDie(const TraceId& id) const;
 
   std::string Summary() const;
+
+  std::set<TraceId> AllIds() const {
+    std::set<TraceId> out;
+    nc::InsertKeysFromMap(traces_, &out);
+    return out;
+  }
 
  private:
   std::string file_;

@@ -23,8 +23,6 @@
 
 DEFINE_string(pcap_trace_store, "",
               "A file with information about .pcap traces");
-DEFINE_string(pcap_trace_tag_regex, "",
-              "Will only consider traces that match this regex");
 DEFINE_uint64(batch_size, 20, "Number of traces in a batch");
 DEFINE_uint64(seed, 1, "Seed to use when picking batches");
 DEFINE_uint64(num_batches, 20, "Number of batches");
@@ -46,7 +44,8 @@ static std::vector<BinList> GetAllBins(
     std::chrono::milliseconds bin_size) {
   std::vector<BinList> all_bins;
   for (const PcapDataTrace* trace : traces) {
-    std::vector<PcapDataTraceBin> bins = trace->BinOrDie(bin_size);
+    BinSequence bin_sequence = trace->ToSequence(trace->AllSlices());
+    std::vector<PcapDataTraceBin> bins = bin_sequence.AccumulateBins(bin_size);
 
     BinList bins_for_trace;
     bins_for_trace.reserve(bins.size());
@@ -182,13 +181,12 @@ int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
-  std::vector<ctr::TraceId> all_ids =
-      trace_store.AllIds(FLAGS_pcap_trace_tag_regex);
+  std::set<ctr::TraceId> all_ids = trace_store.AllIds();
 
   std::vector<const ctr::PcapDataTrace*> traces;
   for (const ctr::TraceId& trace_id : all_ids) {
     ctr::PcapDataTrace& pcap_trace = trace_store.GetTraceOrDie(trace_id);
-    LOG(INFO) << "Parsing " << trace_id.ToStringHumanReadable();
+    LOG(INFO) << "Parsing " << trace_id;
 
     traces.emplace_back(&pcap_trace);
   }
