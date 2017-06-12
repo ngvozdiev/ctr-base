@@ -144,7 +144,7 @@ struct ProbModelQuery {
 
   // A list aggregates and fractions. All the aggregate's bins will be
   // multiplied by the fraction.
-  std::vector<std::pair<uint64_t, double>> aggregates;
+  std::vector<std::pair<AggregateId, double>> aggregates;
 
   // Rate to test.
   nc::net::Bandwidth rate;
@@ -211,7 +211,7 @@ class ProbModel {
     }
   }
 
-  void AddAggregate(uint64_t aggregate_id, const AggregateHistory* history);
+  void AddAggregate(AggregateId aggregate_id, const AggregateHistory* history);
 
   // Answers to multiple queries. Item i in the return vector corresponds to
   // query i in 'queries'. If the last argument is not null, will populate it
@@ -258,7 +258,7 @@ class ProbModel {
   // Configuration
   const ProbModelConfig config_;
 
-  std::map<uint64_t, AggregateState> aggregate_states_;
+  std::map<AggregateId, AggregateState> aggregate_states_;
 
   // Processes batches of queries.
   nc::ThreadBatchProcessor<ProbModelQuery> batch_processor_;

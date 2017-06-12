@@ -1,26 +1,30 @@
 #include "pcap_data.h"
 
-#include <fcntl.h>
 #include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
-#include <sys/stat.h>
+#include <google/protobuf/repeated_field.h>
+#include <sys/_types/_s_ifmt.h>
+#include <sys/errno.h>
+#include <sys/fcntl.h>
 #include <unistd.h>
-#include <algorithm>
-#include <cerrno>
-#include <cstdio>
+#include <cstdbool>
 #include <cstring>
+#include <initializer_list>
+#include <numeric>
+#include <string>
+#include <type_traits>
 #include <fstream>
 
+#include "ncode_common/src/common.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/htsim/bulk_gen.h"
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/pcap_consumer.h"
+#include "ncode_common/src/logging.h"
 #include "ncode_common/src/lru_cache.h"
 #include "ncode_common/src/map_util.h"
-#include "ncode_common/src/md5.h"
-#include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/pcap.h"
+#include "ncode_common/src/strutil.h"
 #include "ncode_common/src/substitute.h"
+#include "common.h"
 
 namespace ctr {
 
@@ -115,6 +119,11 @@ static std::unique_ptr<google::protobuf::io::FileOutputStream> GetOutputStream(
   CHECK(fd != -1) << "Bad output file " << filename;
   return nc::make_unique<google::protobuf::io::FileOutputStream>(fd);
 }
+
+#if defined(__APPLE__) && defined(__MACH__)
+#define lseek64 lseek
+#define open64 open
+#endif
 
 static std::unique_ptr<google::protobuf::io::FileInputStream> GetInputStream(
     const std::string& filename, size_t offset) {
@@ -519,8 +528,8 @@ void PcapDataTrace::TCPSYNFlows(
   file_input->Close();
 }
 
-void PcapDataTrace::AllBins(
-    size_t slice, std::function<void(const PBBin& bin)> callback) const {
+void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
+                         std::function<void(const PBBin& bin)> callback) const {
   if (!callback) {
     return;
   }
@@ -533,7 +542,9 @@ void PcapDataTrace::AllBins(
   PBBin bin_pb;
   for (size_t i = 0; i < count; ++i) {
     CHECK(ReadDelimitedFrom(&bin_pb, file_input.get()));
-    callback(bin_pb);
+    if (i >= start_bin && i < end_bin) {
+      callback(bin_pb);
+    }
     bin_pb.Clear();
   }
   file_input->Close();
@@ -600,44 +611,114 @@ PcapTraceStore::PcapTraceStore(const std::string& file) : file_(file) {
   }
 }
 
-BinSequence::BinSequence(const std::vector<PcapDataTraceBin>& bins,
-                         std::chrono::microseconds bin_size)
-    : bin_size_(bin_size), bins_(bins) {}
+BinSequence::BinSequence(const std::vector<TraceAndSlice>& traces,
+                         size_t start_bin, size_t end_bin)
+    : start_bin_(start_bin), end_bin_(end_bin), traces_(traces) {}
 
 void BinSequence::Combine(const BinSequence& other) {
-  CHECK(other.bin_size_ == bin_size_);
-  CHECK(other.bins_.size() == bins_.size());
-  for (size_t i = 0; i < bins_.size(); ++i) {
-    bins_[i].Combine(other.bins_[i]);
-  }
+  CHECK(other.bin_size() == bin_size());
+  CHECK(other.start_bin_ == start_bin_);
+  CHECK(other.end_bin_ == end_bin_);
+
+  traces_.insert(traces_.end(), other.traces_.begin(), other.traces_.end());
 }
 
-uint64_t BinSequence::TotalBytes() const {
-  uint64_t total = 0;
-  for (const auto& bin : bins_) {
-    total += bin.bytes();
+std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() const {
+  std::vector<PcapDataTraceBin> bins = AccumulateBins();
+  uint64_t bytes = 0;
+  uint64_t packets = 0;
+  for (const PcapDataTraceBin& bin : bins) {
+    bytes += bin.bytes();
+    packets += bin.packets();
   }
-  return total;
+
+  return {bytes, packets};
 }
 
-uint64_t BinSequence::TotalPackets() const {
-  uint64_t total = 0;
-  for (const auto& bin : bins_) {
-    total += bin.packets();
-  }
-  return total;
+const std::chrono::microseconds BinSequence::bin_size() const {
+  CHECK(!traces_.empty());
+  return traces_.front().first->base_bin_size();
 }
 
-std::unique_ptr<BinSequence> PcapDataTrace::Bins(size_t slice) const {
-  if (slice != std::numeric_limits<size_t>::max()) {
-    std::vector<PcapDataTraceBin> bins;
-    AllBins(slice, [&bins](const PBBin& bin_pb) { bins.emplace_back(bin_pb); });
-    return nc::make_unique<BinSequence>(bins, base_bin_size());
+std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate) const {
+  double rate_Bps = rate.bps() / 8.0;
+  double bins_in_second =
+      1.0 / std::chrono::duration<double>(bin_size()).count();
+  double bytes_per_bin = rate_Bps / bins_in_second;
+
+  std::vector<PcapDataTraceBin> bins = AccumulateBins();
+  std::vector<double> out(bins.size());
+  for (size_t i = 0; i < bins.size(); ++i) {
+    out[i] = bins[i].bytes() - bytes_per_bin;
   }
 
-  std::unique_ptr<BinSequence> out = Bins(0);
-  for (size_t i = 1; i < trace_pb_.split_count(); ++i) {
-    out->Combine(*Bins(i));
+  return out;
+}
+
+AggregateHistory BinSequence::GenerateHistory(
+    std::chrono::milliseconds history_bin_size) const {
+  using namespace std::chrono;
+  size_t history_bin_size_micros =
+      duration_cast<microseconds>(history_bin_size).count();
+  size_t bin_size_micros = duration_cast<microseconds>(bin_size()).count();
+
+  CHECK(history_bin_size_micros > bin_size_micros);
+  size_t bins_per_history_bin = history_bin_size_micros / bin_size_micros;
+  CHECK(history_bin_size_micros % bin_size_micros == 0);
+
+  std::vector<PcapDataTraceBin> bytes_per_bin = AccumulateBins();
+  size_t total_flows = 0;
+
+  size_t bins_for_histoy_count = bytes_per_bin.size() / bins_per_history_bin;
+  CHECK(bytes_per_bin.size() % bins_per_history_bin == 0);
+  std::vector<uint64_t> bins_for_history(bins_for_histoy_count, 0ul);
+
+  for (size_t i = 0; i < bytes_per_bin.size(); ++i) {
+    total_flows += bytes_per_bin[i].flows_enter();
+    bins_for_history[i / bins_per_history_bin] += bytes_per_bin[i].bytes();
+  }
+
+  return {bins_for_history, history_bin_size, total_flows};
+}
+
+std::vector<BinSequence> BinSequence::SplitOrDie(
+    const std::vector<double>& fractions) const {
+  double total = std::accumulate(fractions.begin(), fractions.end(), 0.0);
+  CHECK(total <= 1);
+  std::vector<BinSequence> out;
+
+  double cumulative = 0;
+  size_t i = 0;
+  for (double fraction : fractions) {
+    std::vector<TraceAndSlice> new_traces;
+    cumulative += fraction;
+
+    for (; i < cumulative * traces_.size(); ++i) {
+      new_traces.emplace_back(traces_[i]);
+    }
+
+    out.emplace_back(new_traces, start_bin_, end_bin_);
+  }
+
+  CHECK(i == traces_.size() - 1);
+  return out;
+}
+
+BinSequence BinSequence::LimitRange(size_t start_bin, size_t end_bin) const {
+  CHECK(start_bin >= start_bin_);
+  CHECK(end_bin <= end_bin_);
+
+  return {traces_, start_bin, end_bin};
+}
+
+std::vector<PcapDataTraceBin> BinSequence::AccumulateBins() const {
+  std::vector<PcapDataTraceBin> out;
+  for (const TraceAndSlice& trace_and_slice : traces_) {
+    const PcapDataTrace* trace = trace_and_slice.first;
+    size_t slice = trace_and_slice.second;
+
+    trace->Bins(slice, start_bin_, end_bin_,
+                [&out](const PBBin& bin_pb) { out.emplace_back(bin_pb); });
   }
 
   return out;
@@ -645,6 +726,23 @@ std::unique_ptr<BinSequence> PcapDataTrace::Bins(size_t slice) const {
 
 const std::chrono::microseconds PcapDataTrace::base_bin_size() const {
   return std::chrono::microseconds(trace_pb_.bin_size_micros());
+}
+
+std::set<size_t> PcapDataTrace::AllSlices() const {
+  std::set<size_t> out;
+  for (size_t i = 0; i < trace_pb_.split_count(); ++i) {
+    out.emplace(i);
+  }
+  return out;
+}
+
+BinSequence PcapDataTrace::ToSequence(const std::set<size_t>& slices) const {
+  std::vector<BinSequence::TraceAndSlice> traces_and_slices;
+  for (size_t slice : slices) {
+    traces_and_slices.emplace_back(this, slice);
+  }
+
+  return {traces_and_slices, 0, trace_pb_.bin_count()};
 }
 
 std::string PcapDataTrace::Summary() const {
@@ -656,9 +754,13 @@ std::string PcapDataTrace::Summary() const {
                           trace_pb_.bin_size_micros(), trace_pb_.bin_count(),
                           trace_pb_.split_count());
 
-  std::unique_ptr<BinSequence> all_bins = Bins();
-  nc::SubstituteAndAppend(&out, "Total $0 bytes, $1 pkts\n",
-                          all_bins->TotalBytes(), all_bins->TotalPackets());
+  BinSequence bin_sequence = ToSequence(AllSlices());
+  uint64_t total_bytes;
+  uint64_t total_packets;
+  std::tie(total_bytes, total_packets) = bin_sequence.TotalBytesAndPackets();
+
+  nc::SubstituteAndAppend(&out, "Total $0 bytes, $1 pkts\n", total_bytes,
+                          total_packets);
   return out;
 }
 

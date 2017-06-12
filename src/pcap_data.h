@@ -6,24 +6,23 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <memory>
-#include <string>
+#include <set>
 #include <tuple>
+#include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
 #include "ncode_common/src/event_queue.h"
+#include "ncode_common/src/htsim/match.h"
 #include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/logging.h"
+#include "ncode_common/src/htsim/pcap_consumer.h"
+#include "ncode_common/src/net/net_common.h"
 #include "pcap_data.pb.h"
 
-namespace nc {
-namespace htsim {
-class PcapPacketGen;
-} /* namespace htsim */
-} /* namespace nc */
+namespace ctr {
+class AggregateHistory;
+} /* namespace ctr */
 
 namespace ctr {
 
@@ -92,34 +91,59 @@ class PcapDataTraceBin {
   uint64_t flows_exit_ = 0;
 };
 
+class PcapDataTrace;
+
+// A bin sequence is a view into a slice of a trace (or multiple).
 class BinSequence {
  public:
-  BinSequence(const std::vector<PcapDataTraceBin>& bins,
-              std::chrono::microseconds bin_size);
+  using TraceAndSlice = std::pair<const PcapDataTrace*, size_t>;
+  BinSequence(const std::vector<TraceAndSlice>& traces, size_t start_bin,
+              size_t end_bin);
 
   // Combines this sequence's bins with another sequence's bins. Both
-  // sequences
-  // should have the same number of bins and bin size.
+  // sequences should have the same number of bins and bin size.
   void Combine(const BinSequence& other);
 
   // This sequence's bin size.
-  const std::chrono::microseconds bin_size() const { return bin_size_; }
+  const std::chrono::microseconds bin_size() const;
 
-  // This sequence's bins.
-  const std::vector<PcapDataTraceBin>& bins() const { return bins_; }
+  size_t bin_count() const;
 
-  // Total bytes in the whole sequence.
-  uint64_t TotalBytes() const;
+  // Total bytes and packets in the whole sequence.
+  std::pair<uint64_t, uint64_t> TotalBytesAndPackets() const;
 
-  // Total packets in the whole sequence.
-  uint64_t TotalPackets() const;
+  // Splits this sequence into a number of smaller sequences. Each will have the
+  // same number of bins, but will only carry a part of this sequence's
+  // sub-sequences. Fill die if there are more elements in 'fractions' than
+  // there are sub-sequences. The sum of 'fractions' should be 1. Splitting is
+  // deterministic and depends on the order of traces_.
+  std::vector<BinSequence> SplitOrDie(
+      const std::vector<double>& fractions) const;
+
+  // Returns as many integers as there are bins. Given a rate, we can compute
+  // how many bytes (B) will be transmitted for the period of a single bin. This
+  // function returns B_i - B for each bin where B_i is the number of bytes in
+  // the bin. If all values are positive this bin sequence will fit through a
+  // link of rate 'rate' without causing congestion.
+  std::vector<double> Residuals(nc::net::Bandwidth rate) const;
+
+  // Generates an AggregateHistory from the entire range of this BinSequence.
+  // Each of the history's bins will combine 'history_bin_size' bins from this
+  // BinSequence.
+  AggregateHistory GenerateHistory(
+      std::chrono::milliseconds history_bin_size) const;
+
+  // Returns another BinSequence with the same traces, but a smaller range.
+  BinSequence LimitRange(size_t start_bin, size_t end_bin) const;
 
  private:
-  // How large each bin is.
-  std::chrono::microseconds bin_size_;
+  std::vector<PcapDataTraceBin> AccumulateBins() const;
 
-  // The bins.
-  std::vector<PcapDataTraceBin> bins_;
+  // Defines a range.
+  size_t start_bin_;
+  size_t end_bin_;
+
+  std::vector<TraceAndSlice> traces_;
 };
 
 // A collection of .pcap files that form a single trace.
@@ -132,11 +156,6 @@ class PcapDataTrace {
   static void Init(const PBPcapDataTrace& trace_pb,
                    const std::string& output_file);
 
-  // Returns the bins of a single slice of this trace as a bin sequence. If
-  // 'slice' is size_t::max will return bins for all slices combined.
-  std::unique_ptr<BinSequence> Bins(
-      size_t slice = std::numeric_limits<size_t>::max()) const;
-
   // Returns a packet generator that can be used in simulation to get packets
   // from the trace.
   std::unique_ptr<nc::htsim::PcapPacketGen> GetPacketGenerator(
@@ -146,10 +165,15 @@ class PcapDataTrace {
   void TCPSYNFlows(std::function<void(const TCPSYNFlowSummary& syn_flow_summay)>
                        callback) const;
 
-  // Calls a function with all binned data in the cache. Each bin will have a
-  // bin size of 'base_bin_size'.
-  void AllBins(size_t slice,
-               std::function<void(const PBBin& binned_data)> callback) const;
+  // Calls a function with bins between stat_bin (inclusive) and end_bin
+  // (exclusive) of a single slice of the trace.
+  void Bins(size_t slice, size_t start_bin, size_t end_bin,
+            std::function<void(const PBBin& binned_data)> callback) const;
+
+  std::set<size_t> AllSlices() const;
+
+  // Constructs a BinSequence with slices from the trace.
+  BinSequence ToSequence(const std::set<size_t>& slices) const;
 
   std::vector<std::string> trace_files() const;
   const TraceId& id() const { return id_; }
