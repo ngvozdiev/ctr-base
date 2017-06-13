@@ -28,6 +28,8 @@
 
 namespace ctr {
 
+constexpr size_t PcapDataTrace::kCacheSize;
+
 void PcapDataTraceBin::Combine(const PcapDataTraceBin& other) {
   bytes += other.bytes;
   packets += other.packets;
