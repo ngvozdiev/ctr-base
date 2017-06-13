@@ -65,6 +65,9 @@ target_link_libraries(ctr_base ncode gflags ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARI
 add_executable(stability_eval src/opt/stability_eval.cc)
 target_link_libraries(stability_eval ctr_base)
 
+add_executable(stability_eval_dependent src/opt/stability_eval_dependent.cc)
+target_link_libraries(stability_eval_dependent ctr_base)
+
 add_executable(multi_rate_eval src/prob_model/multi_rate_eval.cc)
 target_link_libraries(multi_rate_eval ctr_base)
 

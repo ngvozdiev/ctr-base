@@ -170,6 +170,10 @@ std::unique_ptr<RoutingConfiguration> CTROptimizer::LimitedUnlimitedDispatch(
     *unlimited_run = out_unlimited->Copy();
   }
 
+  if (!add_limits_) {
+    return out_unlimited;
+  }
+
   if (unlimited_oversubscription > 1) {
     return out_unlimited;
   }

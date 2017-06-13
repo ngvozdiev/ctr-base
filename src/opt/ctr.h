@@ -155,8 +155,8 @@ class CTRQuickOptimizer {
 
 class CTROptimizer : public Optimizer {
  public:
-  explicit CTROptimizer(PathProvider* path_provider)
-      : Optimizer(path_provider) {}
+  explicit CTROptimizer(PathProvider* path_provider, bool add_limits = true)
+      : Optimizer(path_provider), add_limits_(add_limits) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -215,6 +215,10 @@ class CTROptimizer : public Optimizer {
 
   // Holds a copy of the most recent return value of Optimize.
   std::unique_ptr<RoutingConfiguration> previous_;
+
+  // If true will run two different optimizations, one with limits to avoid
+  // reordering and another one without.
+  bool add_limits_;
 };
 
 }  // namespace ctr
