@@ -45,12 +45,17 @@ def Update(val):
     ab_demand = s_ab_demand.val
     ab_flows = s_ab_flows.val
 
-    cmd = './stability_eval_dependent --cd_link_gbps {} --cd_link_ms {} --cd_aggregate_gbps {} --cd_aggregate_flows {} --ab_link_gbps {} --ab_link_ms {} --ab_aggregate_gbps {} --ab_aggregate_flows {}'.format(cd_capacity, cd_delay, cd_demand, int(cd_flows), ab_capacity, ab_delay, ab_demand, int(ab_flows))
+    cmd = '../build/stability_eval_dependent --cd_link_gbps {} --cd_link_ms {} --cd_aggregate_gbps {} --cd_aggregate_flows {} --ab_link_gbps {} --ab_link_ms {} --ab_aggregate_gbps {} --ab_aggregate_flows {}'.format(cd_capacity, cd_delay, cd_demand, int(cd_flows), ab_capacity, ab_delay, ab_demand, int(ab_flows))
     output = subprocess.check_output(cmd, shell=True)
     per_path = output.strip().split('\n')
     ax.clear()
+    data = []
     for path_str in per_path:
         label, xy = path_str.split(':')
+        data.append((label, xy))
+    data.sort()
+
+    for label, xy in data:
         x, y = zip(*eval(xy))
         ax.plot(x, y, label=label)
     ax.legend()
