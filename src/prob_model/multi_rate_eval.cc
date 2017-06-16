@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
 
   std::vector<const ctr::PcapDataTrace*> traces;
   for (const ctr::TraceId& trace_id : all_ids) {
-    ctr::PcapDataTrace& pcap_trace = trace_store.GetTraceOrDie(trace_id);
+    ctr::PcapDataTrace& pcap_trace = *trace_store.GetTraceOrNull(trace_id);
     LOG(INFO) << "Parsing " << trace_id;
 
     traces.emplace_back(&pcap_trace);

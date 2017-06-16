@@ -15,12 +15,23 @@ namespace ctr {
 
 class RoutingSystem {
  public:
+  RoutingSystem(const ProbModelConfig& prob_model_config, Optimizer* optimizer,
+                PerAggregateMeanEstimatorFactory* mean_estimator_factory,
+                const nc::net::GraphStorage* graph)
+      : prob_model_config_(prob_model_config),
+        optimizer_(optimizer),
+        estimator_(mean_estimator_factory),
+        graph_(graph) {}
+
   virtual ~RoutingSystem() {}
 
   std::unique_ptr<RoutingConfiguration> Update(
       const std::map<AggregateId, AggregateHistory>& history);
 
  private:
+  // Fraction by which to scale up aggregates that do not fit.
+  static constexpr double kScaleFraction = 0.1;
+
   // Checks if all aggregates fit. Returns the set of aggregates that do not
   // fit.
   std::set<AggregateId> CheckWithProbModel(
@@ -37,16 +48,13 @@ class RoutingSystem {
   std::map<AggregateId, DemandAndFlowCount> GetInitialInput(
       const std::map<AggregateId, AggregateHistory>& histories);
 
-  // Fraction by which to scale up aggregates that do not fit.
-  double scale_fraction_;
-
   ProbModelConfig prob_model_config_;
 
   // Computes a new optimal solution.
-  std::unique_ptr<Optimizer> optimizer_;
+  Optimizer* optimizer_;
 
   // Predict each aggregate's level.
-  std::unique_ptr<MeanEstimator> estimator_;
+  MeanEstimator estimator_;
 
   const nc::net::GraphStorage* graph_;
 };

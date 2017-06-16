@@ -531,6 +531,18 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
   return std::make_tuple(total_added, total_removed, total_updated);
 }
 
+AggregateHistory::AggregateHistory(nc::net::Bandwidth rate, size_t bin_count,
+                                   std::chrono::milliseconds bin_size,
+                                   size_t flow_count)
+    : bin_size_(bin_size), flow_count_(flow_count) {
+  using namespace std::chrono;
+
+  double duration_sec = duration_cast<duration<double>>(bin_size_).count();
+  double rate_Bps = rate.bps() / 8.0;
+  uint64_t bin_size_bytes = duration_sec * rate_Bps;
+  bins_.resize(bin_count, bin_size_bytes);
+}
+
 nc::net::Bandwidth AggregateHistory::mean_rate() const {
   using namespace std::chrono;
   milliseconds total_time = bins_.size() * bin_size_;

@@ -50,6 +50,8 @@ class FFTRunner {
   std::vector<double> ComputeBackward(const std::vector<Complex>& input);
 
  private:
+  void InitPlans();
+
   size_t fft_size_;
 
   // This is where the computation is performed.
@@ -58,6 +60,10 @@ class FFTRunner {
   // The plans.
   fftw_plan plan_fw_;
   fftw_plan plan_bw_;
+
+  // Initializing the plans is relatively expensive, so they are not initalized
+  // until a call to Compute* is made.
+  bool init_;
 
   DISALLOW_COPY_AND_ASSIGN(FFTRunner);
 };
@@ -227,8 +233,8 @@ class ProbModel {
 
   // Sums up the bins from the query. Also populates the last argument with the
   // total of all max values of all histories of aggregates in the query.
-  std::vector<uint64_t> SumUpBins(const ProbModelQuery& query,
-                                  double* max_sum) const;
+  std::vector<uint64_t> SumUpBins(const ProbModelQuery& query, double* max_sum,
+                                  double* min_sum) const;
 
   // Returns the common bin size for all aggregates in the query.
   std::chrono::milliseconds GetBinSize(const ProbModelQuery& query) const;

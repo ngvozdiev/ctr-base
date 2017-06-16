@@ -92,6 +92,9 @@ class BinSequence {
   BinSequence(const std::vector<TraceAndSlice>& traces, size_t start_bin,
               size_t end_bin);
 
+  BinSequence(const BinSequence& other)
+      : BinSequence(other.traces_, other.start_bin_, other.end_bin_) {}
+
   // Combines this sequence's bins with another sequence's bins. Both
   // sequences should have the same number of bins and bin size.
   void Combine(const BinSequence& other);
@@ -214,8 +217,8 @@ class PcapTraceStore {
   PcapTraceStore(const std::string& file);
 
   // Gets a trace by id. The trace is owned by this object.
-  PcapDataTrace& GetTraceOrDie(const TraceId& id);
-  const PcapDataTrace& GetTraceOrDie(const TraceId& id) const;
+  PcapDataTrace* GetTraceOrNull(const TraceId& id);
+  const PcapDataTrace* GetTraceOrNull(const TraceId& id) const;
 
   std::string Summary() const;
 

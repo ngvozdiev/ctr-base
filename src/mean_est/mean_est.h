@@ -18,10 +18,20 @@ class PerAggregateMeanEstimator {
       const std::vector<double>& prev_estimates) = 0;
 };
 
+class PerAggregateMeanEstimatorFactory {
+ public:
+  virtual ~PerAggregateMeanEstimatorFactory() {}
+  virtual std::unique_ptr<PerAggregateMeanEstimator> NewEstimator(
+      const AggregateId& aggregate) = 0;
+};
+
 // Comes up with a mean value for the coming minute, based on means from
 // previous minutes.
 class MeanEstimator {
  public:
+  MeanEstimator(PerAggregateMeanEstimatorFactory* estimator_factory)
+      : estimator_factory_(estimator_factory) {}
+
   std::map<AggregateId, AggregateHistory> EstimateNext(
       const std::map<AggregateId, AggregateHistory>& current);
 
@@ -32,7 +42,11 @@ class MeanEstimator {
     std::unique_ptr<PerAggregateMeanEstimator> mean_estimator;
   };
 
+  // State associated with each aggregate.
   std::map<AggregateId, AggregateState> aggregates_;
+
+  // Produces estimators on demand.
+  PerAggregateMeanEstimatorFactory* estimator_factory_;
 };
 
 class MeanScaleEstimatorConfig {
@@ -78,6 +92,21 @@ class MeanScaleEstimator : public PerAggregateMeanEstimator {
   const MeanScaleEstimatorConfig config_;
   double level_;
   std::vector<double> decay_multipliers_;
+};
+
+class MeanScaleEstimatorFactory : public PerAggregateMeanEstimatorFactory {
+ public:
+  MeanScaleEstimatorFactory(const MeanScaleEstimatorConfig& config)
+      : config_(config) {}
+
+  virtual std::unique_ptr<PerAggregateMeanEstimator> NewEstimator(
+      const AggregateId& aggregate) override {
+    nc::Unused(aggregate);
+    return nc::make_unique<MeanScaleEstimator>(config_);
+  }
+
+ private:
+  const MeanScaleEstimatorConfig config_;
 };
 
 }  // namespace ctr

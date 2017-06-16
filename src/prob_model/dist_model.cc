@@ -8,23 +8,32 @@
 
 namespace ctr {
 
-FFTRunner::FFTRunner(size_t fft_size) : fft_size_(fft_size) {
-  out_.resize(fft_size);
-  fftw_complex* out_ptr = reinterpret_cast<fftw_complex*>(out_.data());
-  plan_fw_ =
-      fftw_plan_dft_1d(fft_size, out_ptr, out_ptr, FFTW_FORWARD, FFTW_MEASURE);
-  plan_bw_ =
-      fftw_plan_dft_1d(fft_size, out_ptr, out_ptr, FFTW_BACKWARD, FFTW_MEASURE);
-}
+FFTRunner::FFTRunner(size_t fft_size)
+    : fft_size_(fft_size), plan_fw_(nullptr), plan_bw_(nullptr), init_(false) {}
 
 FFTRunner::~FFTRunner() {
   fftw_destroy_plan(plan_fw_);
   fftw_destroy_plan(plan_bw_);
 }
 
+void FFTRunner::InitPlans() {
+  if (init_) {
+    return;
+  }
+
+  out_.resize(fft_size_);
+  fftw_complex* out_ptr = reinterpret_cast<fftw_complex*>(out_.data());
+  plan_fw_ =
+      fftw_plan_dft_1d(fft_size_, out_ptr, out_ptr, FFTW_FORWARD, FFTW_MEASURE);
+  plan_bw_ = fftw_plan_dft_1d(fft_size_, out_ptr, out_ptr, FFTW_BACKWARD,
+                              FFTW_MEASURE);
+  init_ = true;
+}
+
 const std::vector<Complex>& FFTRunner::ComputeForward(
     const std::vector<double>& input) {
   CHECK(fft_size_ >= input.size()) << fft_size_ << " vs " << input.size();
+  InitPlans();
   for (size_t i = 0; i < input.size(); ++i) {
     out_[i] = {input[i], 0.0};
   }
@@ -40,6 +49,7 @@ const std::vector<Complex>& FFTRunner::ComputeForward(
 std::vector<double> FFTRunner::ComputeBackward(
     const std::vector<Complex>& input) {
   CHECK(input.size() == out_.size());
+  InitPlans();
   std::copy(input.begin(), input.end(), out_.begin());
 
   fftw_execute(plan_bw_);
@@ -352,10 +362,12 @@ std::chrono::milliseconds ProbModel::GetBinSize(
 }
 
 std::vector<uint64_t> ProbModel::SumUpBins(const ProbModelQuery& query,
-                                           double* max_sum) const {
+                                           double* max_sum,
+                                           double* min_sum) const {
   std::vector<uint64_t> bins_total;
 
   *max_sum = 0;
+  *min_sum = 0;
   for (const auto& aggregate_and_fraction : query.aggregates) {
     const AggregateId& aggregate_id = aggregate_and_fraction.first;
     double fraction = aggregate_and_fraction.second;
@@ -364,16 +376,19 @@ std::vector<uint64_t> ProbModel::SumUpBins(const ProbModelQuery& query,
     const AggregateHistory* history = aggregate_state.history;
 
     double max_bin = 0;
+    double min_bin = std::numeric_limits<double>::max();
     const std::vector<uint64_t>& bins = history->bins();
     for (size_t i = 0; i < bins.size(); ++i) {
       double bin_scaled = bins[i] * fraction;
       max_bin = std::max(max_bin, bin_scaled);
+      min_bin = std::min(min_bin, bin_scaled);
 
       bins_total.resize(std::max(i + 1, bins_total.size()), 0);
       bins_total[i] += bin_scaled;
     }
 
     *max_sum += max_bin;
+    *min_sum += min_bin;
   }
 
   return bins_total;
@@ -483,13 +498,22 @@ ProbModelReply ProbModel::SingleQuery(const ProbModelQuery& query,
   CHECK(rate_bytes_per_bin > 0);
 
   double max_sum_bin;
-  std::vector<uint64_t> bins_summed = SumUpBins(query, &max_sum_bin);
+  double min_sum_bin;
+  std::vector<uint64_t> bins_summed =
+      SumUpBins(query, &max_sum_bin, &min_sum_bin);
 
   // max_sum_bin now contains the worst possible value a bin can have -- if all
   // peaks of the distributions of all aggregates are in sync. If this fits we
   // can shortcut the evaluation.
   if (max_sum_bin <= rate_bytes_per_bin) {
     return {true, std::chrono::milliseconds::max(), nc::net::Bandwidth::Zero()};
+  }
+
+  // If max and min sum bins are very close, then all bins are the same, need to
+  // just check if bytes_per_bin fits.
+  if (std::abs(max_sum_bin - min_sum_bin) < 1) {
+    return {max_sum_bin <= rate_bytes_per_bin, std::chrono::milliseconds::max(),
+            nc::net::Bandwidth::Zero()};
   }
 
   std::chrono::milliseconds max_queue_size = std::chrono::milliseconds::max();

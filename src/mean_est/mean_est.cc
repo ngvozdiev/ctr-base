@@ -17,10 +17,19 @@ std::map<AggregateId, AggregateHistory> MeanEstimator::EstimateNext(
     const AggregateHistory& history = aggregate_and_history.second;
 
     double rate_mbps = history.mean_rate().Mbps();
-    AggregateState& state = nc::FindOrDieNoPrint(aggregates_, aggregate_id);
+    AggregateState& state = aggregates_[aggregate_id];
+    if (state.previous_estimates.empty()) {
+      // Will bootstrap with the first estimate as current.
+      state.previous_estimates.emplace_back(rate_mbps);
+    }
+
     state.previous_values.emplace_back(rate_mbps);
     CHECK(state.previous_estimates.size() == state.previous_values.size());
-    CHECK(state.mean_estimator);
+
+    if (!state.mean_estimator) {
+      state.mean_estimator =
+          std::move(estimator_factory_->NewEstimator(aggregate_id));
+    }
 
     double next_mbps = state.mean_estimator->MeanForNextTimestep(
         state.previous_values, state.previous_estimates);
@@ -70,6 +79,7 @@ double MeanScaleEstimator::MeanForNextTimestep(
     level_ = scaled_back;
   } else {
     level_ *= decay_multiplier;
+    level_ = std::max(level_, scaled_back);
   }
 
   return level_;
@@ -89,12 +99,14 @@ double MeanScaleEstimator::RatioInWindow(
     double prev_value = prev_values[i];
     double prev_estimate = prev_estimates[i];
 
-    CHECK(prev_value <= prev_estimate);
+    //    CHECK(prev_value <= prev_estimate) << "at step " << i << " " <<
+    //    prev_value
+    //                                       << " vs " << prev_estimate;
     total_prev_values += prev_value;
     total_prev_estimates += prev_estimate;
   }
 
-  return total_prev_values / total_prev_estimates;
+  return std::max(0.0, total_prev_values / total_prev_estimates);
 }
 
 }  // namespace ctr

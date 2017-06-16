@@ -210,6 +210,11 @@ class AggregateHistory {
                    std::chrono::milliseconds bin_size, uint64_t flow_count)
       : bins_(bins), bin_size_(bin_size), flow_count_(flow_count) {}
 
+  // Generates a synthetic traffic matrix where all the bins have the same
+  // level. The level is chosen so that it matches a given per-second rate.
+  AggregateHistory(nc::net::Bandwidth rate, size_t bin_count,
+                   std::chrono::milliseconds bin_size, size_t flow_count);
+
   // The mean rate.
   nc::net::Bandwidth mean_rate() const;
 

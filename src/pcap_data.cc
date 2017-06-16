@@ -605,8 +605,12 @@ PcapTraceStore::PcapTraceStore(const std::string& file) : file_(file) {
       break;
     }
 
+    LOG(ERROR) << trace_pb.DebugString();
+
     TraceId id(trace_pb.id());
     auto new_trace = nc::make_unique<PcapDataTrace>(file, total_offset);
+    LOG(ERROR) << id.ToString() << " " << total_offset << " "
+               << new_trace->TotalSizeInFile();
     total_offset += new_trace->TotalSizeInFile();
 
     traces_[id] = std::move(new_trace);
@@ -785,12 +789,12 @@ std::string PcapDataTrace::Summary() const {
   return out;
 }
 
-PcapDataTrace& PcapTraceStore::GetTraceOrDie(const TraceId& id) {
-  return nc::FindSmartPtrOrDie(traces_, id);
+PcapDataTrace* PcapTraceStore::GetTraceOrNull(const TraceId& id) {
+  return nc::FindSmartPtrOrNull(traces_, id);
 }
 
-const PcapDataTrace& PcapTraceStore::GetTraceOrDie(const TraceId& id) const {
-  return nc::FindSmartPtrOrDie(traces_, id);
+const PcapDataTrace* PcapTraceStore::GetTraceOrNull(const TraceId& id) const {
+  return nc::FindSmartPtrOrNull(traces_, id);
 }
 
 std::string PcapTraceStore::Summary() const {

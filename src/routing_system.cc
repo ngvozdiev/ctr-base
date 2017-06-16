@@ -17,7 +17,7 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   // First we will predict what the history is expected to be on the next
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
-      estimator_->EstimateNext(history);
+      estimator_.EstimateNext(history);
 
   // The initial input will assign all aggregates to their mean level.
   std::map<AggregateId, DemandAndFlowCount> input =
@@ -149,7 +149,7 @@ bool RoutingSystem::ScaleUpAggregates(
     scaled_at_least_one = true;
 
     // Will move each aggregate 10% closer to its max rate.
-    double new_fraction = curr_fraction + scale_fraction_;
+    double new_fraction = curr_fraction + kScaleFraction;
     new_fraction = std::min(new_fraction, 1.0);
 
     double new_rate_mbps = mean_rate_mbps + range_mbps * new_fraction;
