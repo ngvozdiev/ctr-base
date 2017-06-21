@@ -1,4 +1,4 @@
-#include <gflags/gflags.h>
+#include "gflags/gflags.h"
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -32,10 +32,10 @@ static void PrintSummary() {
   }
 
   ctr::BinSequenceGenerator sequence_gen(all_sequences, 1000);
-  ctr::BinSequence bins = ctr::BinsAtRate(
-      nc::net::Bandwidth::FromGBitsPerSecond(100.0), std::chrono::minutes(1),
-      &sequence_gen);
-  LOG(ERROR)<< bins.MeanRate().Mbps();
+  ctr::BinSequence bins =
+      ctr::BinsAtRate(nc::net::Bandwidth::FromGBitsPerSecond(100.0),
+                      std::chrono::minutes(1), &sequence_gen);
+  LOG(ERROR) << bins.MeanRate().Mbps();
 }
 
 static std::vector<std::string> GetFiles(const std::string& files_string) {
@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
     ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
     ctr::TraceId id(*trace_id);
     if (trace_store.GetTraceOrNull(id) != nullptr) {
-      LOG(FATAL)<< "Will not modify trace with id " << id.ToString();
+      LOG(FATAL) << "Will not modify trace with id " << id.ToString();
     }
   }
 

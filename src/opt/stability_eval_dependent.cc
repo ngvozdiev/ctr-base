@@ -44,10 +44,10 @@ static constexpr size_t kSyntheticBinCount = 600;
 class StabilityEvalHarness {
  public:
   StabilityEvalHarness(TrafficMatrix* initial_tm, RoutingSystem* routing_system,
-                       const nc::net::GraphStorage* graph, size_t cycle_count)
+                       size_t cycle_count)
       : initial_tm_(initial_tm),
         routing_system_(routing_system),
-        graph_(graph) {
+        graph_(routing_system_->graph()) {
     Cycle(cycle_count);
   }
 
@@ -287,9 +287,8 @@ static void RunWithSimpleTopologyTwoAggregates() {
 
   MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
-  RoutingSystem routing_system({}, opt.get(), &estimator_factory, &graph);
-  StabilityEvalHarness harness(&initial_tm, &routing_system, &graph,
-                               FLAGS_steps);
+  RoutingSystem routing_system({}, opt.get(), &estimator_factory);
+  StabilityEvalHarness harness(&initial_tm, &routing_system, FLAGS_steps);
   harness.DumpAggregateVolumes();
   harness.DumpLinkFractions();
 }

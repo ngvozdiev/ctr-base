@@ -23,6 +23,8 @@ class Optimizer {
   virtual std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) = 0;
 
+  const nc::net::GraphStorage* graph() { return path_provider_->graph(); }
+
  protected:
   // Provides paths to the optimizer.
   PathProvider* path_provider_;

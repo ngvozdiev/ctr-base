@@ -10,20 +10,32 @@
 namespace ctr {
 
 NetMock::NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,
-                 size_t period_duration_bins,
+                 std::chrono::milliseconds period_duration,
                  std::chrono::milliseconds history_bin_size,
-                 RoutingSystem* routing_system,
-                 const nc::net::GraphStorage* graph)
-    : period_duration_bins_(period_duration_bins),
+                 RoutingSystem* routing_system)
+    : period_duration_(period_duration),
       history_bin_size_(history_bin_size),
       initial_sequences_(initial_sequences),
       routing_system_(routing_system),
-      graph_(graph) {
+      graph_(routing_system_->graph()) {
+  CHECK(!initial_sequences.empty());
   size_t min_bin_count = std::numeric_limits<size_t>::max();
-  for (const auto& bin_sequence : initial_sequences) {
-    size_t count = bin_sequence.second.bin_count();
+  std::chrono::milliseconds bin_size = std::chrono::milliseconds::zero();
+  for (const auto& id_and_bin_sequence : initial_sequences) {
+    const BinSequence& bin_sequence = id_and_bin_sequence.second;
+    if (bin_size == std::chrono::milliseconds::zero()) {
+      bin_size = std::chrono::duration_cast<std::chrono::milliseconds>(
+          bin_sequence.bin_size());
+    } else {
+      CHECK(bin_size == bin_sequence.bin_size());
+    }
+
+    size_t count = bin_sequence.bin_count();
     min_bin_count = std::min(min_bin_count, count);
   }
+
+  period_duration_bins_ = period_duration.count() / bin_size.count();
+  CHECK(period_duration_bins_ > 0);
   period_count_ = min_bin_count / period_duration_bins_;
 }
 
@@ -113,6 +125,7 @@ std::unique_ptr<RoutingConfiguration> NetMock::InitialOutput() const {
 void NetMock::Run() {
   std::unique_ptr<RoutingConfiguration> output = InitialOutput();
   for (size_t i = 0; i < period_count_; ++i) {
+    LOG(ERROR) << "Period " << i;
     std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(i);
     nc::net::GraphLinkMap<std::vector<double>> per_link_residuals =
         CheckOutput(period_sequences, *output);

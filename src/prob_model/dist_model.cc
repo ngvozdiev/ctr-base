@@ -16,7 +16,11 @@ FFTRunner::~FFTRunner() {
   fftw_destroy_plan(plan_bw_);
 }
 
+// fftw_plan_dft_1d should not be called from multiple threads.
+static std::mutex init_plans_mu;
+
 void FFTRunner::InitPlans() {
+  std::lock_guard<std::mutex> lock(init_plans_mu);
   if (init_) {
     return;
   }

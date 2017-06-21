@@ -296,8 +296,9 @@ class TCPFlowStateRecorder : public nc::htsim::PacketObserver {
 };
 
 template <typename T>
-static bool ReadDelimitedFrom(
-    T* message, google::protobuf::io::FileInputStream* file_input) {
+static bool ReadDelimitedFrom(T* message,
+                              google::protobuf::io::FileInputStream* file_input,
+                              size_t* bytes_read = nullptr) {
   // We create a new coded stream for each message.
   google::protobuf::io::CodedInputStream input(file_input);
 
@@ -321,6 +322,11 @@ static bool ReadDelimitedFrom(
 
   // Release the limit.
   input.PopLimit(limit);
+
+  if (bytes_read != nullptr) {
+    *bytes_read +=
+        (size + ::google::protobuf::io::CodedOutputStream::VarintSize32(size));
+  }
 
   return true;
 }
@@ -530,30 +536,35 @@ void PcapDataTrace::TCPSYNFlows(
   file_input->Close();
 }
 
-void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
-                         std::function<void(const PBBin& bin)> callback) const {
+size_t PcapDataTrace::Bins(
+    size_t slice, size_t start_bin, size_t end_bin, size_t offset_in_bin_stream,
+    std::function<void(const PBBin& bin)> callback) const {
   if (!callback) {
-    return;
+    return 0;
   }
 
   size_t count = trace_pb_.bin_count();
   size_t offset = offset_in_file_ + TraceProtobufSize() +
-                  trace_pb_.binned_data_start_offsets(slice);
+                  trace_pb_.binned_data_start_offsets(slice) +
+                  offset_in_bin_stream;
   auto file_input = GetInputStream(store_file_, offset);
 
   PBBin bin_pb;
+  size_t bytes_read = 0;
   for (size_t i = 0; i < count; ++i) {
     if (i >= end_bin) {
       break;
     }
 
-    CHECK(ReadDelimitedFrom(&bin_pb, file_input.get()));
+    CHECK(ReadDelimitedFrom(&bin_pb, file_input.get(), &bytes_read));
     if (i >= start_bin) {
       callback(bin_pb);
     }
     bin_pb.Clear();
   }
   file_input->Close();
+
+  return bytes_read;
 }
 
 std::vector<std::string> PcapDataTrace::trace_files() const {
@@ -635,7 +646,7 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() const {
     const PcapDataTrace* trace = trace_and_slice.trace;
     size_t slice = trace_and_slice.slice;
     size_t end_bin = trace_and_slice.start_bin + count;
-    trace->Bins(slice, trace_and_slice.start_bin, end_bin,
+    trace->Bins(slice, trace_and_slice.start_bin, end_bin, 0,
                 [&bytes, &packets](const PBBin& bin_pb) {
                   bytes += bin_pb.byte_count();
                   packets += bin_pb.packet_count();
@@ -705,7 +716,7 @@ std::vector<BinSequence> BinSequence::SplitOrDie(
 
 BinSequence BinSequence::CutFromStart(size_t offset_from_start) const {
   size_t count = bin_count();
-  CHECK(count >= offset_from_start);
+  CHECK(count >= offset_from_start) << count << " vs " << offset_from_start;
 
   std::vector<TraceAndSlice> new_traces = traces_;
   for (auto& trace_and_slice : new_traces) {
@@ -851,7 +862,8 @@ BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
     size_t bin_count = init_window.count() / bin_size.count();
     CHECK(bin_count > 0);
 
-    LOG(ERROR) << "ss " << bin_count;
+    LOG(ERROR) << "ss " << bin_count << " iw " << init_window.count() << " bs "
+               << bin_size.count();
     BinSequence sub_sequence = sequence.CutFromStart(bin_count);
     nc::net::Bandwidth rate = sub_sequence.MeanRate();
     LOG(ERROR) << "ss " << rate.Mbps();
@@ -859,9 +871,9 @@ BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
     if (rate <= rate_remaining) {
       rate_remaining -= rate;
       if (out) {
-        out->Combine(sub_sequence);
+        out->Combine(sequence);
       } else {
-        out = nc::make_unique<BinSequence>(sub_sequence);
+        out = nc::make_unique<BinSequence>(sequence);
       }
 
       continue;
@@ -871,8 +883,12 @@ BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
     bool found = false;
     while (true) {
       BinSequence new_sequence =
-          sub_sequence.SplitOrDie({fraction, 1 - fraction})[0];
-      nc::net::Bandwidth new_sequence_mean = new_sequence.MeanRate();
+          sequence.SplitOrDie({fraction, 1 - fraction})[0];
+      BinSequence new_sequence_subsequence =
+          new_sequence.CutFromStart(bin_count);
+
+      nc::net::Bandwidth new_sequence_mean =
+          new_sequence_subsequence.MeanRate();
       LOG(ERROR) << new_sequence_mean.Mbps() << " vs " << rate_remaining.Mbps();
       if (new_sequence_mean > rate_remaining) {
         // The new trace's rate overshoots the target, will reduce the fraction

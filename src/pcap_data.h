@@ -185,8 +185,9 @@ class PcapDataTrace {
 
   // Calls a function with bins between stat_bin (inclusive) and end_bin
   // (exclusive) of a single slice of the trace.
-  void Bins(size_t slice, size_t start_bin, size_t end_bin,
-            std::function<void(const PBBin& binned_data)> callback) const;
+  size_t Bins(size_t slice, size_t start_bin, size_t end_bin,
+              size_t offset_in_bin_stream,
+              std::function<void(const PBBin& binned_data)> callback) const;
 
   std::set<size_t> AllSlices() const;
 

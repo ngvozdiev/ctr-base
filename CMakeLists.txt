@@ -43,6 +43,11 @@ if (NOT CTR_BASE_DISABLE_TESTS)
    endmacro(add_test_exec)
 endif()
 
+SET(OLD_BUILD_TESTING ${BUILD_TESTING})
+SET(BUILD_TESTING False)
+add_subdirectory(external/gflags)
+SET(BUILD_TESTING ${OLD_BUILD_TESTING})
+
 if (NOT TARGET ncode_common)
    EXECUTE_PROCESS(COMMAND "git" "clone" "https://github.com/ngvozdiev/ncode-common.git" "${CMAKE_BINARY_DIR}/external/ncode_common")
    add_subdirectory(${CMAKE_BINARY_DIR}/external/ncode_common)
@@ -52,15 +57,11 @@ find_package(Protobuf REQUIRED)
 find_package(FFTW REQUIRED)
 include_directories(${PROTOBUF_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${FFTW_INCLUDES})
 include_directories(${CMAKE_SOURCE_DIR}/external ${CMAKE_BINARY_DIR}/external)
-SET(OLD_BUILD_TESTING ${BUILD_TESTING})
-SET(BUILD_TESTING False)
-add_subdirectory(external/gflags)
-SET(BUILD_TESTING ${OLD_BUILD_TESTING})
 
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
 set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h src/pcap_data.h src/flow_counter.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h src/routing_system.h src/net_mock.h)
 add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc src/pcap_data.cc src/flow_counter.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc src/mean_est/mean_est.cc src/routing_system.cc src/net_mock.cc)
-target_link_libraries(ctr_base ncode gflags ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
+target_link_libraries(ctr_base ncode gflags_nothreads ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
 
 add_executable(stability_eval src/opt/stability_eval.cc)
 target_link_libraries(stability_eval ctr_base)
@@ -76,6 +77,9 @@ target_link_libraries(mean_est_eval ctr_base)
 
 add_executable(pcap_data_util src/pcap_data_util)
 target_link_libraries(pcap_data_util ctr_base)
+
+add_executable(net_mock_util src/net_mock_util)
+target_link_libraries(net_mock_util ctr_base)
 
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)

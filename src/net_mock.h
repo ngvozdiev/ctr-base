@@ -20,9 +20,9 @@ namespace ctr {
 class NetMock {
  public:
   NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,
-          size_t period_duration_bins,
+          std::chrono::milliseconds period_duration,
           std::chrono::milliseconds history_bin_size,
-          RoutingSystem* routing_system, const nc::net::GraphStorage* graph);
+          RoutingSystem* routing_system);
 
   void Run();
 
@@ -46,6 +46,8 @@ class NetMock {
   std::unique_ptr<RoutingConfiguration> InitialOutput() const;
 
   size_t period_count_;
+
+  std::chrono::milliseconds period_duration_;
 
   size_t period_duration_bins_;
 

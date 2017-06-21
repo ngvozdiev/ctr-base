@@ -16,17 +16,18 @@ namespace ctr {
 class RoutingSystem {
  public:
   RoutingSystem(const ProbModelConfig& prob_model_config, Optimizer* optimizer,
-                PerAggregateMeanEstimatorFactory* mean_estimator_factory,
-                const nc::net::GraphStorage* graph)
+                PerAggregateMeanEstimatorFactory* mean_estimator_factory)
       : prob_model_config_(prob_model_config),
         optimizer_(optimizer),
         estimator_(mean_estimator_factory),
-        graph_(graph) {}
+        graph_(optimizer_->graph()) {}
 
   virtual ~RoutingSystem() {}
 
   std::unique_ptr<RoutingConfiguration> Update(
       const std::map<AggregateId, AggregateHistory>& history);
+
+  const nc::net::GraphStorage* graph() const { return graph_; }
 
  private:
   // Fraction by which to scale up aggregates that do not fit.
