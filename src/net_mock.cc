@@ -95,9 +95,10 @@ std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(size_t n) const {
     const AggregateId& aggregate = aggregate_and_bins.first;
     const BinSequence& bins = aggregate_and_bins.second;
 
+    BinSequence to_end = bins.CutFromStart(period_end_bin);
+    BinSequence period_sequence = to_end.Offset(period_start_bin);
     out.emplace(std::piecewise_construct, std::forward_as_tuple(aggregate),
-                std::forward_as_tuple(
-                    bins.LimitRange(period_start_bin, period_end_bin)));
+                std::forward_as_tuple(period_sequence));
   }
 
   return out;

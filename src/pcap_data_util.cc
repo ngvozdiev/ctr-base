@@ -24,7 +24,18 @@ DEFINE_bool(summarize, false, "If true will print a summary of the store");
 static void PrintSummary() {
   CHECK(!FLAGS_pcap_trace_store.empty());
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
-  std::cout << trace_store.Summary();
+  //  std::cout << trace_store.Summary();
+
+  std::vector<ctr::BinSequence> all_sequences;
+  for (const ctr::PcapDataTrace* data_trace : trace_store.AllTraces()) {
+    all_sequences.emplace_back(data_trace->ToSequence(data_trace->AllSlices()));
+  }
+
+  ctr::BinSequenceGenerator sequence_gen(all_sequences, 1000);
+  ctr::BinSequence bins = ctr::BinsAtRate(
+      nc::net::Bandwidth::FromGBitsPerSecond(100.0), std::chrono::minutes(1),
+      &sequence_gen);
+  LOG(ERROR)<< bins.MeanRate().Mbps();
 }
 
 static std::vector<std::string> GetFiles(const std::string& files_string) {
@@ -73,7 +84,7 @@ int main(int argc, char** argv) {
     ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
     ctr::TraceId id(*trace_id);
     if (trace_store.GetTraceOrNull(id) != nullptr) {
-      LOG(FATAL) << "Will not modify trace with id " << id.ToString();
+      LOG(FATAL)<< "Will not modify trace with id " << id.ToString();
     }
   }
 
