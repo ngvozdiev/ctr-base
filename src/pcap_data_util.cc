@@ -27,7 +27,7 @@ static void PrintSummary() {
   //  std::cout << trace_store.Summary();
 
   std::vector<ctr::BinSequence> all_sequences;
-  for (const ctr::PcapDataTrace* data_trace : trace_store.AllTraces()) {
+  for (ctr::PcapDataTrace* data_trace : trace_store.AllTraces()) {
     all_sequences.emplace_back(data_trace->ToSequence(data_trace->AllSlices()));
   }
 

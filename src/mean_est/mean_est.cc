@@ -27,8 +27,7 @@ std::map<AggregateId, AggregateHistory> MeanEstimator::EstimateNext(
     CHECK(state.previous_estimates.size() == state.previous_values.size());
 
     if (!state.mean_estimator) {
-      state.mean_estimator =
-          std::move(estimator_factory_->NewEstimator(aggregate_id));
+      state.mean_estimator = estimator_factory_->NewEstimator(aggregate_id);
     }
 
     double next_mbps = state.mean_estimator->MeanForNextTimestep(

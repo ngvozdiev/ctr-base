@@ -26,14 +26,10 @@ class NetMock {
 
   void Run();
 
-  const nc::net::GraphLinkMap<std::vector<double>>& all_residuals() const {
-    return all_residuals_;
-  }
-
  private:
   // Generates the input to the system.
   std::map<AggregateId, AggregateHistory> GenerateInput(
-      const std::map<AggregateId, BinSequence>& period_sequences) const;
+      std::map<AggregateId, BinSequence>* period_sequences) const;
 
   // For each link returns what the residuals will be for an optimization
   // output.
@@ -45,9 +41,10 @@ class NetMock {
 
   std::unique_ptr<RoutingConfiguration> InitialOutput() const;
 
-  size_t period_count_;
+  void RecordPathSplits(const RoutingConfiguration& routing_config,
+                        uint64_t timestamp) const;
 
-  std::chrono::milliseconds period_duration_;
+  size_t period_count_;
 
   size_t period_duration_bins_;
 
@@ -55,8 +52,6 @@ class NetMock {
 
   // For each aggregate, a series of bins.
   std::map<AggregateId, BinSequence> initial_sequences_;
-
-  nc::net::GraphLinkMap<std::vector<double>> all_residuals_;
 
   RoutingSystem* routing_system_;
 

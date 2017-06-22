@@ -16,6 +16,7 @@
 #include "opt/opt.h"
 #include "pcap_data.h"
 #include "routing_system.h"
+#include "metrics/metrics.h"
 
 DEFINE_string(topology, "", "A file with a topology");
 DEFINE_string(traffic_matrix, "", "A file with a traffic matrix");
@@ -26,20 +27,25 @@ DEFINE_uint64(history_bin_size_ms, 100, "How big each history bin is");
 DEFINE_uint64(initial_window_ms, 60000,
               "Initial window to guess a trace's rate");
 DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
+DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
+DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  nc::metrics::InitMetrics();
+
   CHECK(!FLAGS_topology.empty());
   CHECK(!FLAGS_traffic_matrix.empty());
 
   std::vector<std::string> node_order;
   nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
       nc::File::ReadFileToStringOrDie(FLAGS_topology), &node_order);
+  builder.ScaleCapacity(FLAGS_link_capacity_scale);
   nc::net::GraphStorage graph(builder);
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
   std::vector<ctr::BinSequence> all_bin_sequences;
-  for (const ctr::PcapDataTrace* trace : trace_store.AllTraces()) {
+  for (ctr::PcapDataTrace* trace : trace_store.AllTraces()) {
     all_bin_sequences.emplace_back(trace->ToSequence(trace->AllSlices()));
   }
   ctr::BinSequenceGenerator bin_sequence_generator(all_bin_sequences, 1000);
@@ -48,6 +54,7 @@ int main(int argc, char** argv) {
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
           nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
           &graph);
+  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
   std::map<ctr::AggregateId, ctr::BinSequence> initial_sequences;
   for (const auto& matrix_element : demand_matrix->elements()) {
@@ -61,6 +68,7 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
+    break;
   }
 
   ctr::PathProvider path_provider(&graph);

@@ -40,10 +40,10 @@ using BinList = std::vector<uint64_t>;
 // num_bytes where num_bytes is the number of bytes
 // transmitted during the duration of the bin (bin_size).
 static std::vector<BinList> GetAllBins(
-    const std::vector<const PcapDataTrace*>& traces,
+    const std::vector<PcapDataTrace*>& traces,
     std::chrono::milliseconds bin_size) {
   std::vector<BinList> all_bins;
-  for (const PcapDataTrace* trace : traces) {
+  for (PcapDataTrace* trace : traces) {
     BinSequence bin_sequence = trace->ToSequence(trace->AllSlices());
     std::vector<PcapDataTraceBin> bins = bin_sequence.AccumulateBins(bin_size);
 
@@ -114,7 +114,7 @@ static std::vector<nc::net::Bandwidth> GetRates(
   return out;
 }
 
-static void ParseBatch(const std::vector<const PcapDataTrace*>& traces,
+static void ParseBatch(const std::vector<PcapDataTrace*>& traces,
                        std::chrono::milliseconds bin_size,
                        std::chrono::milliseconds duration, size_t num_queues,
                        size_t batch_num, int max_step_count,
@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
   std::set<ctr::TraceId> all_ids = trace_store.AllIds();
 
-  std::vector<const ctr::PcapDataTrace*> traces;
+  std::vector<ctr::PcapDataTrace*> traces;
   for (const ctr::TraceId& trace_id : all_ids) {
     ctr::PcapDataTrace& pcap_trace = *trace_store.GetTraceOrNull(trace_id);
     LOG(INFO) << "Parsing " << trace_id;
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < FLAGS_num_batches; ++i) {
     std::shuffle(traces.begin(), traces.end(), rnd);
 
-    std::vector<const ctr::PcapDataTrace*> batch(FLAGS_batch_size);
+    std::vector<ctr::PcapDataTrace*> batch(FLAGS_batch_size);
     for (size_t j = 0; j < FLAGS_batch_size; ++j) {
       batch[j] = traces[j];
     }

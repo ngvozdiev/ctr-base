@@ -58,10 +58,19 @@ find_package(FFTW REQUIRED)
 include_directories(${PROTOBUF_INCLUDE_DIRS} ${CMAKE_BINARY_DIR} ${FFTW_INCLUDES})
 include_directories(${CMAKE_SOURCE_DIR}/external ${CMAKE_BINARY_DIR}/external)
 
+PROTOBUF_GENERATE_CPP(PROTO_METRICS_SRCS PROTO_METRICS_HDRS src/metrics/metrics.proto)
+set_property(SOURCE ${PROTO_METRICS_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS "-Wno-extended-offsetof")
+set(METRICS_HEADER_FILES src/metrics/metrics.h src/metrics/metrics_parser.h ${PROTO_METRICS_HDRS})
+add_library(metrics STATIC src/metrics/metrics.cc ${PROTO_METRICS_SRCS} ${METRICS_HEADER_FILES})
+target_link_libraries(metrics ${PROTOBUF_LIBRARIES} ncode gflags)
+
+add_library(metrics_parser src/metrics/metrics_parser.cc ${PROTO_METRICS_SRCS} ${METRICS_HEADER_FILES})
+target_link_libraries(metrics_parser ${PROTOBUF_LIBRARIES} ncode)
+
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
 set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/opt/opt_compare.h src/pcap_data.h src/flow_counter.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h src/routing_system.h src/net_mock.h)
 add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/opt/opt_compare.cc src/pcap_data.cc src/flow_counter.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc src/mean_est/mean_est.cc src/routing_system.cc src/net_mock.cc)
-target_link_libraries(ctr_base ncode gflags_nothreads ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
+target_link_libraries(ctr_base ncode gflags_nothreads metrics ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
 
 add_executable(stability_eval src/opt/stability_eval.cc)
 target_link_libraries(stability_eval ctr_base)
@@ -84,4 +93,13 @@ target_link_libraries(net_mock_util ctr_base)
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)
    add_test_exec(dist_model_test src/prob_model/dist_model_test.cc ctr_base)
+
+   add_library(metrics_test_util STATIC src/metrics/metrics_test_util.cc)
+   target_link_libraries(metrics_test_util metrics gtest)
+
+   add_test_exec(metrics_test src/metrics/metrics_test.cc metrics metrics_parser metrics_test_util)
+   add_test_exec(metrics_parser_test src/metrics/metrics_parser_test.cc metrics metrics_parser metrics_test_util)
 endif()
+
+add_executable(metrics_explore src/metrics/metrics_explore.cc)
+target_link_libraries(metrics_explore metrics_parser gflags)

@@ -1,0 +1,91 @@
+syntax = "proto2";
+package nc.metrics;
+
+// A metric field. Each metric is identified by its component id and a
+// number of fields.
+message PBMetricField {
+  enum Type {
+    UNKNOWN = 0;
+    STRING = 1;
+    UINT32 = 2;
+    UINT64 = 3;
+    BOOL = 4;
+  }
+
+  optional Type type = 1;
+
+  // Short human-readable description of the field.
+  optional string description = 2;
+  
+  oneof payload {
+    string string_value = 3;
+    uint64 uint64_value = 4;
+    uint32 uint32_value = 5;
+    bool bool_value = 6;
+  }
+}
+
+// Each different metric has a manifest entry which contains
+// additional information about the metric itself.
+message PBManifestEntry {
+  enum Type {
+    UNKNOWN = 0;
+    UINT32 = 1;  // 32-bit unsigned integer.
+    UINT64 = 2;  // 64-bit unsgined integer.
+    DOUBLE = 3;  // A double precision value.
+    STRING = 4;  // A string value.
+    BOOL = 5;  // A boolean.
+    BYTES = 6;  // A generic collection of bytes.
+    DISTRIBUTION = 7; // Information about a series of values.
+  }
+
+  // The type of values the metric associated with this manifest entry
+  // holds.
+  optional Type type = 1;
+  
+  // The fully qualified id of the metric. The address space is flat
+  // to keep things simple.
+  optional string id = 2;
+
+  // A human-readable description of the metric.
+  optional string description = 4;
+
+  // The fields that identify the metric.
+  repeated PBMetricField fields = 5;
+}
+
+// Metric entries are serialized objects wrapped in a protobuf. The
+// entry value can be any byte string, the application that reads the
+// entries should consult the manifest to find out how to treat
+// it. Each entry is serialized as part of a stream of entries, where
+// it is preceded by the size of the object and the index in the
+// manifest of the entry. This allows the reader to quickly figure out
+// if an entry is interesting or not, and skip over to the next one if
+// it isn't. The header that contains the size of the message and the
+// manifest index itself is not a protobuf, but just two unsigned 32 bit
+// integers on the wire.
+message PBMetricEntry {  
+  // The timestamp of this metric entry.
+  optional uint64 timestamp = 2;
+
+  oneof payload {
+    uint32 uint32_value = 4;
+    uint64 uint64_value = 5;
+    bool bool_value = 6;
+    double double_value = 7;
+    string string_value = 8;
+    BytesBlob bytes_value = 9;
+
+    // If the manifest entry index in the header that precedes the
+    // entry is -1 (max unsigned value), then the message carries a
+    // manifest manifest_entry field. This field will potentially
+    // contain information about the indices of metric entries to
+    // follow.
+    PBManifestEntry manifest_entry = 11;
+  }
+}
+
+// A message that can carry a sequence of bytes.
+message BytesBlob {
+  optional bytes bytes_value = 1;
+}

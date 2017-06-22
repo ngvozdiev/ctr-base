@@ -6,15 +6,25 @@
 
 #include "ncode_common/src/map_util.h"
 #include "routing_system.h"
+#include "metrics/metrics.h"
 
 namespace ctr {
+
+static auto* link_utilization_metric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "link_utilization", "Records per-link utilization", "Link source",
+            "Link destination");
+
+static auto* path_split_metric =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
+        "path_fraction", "Records per-path split fractions", "Path");
 
 NetMock::NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,
                  std::chrono::milliseconds period_duration,
                  std::chrono::milliseconds history_bin_size,
                  RoutingSystem* routing_system)
-    : period_duration_(period_duration),
-      history_bin_size_(history_bin_size),
+    : history_bin_size_(history_bin_size),
       initial_sequences_(initial_sequences),
       routing_system_(routing_system),
       graph_(routing_system_->graph()) {
@@ -41,11 +51,11 @@ NetMock::NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,
 
 // Generates the input to the system.
 std::map<AggregateId, AggregateHistory> NetMock::GenerateInput(
-    const std::map<AggregateId, BinSequence>& period_sequences) const {
+    std::map<AggregateId, BinSequence>* period_sequences) const {
   std::map<AggregateId, AggregateHistory> input;
-  for (const auto& aggregate_and_bins : period_sequences) {
+  for (auto& aggregate_and_bins : *period_sequences) {
     const AggregateId& aggregate = aggregate_and_bins.first;
-    const BinSequence& bins = aggregate_and_bins.second;
+    BinSequence& bins = aggregate_and_bins.second;
 
     input.emplace(
         std::piecewise_construct, std::forward_as_tuple(aggregate),
@@ -117,30 +127,69 @@ std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(size_t n) const {
 }
 
 std::unique_ptr<RoutingConfiguration> NetMock::InitialOutput() const {
-  std::map<AggregateId, AggregateHistory> input =
-      GenerateInput(GetNthPeriod(0));
+  std::map<AggregateId, BinSequence> zero_period = GetNthPeriod(0);
+  std::map<AggregateId, AggregateHistory> input = GenerateInput(&zero_period);
   return routing_system_->Update(input);
+}
+
+static size_t CheckSameSize(
+    const nc::net::GraphLinkMap<std::vector<double>>& values) {
+  size_t i = 0;
+  for (const auto& link_and_values : values) {
+    const std::vector<double>& v = *link_and_values.second;
+    CHECK(v.size() > 0);
+    if (i == 0) {
+      i = v.size();
+    } else {
+      CHECK(i == v.size());
+    }
+  }
+
+  return i;
+}
+
+void NetMock::RecordPathSplits(const RoutingConfiguration& routing_config,
+                             uint64_t timestamp) const {
+  for (const auto& aggregate_and_routes : routing_config.routes()) {
+    for (const auto& route_and_fraction : aggregate_and_routes.second) {
+      std::string path = route_and_fraction.first->ToStringNoPorts(*graph_);
+      double fraction = route_and_fraction.second;
+      auto* handle = path_split_metric->GetHandle(path);
+      handle->AddValueWithTimestamp(timestamp, fraction);
+    }
+  }
 }
 
 void NetMock::Run() {
   std::unique_ptr<RoutingConfiguration> output = InitialOutput();
+  RecordPathSplits(*output, 0);
+  size_t timestamp = 0;
   for (size_t i = 0; i < period_count_; ++i) {
     LOG(ERROR) << "Period " << i;
+
     std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(i);
     nc::net::GraphLinkMap<std::vector<double>> per_link_residuals =
         CheckOutput(period_sequences, *output);
+    size_t num_residuals = CheckSameSize(per_link_residuals);
+
     for (auto link_and_residuals : per_link_residuals) {
       nc::net::GraphLinkIndex link = link_and_residuals.first;
       std::vector<double>& residuals = *link_and_residuals.second;
 
-      std::vector<double>& all_residuals = all_residuals_[link];
-      all_residuals.insert(all_residuals.end(), residuals.begin(),
-                           residuals.end());
+      const nc::net::GraphLink* link_ptr = graph_->GetLink(link);
+      auto* handle = link_utilization_metric->GetHandle(link_ptr->src_id(),
+                                                        link_ptr->dst_id());
+      size_t t = timestamp;
+      for (double v : residuals) {
+        handle->AddValueWithTimestamp(t++, v);
+      }
     }
 
+    timestamp += num_residuals;
     std::map<AggregateId, AggregateHistory> input =
-        GenerateInput(period_sequences);
+        GenerateInput(&period_sequences);
     output = routing_system_->Update(input);
+    RecordPathSplits(*output, timestamp);
   }
 }
 

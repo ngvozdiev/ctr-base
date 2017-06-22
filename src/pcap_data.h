@@ -77,10 +77,10 @@ struct PcapDataTraceBin {
   // Combines this bin with another.
   void Combine(const PcapDataTraceBin& other);
 
-  uint64_t bytes = 0;
-  uint64_t packets = 0;
-  uint64_t flows_enter = 0;
-  uint64_t flows_exit = 0;
+  uint64_t bytes;
+  uint64_t packets;
+  uint64_t flows_enter;
+  uint64_t flows_exit;
 };
 
 class PcapDataTrace;
@@ -89,7 +89,7 @@ class PcapDataTrace;
 class BinSequence {
  public:
   struct TraceAndSlice {
-    const PcapDataTrace* trace;
+    PcapDataTrace* trace;
     size_t slice;
     size_t start_bin;
     size_t end_bin;
@@ -116,7 +116,7 @@ class BinSequence {
   }
 
   // Total bytes and packets in the whole sequence.
-  std::pair<uint64_t, uint64_t> TotalBytesAndPackets() const;
+  std::pair<uint64_t, uint64_t> TotalBytesAndPackets();
 
   // Splits this sequence into a number of smaller sequences. Each will have the
   // same number of bins, but will only carry a part of this sequence's
@@ -131,13 +131,12 @@ class BinSequence {
   // function returns B_i - B for each bin where B_i is the number of bytes in
   // the bin. If all values are positive this bin sequence will fit through a
   // link of rate 'rate' without causing congestion.
-  std::vector<double> Residuals(nc::net::Bandwidth rate) const;
+  std::vector<double> Residuals(nc::net::Bandwidth rate);
 
   // Generates an AggregateHistory from the entire range of this BinSequence.
   // Each of the history's bins will combine 'history_bin_size' bins from this
   // BinSequence.
-  AggregateHistory GenerateHistory(
-      std::chrono::milliseconds history_bin_size) const;
+  AggregateHistory GenerateHistory(std::chrono::milliseconds history_bin_size);
 
   // Returns another BinSequence with the same traces, but only contains the
   // first 'offset_from_start' bins.
@@ -150,16 +149,16 @@ class BinSequence {
   // this trace's base bin size (returned by bin_size()) no rebinning will
   // happen. If it is a multiple of the base bin size will combine every N bins.
   std::vector<PcapDataTraceBin> AccumulateBins(
-      std::chrono::microseconds bin_size) const;
+      std::chrono::microseconds bin_size);
 
   // Sum of all bytes (in bits) divided by bin_size * bin_count in seconds.
-  nc::net::Bandwidth MeanRate() const;
+  nc::net::Bandwidth MeanRate();
 
  private:
   // Combines every 'bin_size_multiplier' bins into a PcapDataTraceBin and
   // returns the sequence.
   std::vector<PcapDataTraceBin> AccumulateBinsPrivate(
-      size_t bin_size_multiplier) const;
+      size_t bin_size_multiplier);
 
   std::vector<TraceAndSlice> traces_;
 };
@@ -168,6 +167,7 @@ class BinSequence {
 class PcapDataTrace {
  public:
   static constexpr size_t kCacheSize = 10000000;
+  static constexpr size_t kHintsSize = 100;
 
   // Constructs a PcapDataTrace from a partially populated 'trace_pb'. Will
   // append persistent information to 'output_file'.
@@ -185,14 +185,13 @@ class PcapDataTrace {
 
   // Calls a function with bins between stat_bin (inclusive) and end_bin
   // (exclusive) of a single slice of the trace.
-  size_t Bins(size_t slice, size_t start_bin, size_t end_bin,
-              size_t offset_in_bin_stream,
-              std::function<void(const PBBin& binned_data)> callback) const;
+  void Bins(size_t slice, size_t start_bin, size_t end_bin,
+            std::function<void(const PBBin& binned_data)> callback);
 
   std::set<size_t> AllSlices() const;
 
   // Constructs a BinSequence with slices from the trace.
-  BinSequence ToSequence(const std::set<size_t>& slices) const;
+  BinSequence ToSequence(const std::set<size_t>& slices);
 
   std::vector<std::string> trace_files() const;
   const TraceId& id() const { return id_; }
@@ -202,7 +201,7 @@ class PcapDataTrace {
   const std::chrono::microseconds base_bin_size() const;
 
   // Summarizes the trace in a human-readable form.
-  std::string Summary() const;
+  std::string Summary();
 
   // Creates a new trace, at a given file at some offset.
   PcapDataTrace(const std::string& file, size_t offset);
@@ -222,6 +221,11 @@ class PcapDataTrace {
 
   // The id.
   TraceId id_;
+
+  // For each slice stores a bin number and an offset---bins with a bin number
+  // larger or equal to this number are offset many bytes away from the start of
+  // the slice's bins.
+  std::map<size_t, std::map<size_t, size_t>> bin_start_hints_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };
@@ -243,8 +247,8 @@ class PcapTraceStore {
     return out;
   }
 
-  std::vector<const PcapDataTrace*> AllTraces() const {
-    std::vector<const PcapDataTrace*> out;
+  std::vector<PcapDataTrace*> AllTraces() {
+    std::vector<PcapDataTrace*> out;
     for (const auto& id_and_trace : traces_) {
       out.emplace_back(id_and_trace.second.get());
     }
