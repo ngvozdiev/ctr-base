@@ -128,7 +128,7 @@ class BinSequence {
       const std::vector<double>& fractions) const;
 
   std::vector<BinSequence> PreciseSplitOrDie(
-        const std::vector<double>& fractions) const;
+      const std::vector<double>& fractions) const;
 
   // Returns as many integers as there are bins. Given a rate, we can compute
   // how many bytes (B) will be transmitted for the period of a single bin. This
@@ -192,6 +192,14 @@ class PcapDataTrace {
   void Bins(size_t slice, size_t start_bin, size_t end_bin,
             std::function<void(const PBBin& binned_data)> callback);
 
+  // Like Bins, but combines multiple slices into one. Will also pull the
+  // results from the bin cache if possible.
+  std::vector<PcapDataTraceBin> BinsCombined(const std::set<size_t>& slices,
+                                             size_t start_bin, size_t end_bin);
+
+  // Combines all bins for a set of slices and stores them in the cache.
+  void AddToBinCache(const std::set<size_t>& slices);
+
   std::set<size_t> AllSlices() const;
 
   // Constructs a BinSequence with slices from the trace.
@@ -230,6 +238,9 @@ class PcapDataTrace {
   // larger or equal to this number are offset many bytes away from the start of
   // the slice's bins.
   std::map<size_t, std::map<size_t, size_t>> bin_start_hints_;
+
+  // Cached, combined bins for series of slices.
+  std::map<std::set<size_t>, std::vector<PcapDataTraceBin>> bins_cache_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };

@@ -16,10 +16,6 @@ static auto* link_utilization_metric =
             "link_utilization", "Records per-link utilization", "Link source",
             "Link destination");
 
-static auto* path_split_metric =
-    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
-        "path_fraction", "Records per-path split fractions", "Path");
-
 NetMock::NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,
                  std::chrono::milliseconds period_duration,
                  std::chrono::milliseconds history_bin_size,
@@ -130,7 +126,7 @@ std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(size_t n) const {
 std::unique_ptr<RoutingConfiguration> NetMock::InitialOutput() const {
   std::map<AggregateId, BinSequence> zero_period = GetNthPeriod(0);
   std::map<AggregateId, AggregateHistory> input = GenerateInput(&zero_period);
-  return routing_system_->Update(input);
+  return routing_system_->Update(input, 0);
 }
 
 static size_t CheckSameSize(
@@ -149,21 +145,8 @@ static size_t CheckSameSize(
   return i;
 }
 
-void NetMock::RecordPathSplits(const RoutingConfiguration& routing_config,
-                               uint64_t timestamp) const {
-  for (const auto& aggregate_and_routes : routing_config.routes()) {
-    for (const auto& route_and_fraction : aggregate_and_routes.second) {
-      std::string path = route_and_fraction.first->ToStringNoPorts(*graph_);
-      double fraction = route_and_fraction.second;
-      auto* handle = path_split_metric->GetHandle(path);
-      handle->AddValueWithTimestamp(timestamp, fraction);
-    }
-  }
-}
-
 void NetMock::Run() {
   std::unique_ptr<RoutingConfiguration> output = InitialOutput();
-  RecordPathSplits(*output, 0);
   size_t timestamp = 0;
   for (size_t i = 0; i < period_count_; ++i) {
     LOG(ERROR) << "Period " << i;
@@ -189,8 +172,7 @@ void NetMock::Run() {
     timestamp += num_residuals;
     std::map<AggregateId, AggregateHistory> input =
         GenerateInput(&period_sequences);
-    output = routing_system_->Update(input);
-    RecordPathSplits(*output, timestamp);
+    output = routing_system_->Update(input, timestamp);
   }
 }
 

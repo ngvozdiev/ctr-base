@@ -41,9 +41,6 @@ class NetMock {
 
   std::unique_ptr<RoutingConfiguration> InitialOutput() const;
 
-  void RecordPathSplits(const RoutingConfiguration& routing_config,
-                        uint64_t timestamp) const;
-
   size_t period_count_;
 
   size_t period_duration_bins_;

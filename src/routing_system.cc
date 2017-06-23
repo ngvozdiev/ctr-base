@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 #include <algorithm>
+#include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -9,6 +11,7 @@
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/map_util.h"
 #include "ncode_common/src/net/net_common.h"
+#include "metrics/metrics.h"
 
 namespace ctr {
 
@@ -41,16 +44,116 @@ static auto* per_aggregate_predicted_input =
             "generating the output (in Mbps).",
             "Aggregate source", "Aggregate destination");
 
+static auto* per_aggregate_output_total_delay =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+            "aggregate_total_delay_micros",
+            "Sum of flow_count * path_delay for each of the aggregate's paths "
+            "in the output",
+            "Aggregate source", "Aggregate destination");
+
+static auto* per_aggregate_output_total_delay_rel =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+            "aggregate_total_delay_rel_micros",
+            "Sum of flow_count * (path_delay - sp_delay) for each of the "
+            "aggregate's paths in the output",
+            "Aggregate source", "Aggregate destination");
+
+static auto* per_aggregate_output_total_delay_rel_change =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "aggregate_total_delay_rel_change",
+            "Sum of flow_count * (path_delay - sp_delay) / sp_delay for each "
+            "of the aggregate's paths in the output",
+            "Aggregate source", "Aggregate destination");
+
 static auto* path_output_split =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
         "path_fraction", "Records output per-path split fractions", "Path");
 
+#define ADD_AGGREGATE_MAP_TO_METRIC(history_map, metric, v)             \
+  if (metric_timestamp != std::numeric_limits<uint64_t>::max()) {       \
+    for (const auto& aggregate_id_and_history : history_map) {          \
+      const AggregateId& aggregate_id = aggregate_id_and_history.first; \
+      const auto& map_value = aggregate_id_and_history.second;          \
+      std::string src_id = graph_->GetNode(aggregate_id.src())->id();   \
+      std::string dst_id = graph_->GetNode(aggregate_id.dst())->id();   \
+      auto* handle = metric->GetHandle(src_id, dst_id);                 \
+      handle->AddValueWithTimestamp(metric_timestamp, v);               \
+    }                                                                   \
+  }
+
+static void RecordPathSplitsAndTotalDelay(
+    const RoutingConfiguration& routing_config,
+    const nc::net::GraphStorage& graph, uint64_t timestamp) {
+  if (timestamp == std::numeric_limits<uint64_t>::max()) {
+    return;
+  }
+
+  for (const auto& aggregate_and_routes : routing_config.routes()) {
+    const AggregateId& aggregate_id = aggregate_and_routes.first;
+    std::string src_id = graph.GetNode(aggregate_id.src())->id();
+    std::string dst_id = graph.GetNode(aggregate_id.dst())->id();
+
+    nc::net::Delay sp_delay = aggregate_id.GetSPDelay(graph);
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(routing_config.demands(), aggregate_id);
+    size_t flow_count = demand_and_flow_count.second;
+
+    double total_delay = 0;
+    double total_delay_rel = 0;
+    double total_delay_rel_change = 0;
+    for (const auto& route_and_fraction : aggregate_and_routes.second) {
+      const nc::net::Walk* path = route_and_fraction.first;
+      nc::net::Delay delay = path->delay();
+
+      total_delay += delay.count() * flow_count;
+      total_delay_rel += (delay.count() - sp_delay.count()) * flow_count;
+      total_delay_rel_change += ((delay.count() - sp_delay.count()) /
+                                 static_cast<double>(sp_delay.count())) *
+                                flow_count;
+
+      std::string path_string = path->ToStringNoPorts(graph);
+      double fraction = route_and_fraction.second;
+      auto* handle = path_output_split->GetHandle(path_string);
+      handle->AddValueWithTimestamp(timestamp, fraction);
+    }
+
+    using namespace std::chrono;
+    microseconds total_delay_micros = duration_cast<microseconds>(
+        nc::net::Delay(static_cast<uint64_t>(total_delay)));
+    microseconds total_delay_rel_micros = duration_cast<microseconds>(
+        nc::net::Delay(static_cast<uint64_t>(total_delay_rel)));
+
+    per_aggregate_output_total_delay->GetHandle(src_id, dst_id)
+        ->AddValueWithTimestamp(timestamp, total_delay_micros.count());
+    per_aggregate_output_total_delay_rel->GetHandle(src_id, dst_id)
+        ->AddValueWithTimestamp(timestamp, total_delay_rel_micros.count());
+    per_aggregate_output_total_delay_rel_change->GetHandle(src_id, dst_id)
+        ->AddValueWithTimestamp(timestamp, total_delay_rel_change);
+  }
+}
+
 std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
-    const std::map<AggregateId, AggregateHistory>& history) {
+    const std::map<AggregateId, AggregateHistory>& history,
+    uint64_t metric_timestamp) {
+  // Will first record the raw input.
+  ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_mean_input,
+                              map_value.mean_rate().Mbps());
+
+  // And flow counts.
+  ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_flow_count_input,
+                              map_value.flow_count());
+
   // First we will predict what the history is expected to be on the next
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
       estimator_.EstimateNext(history);
+
+  // Record the predicted mean level.
+  ADD_AGGREGATE_MAP_TO_METRIC(next_history, per_aggregate_mean_predicted_input,
+                              map_value.mean_rate().Mbps());
 
   // The initial input will assign all aggregates to their mean level.
   std::map<AggregateId, DemandAndFlowCount> input =
@@ -78,7 +181,14 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     }
   }
 
+  // Will record the input that generated the output.
+  ADD_AGGREGATE_MAP_TO_METRIC(input, per_aggregate_predicted_input,
+                              map_value.first.Mbps());
+
+  // And also the per-path splits from the output.
   CHECK(output);
+  RecordPathSplitsAndTotalDelay(*output, *graph_, metric_timestamp);
+
   return output;
 }
 

@@ -30,6 +30,7 @@ DEFINE_uint64(initial_window_ms, 60000,
 DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
+DEFINE_string(opt, "CTR", "The optimizer to use");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -73,11 +74,20 @@ int main(int argc, char** argv) {
   }
 
   ctr::PathProvider path_provider(&graph);
-//  ctr::ShortestPathOptimizer sp_opt(&path_provider);
-  ctr::CTROptimizer opt(&path_provider, false);
+  std::unique_ptr<ctr::Optimizer> opt;
+  if (FLAGS_opt == "CTR") {
+    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider, false);
+  } else if (FLAGS_opt == "B4") {
+    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false);
+  } else if (FLAGS_opt == "B4(P)") {
+    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true);
+  } else if (FLAGS_opt == "MinMax") {
+    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider);
+  }
+
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
-  ctr::RoutingSystem routing_system({}, &opt, &estimator_factory);
+  ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
 
   ctr::NetMock net_mock(
       initial_sequences, std::chrono::milliseconds(FLAGS_period_duration_ms),

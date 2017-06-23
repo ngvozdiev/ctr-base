@@ -29,7 +29,8 @@ DEFINE_bool(plot_combined, false,
             "produce one plot.");
 DEFINE_bool(plot_limiting, false,
             "If true will only plot the last value of each field set");
-DEFINE_uint64(line_plot_bin_size, 1, "Will bin every N values based on "
+DEFINE_uint64(line_plot_bin_size, 1,
+              "Will bin every N values based on "
               "timestamp and plot the means in each bin.");
 DEFINE_uint64(plot_timestamp_min, 0, "Min timestamp to plot");
 DEFINE_uint64(plot_timestamp_max, std::numeric_limits<uint64_t>::max(),
@@ -58,7 +59,9 @@ static std::string DataSummaryToString(
   std::vector<double> percentiles = Percentiles(&all_data, 10);
   return Substitute("$0 values, min/max timestamps: $1/$2, percentiles: [$3]",
                     data.size(), start_timestamp, end_timestamp,
-                    Join(percentiles, ","));
+                    Join(percentiles, ",", [](double v) {
+                      return nc::ToStringMaxDecimals(v, 3);
+                    }));
 }
 
 // Plots a CDF of the values in one (or more) metrics. The input map is as

@@ -25,7 +25,8 @@ class RoutingSystem {
   virtual ~RoutingSystem() {}
 
   std::unique_ptr<RoutingConfiguration> Update(
-      const std::map<AggregateId, AggregateHistory>& history);
+      const std::map<AggregateId, AggregateHistory>& history,
+      uint64_t metric_timestamp = std::numeric_limits<uint64_t>::max());
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 
