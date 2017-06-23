@@ -83,7 +83,8 @@ nc::net::GraphLinkMap<std::vector<double>> NetMock::CheckOutput(
 
     // For each of the aggregate's paths, the bins that go on that path.
     std::vector<BinSequence> aggregate_split =
-        nc::FindOrDieNoPrint(period_sequences, aggregate).SplitOrDie(fractions);
+        nc::FindOrDieNoPrint(period_sequences, aggregate)
+            .PreciseSplitOrDie(fractions);
 
     for (size_t i = 0; i < routes.size(); ++i) {
       const nc::net::Walk* path = routes[i].first;
@@ -149,7 +150,7 @@ static size_t CheckSameSize(
 }
 
 void NetMock::RecordPathSplits(const RoutingConfiguration& routing_config,
-                             uint64_t timestamp) const {
+                               uint64_t timestamp) const {
   for (const auto& aggregate_and_routes : routing_config.routes()) {
     for (const auto& route_and_fraction : aggregate_and_routes.second) {
       std::string path = route_and_fraction.first->ToStringNoPorts(*graph_);

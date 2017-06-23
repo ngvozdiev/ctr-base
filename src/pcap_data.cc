@@ -30,11 +30,11 @@ namespace ctr {
 
 constexpr size_t PcapDataTrace::kCacheSize;
 
-void PcapDataTraceBin::Combine(const PcapDataTraceBin& other) {
-  bytes += other.bytes;
-  packets += other.packets;
-  flows_enter += other.flows_enter;
-  flows_exit += other.flows_exit;
+void PcapDataTraceBin::Combine(const PcapDataTraceBin& other, double fraction) {
+  bytes += other.bytes * fraction;
+  packets += other.packets * fraction;
+  flows_enter += other.flows_enter * fraction;
+  flows_exit += other.flows_exit * fraction;
 }
 
 struct TCPFlowRecord {
@@ -297,31 +297,28 @@ class TCPFlowStateRecorder : public nc::htsim::PacketObserver {
 
 template <typename T>
 static bool ReadDelimitedFrom(T* message,
-                              google::protobuf::io::FileInputStream* file_input,
+                              google::protobuf::io::CodedInputStream* input,
                               size_t* bytes_read = nullptr) {
-  // We create a new coded stream for each message.
-  google::protobuf::io::CodedInputStream input(file_input);
-
   // Read the size.
   uint32_t size;
-  if (!input.ReadVarint32(&size)) {
+  if (!input->ReadVarint32(&size)) {
     return false;
   }
 
   // Tell the stream not to read beyond that size.
-  google::protobuf::io::CodedInputStream::Limit limit = input.PushLimit(size);
+  google::protobuf::io::CodedInputStream::Limit limit = input->PushLimit(size);
 
   // Parse the message.
-  if (!message->MergeFromCodedStream(&input)) {
+  if (!message->MergeFromCodedStream(input)) {
     return false;
   }
 
-  if (!input.ConsumedEntireMessage()) {
+  if (!input->ConsumedEntireMessage()) {
     return false;
   }
 
   // Release the limit.
-  input.PopLimit(limit);
+  input->PopLimit(limit);
 
   if (bytes_read != nullptr) {
     *bytes_read +=
@@ -486,7 +483,8 @@ static PBPcapDataTrace GetPcapDataTrace(const std::string& file,
                                         size_t offset) {
   PBPcapDataTrace out;
   auto input_stream = GetInputStream(file, offset);
-  ReadDelimitedFrom(&out, input_stream.get());
+  google::protobuf::io::CodedInputStream coded_input(input_stream.get());
+  ReadDelimitedFrom(&out, &coded_input);
 
   return out;
 }
@@ -530,9 +528,10 @@ void PcapDataTrace::TCPSYNFlows(
                   trace_pb_.flow_summaries_start_offset();
   auto file_input = GetInputStream(store_file_, offset);
 
+  google::protobuf::io::CodedInputStream coded_input(file_input.get());
   TCPSYNFlowSummary flow_summary;
   for (size_t i = 0; i < count; ++i) {
-    CHECK(ReadDelimitedFrom(&flow_summary, file_input.get()));
+    CHECK(ReadDelimitedFrom(&flow_summary, &coded_input));
     callback(flow_summary);
     flow_summary.Clear();
   }
@@ -567,7 +566,6 @@ void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
   std::map<size_t, size_t>& hints = bin_start_hints_[slice];
   size_t bin_offset, byte_offset;
   std::tie(bin_offset, byte_offset) = FindStartBinOffset(hints, start_bin);
-  std::tie(bin_offset, byte_offset) = std::make_pair(0ul, 0ul);
   size_t offset = offset_in_file_ + TraceProtobufSize() +
                   trace_pb_.binned_data_start_offsets(slice) + byte_offset;
   auto file_input = GetInputStream(store_file_, offset);
@@ -575,9 +573,10 @@ void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
   PBBin bin_pb;
   size_t bytes_read = byte_offset;
 
+  google::protobuf::io::CodedInputStream coded_input(file_input.get());
   size_t i = bin_offset;
   for (; i < end_bin; ++i) {
-    CHECK(ReadDelimitedFrom(&bin_pb, file_input.get(), &bytes_read));
+    CHECK(ReadDelimitedFrom(&bin_pb, &coded_input, &bytes_read));
     if (i >= start_bin) {
       callback(bin_pb);
     }
@@ -642,7 +641,8 @@ PcapTraceStore::PcapTraceStore(const std::string& file) : file_(file) {
     input_stream->SetCloseOnDelete(true);
 
     PBPcapDataTrace trace_pb;
-    if (!ReadDelimitedFrom(&trace_pb, input_stream.get())) {
+    google::protobuf::io::CodedInputStream coded_input(input_stream.get());
+    if (!ReadDelimitedFrom(&trace_pb, &coded_input)) {
       break;
     }
 
@@ -655,7 +655,9 @@ PcapTraceStore::PcapTraceStore(const std::string& file) : file_(file) {
 }
 
 BinSequence::BinSequence(const std::vector<TraceAndSlice>& traces)
-    : traces_(traces) {}
+    : traces_(traces) {
+  CHECK(!traces_.empty());
+}
 
 void BinSequence::Combine(const BinSequence& other) {
   CHECK(other.bin_size() == bin_size());
@@ -673,9 +675,9 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() {
     size_t slice = trace_and_slice.slice;
     size_t end_bin = trace_and_slice.start_bin + count;
     trace->Bins(slice, trace_and_slice.start_bin, end_bin,
-                [&bytes, &packets](const PBBin& bin_pb) {
-                  bytes += bin_pb.byte_count();
-                  packets += bin_pb.packet_count();
+                [&bytes, &packets, &trace_and_slice](const PBBin& bin_pb) {
+                  bytes += bin_pb.byte_count() * trace_and_slice.fraction;
+                  packets += bin_pb.packet_count() * trace_and_slice.fraction;
                 });
   }
 
@@ -696,7 +698,7 @@ std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate) {
   std::vector<PcapDataTraceBin> bins = AccumulateBinsPrivate(1);
   std::vector<double> out(bins.size());
   for (size_t i = 0; i < bins.size(); ++i) {
-    out[i] = bins[i].bytes - bytes_per_bin;
+    out[i] = (bins[i].bytes - bytes_per_bin) / bytes_per_bin;
   }
 
   return out;
@@ -727,11 +729,28 @@ std::vector<BinSequence> BinSequence::SplitOrDie(
   double cumulative = 0;
   size_t i = 0;
   for (double fraction : fractions) {
+    LOG(ERROR) << "f " << fraction << " " << traces_.size();
     std::vector<TraceAndSlice> new_traces;
     cumulative += fraction;
 
     for (; i < cumulative * traces_.size(); ++i) {
       new_traces.emplace_back(traces_[i]);
+    }
+
+    out.emplace_back(new_traces);
+  }
+
+  return out;
+}
+
+std::vector<BinSequence> BinSequence::PreciseSplitOrDie(
+    const std::vector<double>& fractions) const {
+  std::vector<BinSequence> out;
+
+  for (double fraction : fractions) {
+    std::vector<TraceAndSlice> new_traces = traces_;
+    for (auto& trace_and_slce : new_traces) {
+      trace_and_slce.fraction *= fraction;
     }
 
     out.emplace_back(new_traces);
@@ -798,8 +817,9 @@ std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
 
     size_t i = -1;
     trace->Bins(slice, trace_and_slice.start_bin, end_bin,
-                [&out, &i](const PBBin& bin_pb) {
-                  out[++i].Combine(PcapDataTraceBin(bin_pb));
+                [&out, &i, &trace_and_slice](const PBBin& bin_pb) {
+                  out[++i].Combine(PcapDataTraceBin(bin_pb),
+                                   trace_and_slice.fraction);
                 });
   }
 
@@ -838,7 +858,8 @@ std::set<size_t> PcapDataTrace::AllSlices() const {
 BinSequence PcapDataTrace::ToSequence(const std::set<size_t>& slices) {
   std::vector<BinSequence::TraceAndSlice> traces_and_slices;
   for (size_t slice : slices) {
-    traces_and_slices.push_back({this, slice, 0, trace_pb_.bin_count()});
+    CHECK(slice < trace_pb_.split_count());
+    traces_and_slices.push_back({this, slice, 0, trace_pb_.bin_count(), 1.0});
   }
 
   return {traces_and_slices};

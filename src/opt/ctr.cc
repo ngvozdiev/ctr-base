@@ -38,6 +38,33 @@ static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
   return !path.ContainsAny(links_with_no_capacity);
 }
 
+static void InsertInPaths(std::vector<const nc::net::Walk*>* paths,
+                          const nc::net::Walk& path, bool* paths_added) {
+  auto it =
+      std::lower_bound(paths->begin(), paths->end(), &path,
+                       [](const nc::net::Walk* lhs, const nc::net::Walk* rhs) {
+                         return lhs->delay() < rhs->delay();
+                       });
+  if (it != paths->end()) {
+    if (*(*it) == path) {
+      return;
+    }
+  }
+
+  paths->emplace_back(&path);
+  *paths_added = true;
+  if (paths->size() == 1 ||
+      (*paths)[paths->size() - 1]->delay() >=
+          (*paths)[paths->size() - 2]->delay()) {
+    return;
+  }
+
+  std::sort(paths->begin(), paths->end(),
+            [](const nc::net::Walk* lhs, const nc::net::Walk* rhs) {
+              return lhs->delay() < rhs->delay();
+            });
+}
+
 bool CTROptimizer::AddFreePaths(
     const nc::net::GraphLinkSet& links_with_no_capacity,
     const std::vector<AggregateId>& aggregates_ordered) {
@@ -101,8 +128,7 @@ bool CTROptimizer::AddFreePaths(
         continue;
       }
 
-      free_paths_added = true;
-      paths_in_output.emplace_back(path);
+      InsertInPaths(&paths_in_output, *path, &free_paths_added);
       if (FLAGS_debug_ctr) {
         CLOG(INFO, YELLOW) << "Added path (i) "
                            << path->ToStringNoPorts(*graph_);
@@ -118,24 +144,23 @@ bool CTROptimizer::AddFreePaths(
         soft_limit_exceeded_printed = true;
       }
 
-      paths_in_output.emplace_back(paths_up_to_free.back());
+      InsertInPaths(&paths_in_output, *paths_up_to_free.back(),
+                    &free_paths_added);
       if (FLAGS_debug_ctr) {
         CLOG(INFO, YELLOW) << "Added path (ii) "
                            << paths_up_to_free.back()->ToStringNoPorts(*graph_);
       }
     } else {
-      paths_in_output.insert(paths_in_output.end(), paths_up_to_free.begin(),
-                             paths_up_to_free.end());
-      if (FLAGS_debug_ctr) {
-        for (const auto& path : paths_up_to_free) {
+      for (const nc::net::Walk* path_to_insert : paths_up_to_free) {
+        InsertInPaths(&paths_in_output, *path_to_insert, &free_paths_added);
+        if (FLAGS_debug_ctr) {
           CLOG(INFO, YELLOW) << "Added path (iii) "
-                             << path->ToStringNoPorts(*graph_);
+                             << path_to_insert->ToStringNoPorts(*graph_);
         }
       }
     }
 
     total_path_count += paths_in_output.size();
-    free_paths_added = true;
   }
 
   return free_paths_added;
@@ -660,12 +685,8 @@ CTROptimizerPass::CTROptimizerPass(const TrafficMatrix* input,
       graph_(graph),
       latest_run_max_oversubscription_(0),
       base_solution_(base_solution) {
-  if (base_solution == nullptr) {
-    FreezeSinglePathAggregates();
-  } else {
-    initial_obj_ = 0;
-    initial_oversubscription_ = 0;
-  }
+  initial_obj_ = 0;
+  initial_oversubscription_ = 0;
 
   Optimize();
 }
@@ -733,7 +754,8 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
   for (const auto& aggregate_and_paths : *paths_) {
     const AggregateId& aggregate = aggregate_and_paths.first;
     const std::vector<PathPtr>& paths = aggregate_and_paths.second;
-    CHECK(!paths.empty());
+    CHECK(!paths.empty()) << "No paths for aggregate "
+                          << aggregate.ToString(*graph_);
     if (paths.size() > 1) {
       continue;
     }

@@ -14,6 +14,7 @@
 #include "mean_est/mean_est.h"
 #include "net_mock.h"
 #include "opt/opt.h"
+#include "opt/ctr.h"
 #include "pcap_data.h"
 #include "routing_system.h"
 #include "metrics/metrics.h"
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> node_order;
   nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
       nc::File::ReadFileToStringOrDie(FLAGS_topology), &node_order);
+  builder.RemoveMultipleLinks();
   builder.ScaleCapacity(FLAGS_link_capacity_scale);
   nc::net::GraphStorage graph(builder);
 
@@ -68,14 +70,14 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
-    break;
   }
 
   ctr::PathProvider path_provider(&graph);
-  ctr::ShortestPathOptimizer sp_opt(&path_provider);
+//  ctr::ShortestPathOptimizer sp_opt(&path_provider);
+  ctr::CTROptimizer opt(&path_provider, false);
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
-  ctr::RoutingSystem routing_system({}, &sp_opt, &estimator_factory);
+  ctr::RoutingSystem routing_system({}, &opt, &estimator_factory);
 
   ctr::NetMock net_mock(
       initial_sequences, std::chrono::milliseconds(FLAGS_period_duration_ms),

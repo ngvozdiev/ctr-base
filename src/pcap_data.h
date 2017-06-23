@@ -74,8 +74,8 @@ struct PcapDataTraceBin {
         flows_enter(flows_enter),
         flows_exit(flows_exit) {}
 
-  // Combines this bin with another.
-  void Combine(const PcapDataTraceBin& other);
+  // Combines this bin with a fraction of another.
+  void Combine(const PcapDataTraceBin& other, double fraction);
 
   uint64_t bytes;
   uint64_t packets;
@@ -93,6 +93,7 @@ class BinSequence {
     size_t slice;
     size_t start_bin;
     size_t end_bin;
+    double fraction;
   };
 
   BinSequence(const std::vector<TraceAndSlice>& traces);
@@ -125,6 +126,9 @@ class BinSequence {
   // deterministic and depends on the order of traces_.
   std::vector<BinSequence> SplitOrDie(
       const std::vector<double>& fractions) const;
+
+  std::vector<BinSequence> PreciseSplitOrDie(
+        const std::vector<double>& fractions) const;
 
   // Returns as many integers as there are bins. Given a rate, we can compute
   // how many bytes (B) will be transmitted for the period of a single bin. This
@@ -167,7 +171,7 @@ class BinSequence {
 class PcapDataTrace {
  public:
   static constexpr size_t kCacheSize = 10000000;
-  static constexpr size_t kHintsSize = 100;
+  static constexpr size_t kHintsSize = 1000;
 
   // Constructs a PcapDataTrace from a partially populated 'trace_pb'. Will
   // append persistent information to 'output_file'.

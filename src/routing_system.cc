@@ -12,6 +12,39 @@
 
 namespace ctr {
 
+static auto* per_aggregate_mean_input =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "aggregate_mean_input",
+            "Raw mean level of each aggregate (in Mbps)", "Aggregate source",
+            "Aggregate destination");
+
+static auto* per_aggregate_flow_count_input =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+            "aggregate_flow_count_input",
+            "Flow count inputs for each aggregate", "Aggregate source",
+            "Aggregate destination");
+
+static auto* per_aggregate_mean_predicted_input =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "aggregate_mean_predicted_input",
+            "Predicated mean level of each aggregate (in Mbps)",
+            "Aggregate source", "Aggregate destination");
+
+static auto* per_aggregate_predicted_input =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "aggregate_predicted_input",
+            "Scaled per-aggregate level. This is the level actually used when "
+            "generating the output (in Mbps).",
+            "Aggregate source", "Aggregate destination");
+
+static auto* path_output_split =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
+        "path_fraction", "Records output per-path split fractions", "Path");
+
 std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     const std::map<AggregateId, AggregateHistory>& history) {
   // First we will predict what the history is expected to be on the next
