@@ -67,8 +67,8 @@ struct PcapDataTraceBin {
         flows_enter(bin_pb.enter_flow_count()),
         flows_exit(bin_pb.exit_flow_count()) {}
 
-  PcapDataTraceBin(uint64_t bytes, uint64_t packets, uint64_t flows_enter,
-                   uint64_t flows_exit)
+  PcapDataTraceBin(uint32_t bytes, uint32_t packets, uint32_t flows_enter,
+                   uint32_t flows_exit)
       : bytes(bytes),
         packets(packets),
         flows_enter(flows_enter),
@@ -77,10 +77,10 @@ struct PcapDataTraceBin {
   // Combines this bin with a fraction of another.
   void Combine(const PcapDataTraceBin& other, double fraction);
 
-  uint64_t bytes;
-  uint64_t packets;
-  uint64_t flows_enter;
-  uint64_t flows_exit;
+  uint32_t bytes;
+  uint32_t packets;
+  uint32_t flows_enter;
+  uint32_t flows_exit;
 };
 
 class PcapDataTrace;
@@ -197,9 +197,6 @@ class PcapDataTrace {
   std::vector<PcapDataTraceBin> BinsCombined(const std::set<size_t>& slices,
                                              size_t start_bin, size_t end_bin);
 
-  // Combines all bins for a set of slices and stores them in the cache.
-  void AddToBinCache(const std::set<size_t>& slices);
-
   std::set<size_t> AllSlices() const;
 
   // Constructs a BinSequence with slices from the trace.
@@ -222,6 +219,16 @@ class PcapDataTrace {
   size_t TotalSizeInFile() const;
 
  private:
+  struct CachedBins {
+    size_t from;
+    size_t to;
+    std::vector<PcapDataTraceBin> bins;
+  };
+
+  // Combines all bins for a set of slices and stores them in the cache.
+  const CachedBins* AddToBinCache(const std::set<size_t>& slices, size_t from,
+                                  size_t to);
+
   size_t TraceProtobufSize() const;
 
   // Locates this trace's entry in the store.
@@ -240,7 +247,7 @@ class PcapDataTrace {
   std::map<size_t, std::map<size_t, size_t>> bin_start_hints_;
 
   // Cached, combined bins for series of slices.
-  std::map<std::set<size_t>, std::vector<PcapDataTraceBin>> bins_cache_;
+  std::map<std::set<size_t>, CachedBins> bins_cache_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };

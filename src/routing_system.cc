@@ -2,13 +2,16 @@
 
 #include <stddef.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
-#include <string>
+#include <iostream>
+#include <limits>
 #include <utility>
 #include <vector>
 
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/logging.h"
+#include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/map_util.h"
 #include "ncode_common/src/net/net_common.h"
 #include "metrics/metrics.h"
@@ -68,6 +71,33 @@ static auto* per_aggregate_output_total_delay_rel_change =
             "of the aggregate's paths in the output",
             "Aggregate source", "Aggregate destination");
 
+static auto* per_aggregate_scale_fraction =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "aggregate_scale_fraction",
+            "By how much an aggregate had to be scaled", "Aggregate source",
+            "Aggregate destination");
+
+static auto* scale_loop_iteration_count =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
+        "scale_up_iteration_count",
+        "How many iterations of the scale loop happened");
+
+static auto* max_commodity_scale_mean_predicted_input =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double>(
+        "max_commodity_scale_mean_predicted_input",
+        "Scale factor for the TM based on mean values after prediction.");
+
+static auto* max_commodity_scale_mean_input =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double>(
+        "max_commodity_scale_mean_input",
+        "Scale factor for the TM based on mean values of input.");
+
+static auto* max_commodity_scale_predicted_input =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double>(
+        "max_commodity_scale_predicted_input",
+        "Scale factor for the TM used in optimization.");
+
 static auto* path_output_split =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
         "path_fraction", "Records output per-path split fractions", "Path");
@@ -83,6 +113,21 @@ static auto* path_output_split =
       handle->AddValueWithTimestamp(metric_timestamp, v);               \
     }                                                                   \
   }
+
+static void UpdateCommodityScaleMetric(
+    const std::map<AggregateId, AggregateHistory>& history_map,
+    const nc::net::GraphStorage* graph,
+    nc::metrics::Metric<double, false>* metric) {
+  std::vector<nc::lp::DemandMatrixElement> matrix_elements;
+  for (const auto& aggregate_id_and_history : history_map) {
+    const AggregateId& aggregate_id = aggregate_id_and_history.first;
+    const AggregateHistory& history = aggregate_id_and_history.second;
+    matrix_elements.emplace_back(aggregate_id.src(), aggregate_id.dst(),
+                                 history.mean_rate());
+  }
+  nc::lp::DemandMatrix demand_matrix(std::move(matrix_elements), graph);
+  metric->GetHandle()->AddValue(demand_matrix.MaxCommodityScaleFractor());
+}
 
 static void RecordPathSplitsAndTotalDelay(
     const RoutingConfiguration& routing_config,
@@ -141,6 +186,7 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   // Will first record the raw input.
   ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_mean_input,
                               map_value.mean_rate().Mbps());
+  UpdateCommodityScaleMetric(history, graph_, max_commodity_scale_mean_input);
 
   // And flow counts.
   ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_flow_count_input,
@@ -150,6 +196,8 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
       estimator_.EstimateNext(history);
+  UpdateCommodityScaleMetric(next_history, graph_,
+                             max_commodity_scale_mean_predicted_input);
 
   // Record the predicted mean level.
   ADD_AGGREGATE_MAP_TO_METRIC(next_history, per_aggregate_mean_predicted_input,
@@ -160,9 +208,16 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
       GetInitialInput(next_history);
 
   std::unique_ptr<RoutingConfiguration> output;
+  std::map<AggregateId, double> scale_fractions;
+  for (const auto& aggregate_and_rest : input) {
+    scale_fractions[aggregate_and_rest.first] = 0.0;
+  }
+
+  size_t i_count = 0;
   while (true) {
     TrafficMatrix tm(graph_, input);
     output = optimizer_->Optimize(tm);
+    ++i_count;
 
     // After optimizing we should check to see which aggregates go over links
     // that do not fit.
@@ -173,17 +228,29 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     }
 
     // Need to scale up the aggregates that do not fit.
-    bool scaled_any =
-        ScaleUpAggregates(aggregates_no_fit, next_history, &input);
+    bool scaled_any = ScaleUpAggregates(aggregates_no_fit, next_history, &input,
+                                        &scale_fractions);
     if (!scaled_any) {
       // All aggregates at their max.
       break;
     }
   }
 
+  // Record the number of iterations.
+  scale_loop_iteration_count->GetHandle()->AddValueWithTimestamp(
+      metric_timestamp, i_count);
+
+  // Record by how much we had to scale each aggregate to make it fit.
+  ADD_AGGREGATE_MAP_TO_METRIC(scale_fractions, per_aggregate_scale_fraction,
+                              map_value);
+
   // Will record the input that generated the output.
   ADD_AGGREGATE_MAP_TO_METRIC(input, per_aggregate_predicted_input,
                               map_value.first.Mbps());
+
+  double scale_factor = output->ToDemandMatrix()->MaxCommodityScaleFractor();
+  max_commodity_scale_predicted_input->GetHandle()->AddValueWithTimestamp(
+      metric_timestamp, scale_factor);
 
   // And also the per-path splits from the output.
   CHECK(output);
@@ -253,7 +320,8 @@ std::set<AggregateId> RoutingSystem::CheckWithProbModel(
 bool RoutingSystem::ScaleUpAggregates(
     const std::set<AggregateId>& aggregates,
     const std::map<AggregateId, AggregateHistory>& histories,
-    std::map<AggregateId, DemandAndFlowCount>* out) {
+    std::map<AggregateId, DemandAndFlowCount>* out,
+    std::map<AggregateId, double>* scale_fractions) {
   CHECK(!aggregates.empty());
   bool scaled_at_least_one = false;
   for (const auto& aggregate_and_history : histories) {
@@ -294,6 +362,7 @@ bool RoutingSystem::ScaleUpAggregates(
     // Will move each aggregate 10% closer to its max rate.
     double new_fraction = curr_fraction + kScaleFraction;
     new_fraction = std::min(new_fraction, 1.0);
+    (*scale_fractions)[aggregate_id] = new_fraction;
 
     double new_rate_mbps = mean_rate_mbps + range_mbps * new_fraction;
     current_rate = nc::net::Bandwidth::FromMBitsPerSecond(new_rate_mbps);

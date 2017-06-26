@@ -596,44 +596,39 @@ std::vector<PcapDataTraceBin> PcapDataTrace::BinsCombined(
     const std::set<size_t>& slices, size_t start_bin, size_t end_bin) {
   CHECK(end_bin <= trace_pb_.bin_count());
 
-  const std::vector<PcapDataTraceBin>* cached =
-      nc::FindOrNull(bins_cache_, slices);
-  if (cached != nullptr) {
-    return {cached->begin() + start_bin, cached->begin() + end_bin};
+  const CachedBins* cached = nc::FindOrNull(bins_cache_, slices);
+  if (cached == nullptr || (cached->from > start_bin || cached->to < end_bin)) {
+    uint64_t offset = (end_bin - start_bin) * 10;
+    size_t cache_end = std::min(trace_pb_.bin_count(), end_bin + offset);
+    size_t cache_start = offset > start_bin ? 0 : start_bin - offset;
+    cached = AddToBinCache(slices, cache_start, cache_end);
   }
 
-  if (slices.size() >= trace_pb_.split_count() / 2) {
-    AddToBinCache(slices);
-    cached = nc::FindOrNull(bins_cache_, slices);
-    return {cached->begin() + start_bin, cached->begin() + end_bin};
-  }
-
-  std::vector<PcapDataTraceBin> out(end_bin - start_bin);
-  for (size_t slice : slices) {
-    size_t i = -1;
-    Bins(slice, start_bin, end_bin, [&out, &i](const PBBin& bin_pb) {
-      out[++i].Combine(PcapDataTraceBin(bin_pb), 1.0);
-    });
-  }
-
-  return out;
+  CHECK(cached->from <= start_bin && cached->to >= end_bin);
+  const std::vector<PcapDataTraceBin>& cached_bins = cached->bins;
+  return {cached_bins.begin() + (start_bin - cached->from),
+          cached_bins.begin() + (end_bin - cached->from)};
 }
 
-void PcapDataTrace::AddToBinCache(const std::set<size_t>& slices) {
-  CHECK(!nc::ContainsKey(bins_cache_, slices));
-  std::vector<PcapDataTraceBin>& out = bins_cache_[slices];
+const PcapDataTrace::CachedBins* PcapDataTrace::AddToBinCache(
+    const std::set<size_t>& slices, size_t from, size_t to) {
+  CachedBins& out = bins_cache_[slices];
+  out.bins.clear();
+  out.from = from;
+  out.to = to;
 
-  out.resize(trace_pb_.bin_count());
+  out.bins.resize(to - from);
   for (size_t slice : slices) {
     size_t i = -1;
-    Bins(slice, 0, trace_pb_.bin_count(), [&out, &i](const PBBin& bin_pb) {
-      out[++i].Combine(PcapDataTraceBin(bin_pb), 1.0);
+    Bins(slice, from, to, [&out, &i](const PBBin& bin_pb) {
+      out.bins[++i].Combine(PcapDataTraceBin(bin_pb), 1.0);
     });
   }
 
-  size_t bytes = sizeof(PcapDataTraceBin) * trace_pb_.bin_count();
-  LOG(ERROR) << "Added to cache slices " << nc::Join(slices, ",") << " "
-             << bytes / 1000.0 / 1000.0 << "MB";
+  size_t bytes = sizeof(PcapDataTraceBin) * (to - from);
+  LOG(ERROR) << "Added to cache " << slices.size() << " slices from " << from
+             << " to " << to << " size: " << bytes / 1000.0 / 1000.0 << "MB";
+  return &out;
 }
 
 std::vector<std::string> PcapDataTrace::trace_files() const {
@@ -988,41 +983,12 @@ BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
     }
 
     double fraction = rate_remaining / rate;
-    BinSequence new_sequence = sequence.SplitOrDie({fraction, 1 - fraction})[0];
+    BinSequence new_sequence = sequence.SplitOrDie({fraction})[0];
     if (out) {
       out->Combine(new_sequence);
     } else {
       out = nc::make_unique<BinSequence>(new_sequence);
     }
-
-    //    while (true) {
-    //      BinSequence new_sequence =
-    //          sequence.SplitOrDie({fraction, 1 - fraction})[0];
-    //      BinSequence new_sequence_subsequence =
-    //          new_sequence.CutFromStart(bin_count);
-    //
-    //      nc::net::Bandwidth new_sequence_mean =
-    //          new_sequence_subsequence.MeanRate();
-    //      if (new_sequence_mean > rate_remaining) {
-    //        // The new trace's rate overshoots the target, will reduce the
-    //        fraction
-    //        // and try again.
-    //        if (fraction <= 0.01) {
-    //          break;
-    //        }
-    //
-    //        fraction -= 0.01;
-    //        continue;
-    //      }
-    //
-    //      if (out) {
-    //        out->Combine(new_sequence);
-    //      } else {
-    //        out = nc::make_unique<BinSequence>(new_sequence);
-    //      }
-    //
-    //      break;
-    //    }
 
     break;
   }

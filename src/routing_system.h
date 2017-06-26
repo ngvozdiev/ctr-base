@@ -43,7 +43,8 @@ class RoutingSystem {
   bool ScaleUpAggregates(
       const std::set<AggregateId>& aggregates,
       const std::map<AggregateId, AggregateHistory>& histories,
-      std::map<AggregateId, DemandAndFlowCount>* out);
+      std::map<AggregateId, DemandAndFlowCount>* out,
+      std::map<AggregateId, double>* scale_fractions);
 
   // Generates an initial input where all aggregates' rates are set to their
   // mean rate.
