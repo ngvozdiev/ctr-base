@@ -115,9 +115,14 @@ static auto* path_output_split =
   }
 
 static void UpdateCommodityScaleMetric(
+    uint64_t time_now,
     const std::map<AggregateId, AggregateHistory>& history_map,
     const nc::net::GraphStorage* graph,
     nc::metrics::Metric<double, false>* metric) {
+  if (time_now == std::numeric_limits<uint64_t>::max()) {
+    return;
+  }
+
   std::vector<nc::lp::DemandMatrixElement> matrix_elements;
   for (const auto& aggregate_id_and_history : history_map) {
     const AggregateId& aggregate_id = aggregate_id_and_history.first;
@@ -126,7 +131,8 @@ static void UpdateCommodityScaleMetric(
                                  history.mean_rate());
   }
   nc::lp::DemandMatrix demand_matrix(std::move(matrix_elements), graph);
-  metric->GetHandle()->AddValue(demand_matrix.MaxCommodityScaleFractor());
+  metric->GetHandle()->AddValueWithTimestamp(
+      time_now, demand_matrix.MaxCommodityScaleFractor());
 }
 
 static void RecordPathSplitsAndTotalDelay(
@@ -186,7 +192,8 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   // Will first record the raw input.
   ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_mean_input,
                               map_value.mean_rate().Mbps());
-  UpdateCommodityScaleMetric(history, graph_, max_commodity_scale_mean_input);
+  UpdateCommodityScaleMetric(metric_timestamp, history, graph_,
+                             max_commodity_scale_mean_input);
 
   // And flow counts.
   ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_flow_count_input,
@@ -196,7 +203,7 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
       estimator_.EstimateNext(history);
-  UpdateCommodityScaleMetric(next_history, graph_,
+  UpdateCommodityScaleMetric(metric_timestamp, next_history, graph_,
                              max_commodity_scale_mean_predicted_input);
 
   // Record the predicted mean level.
@@ -236,9 +243,19 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     }
   }
 
-  // Record the number of iterations.
-  scale_loop_iteration_count->GetHandle()->AddValueWithTimestamp(
-      metric_timestamp, i_count);
+  CHECK(output);
+  if (metric_timestamp != std::numeric_limits<uint64_t>::max()) {
+    // Record the number of iterations.
+    scale_loop_iteration_count->GetHandle()->AddValueWithTimestamp(
+        metric_timestamp, i_count);
+
+    double scale_factor = output->ToDemandMatrix()->MaxCommodityScaleFractor();
+    max_commodity_scale_predicted_input->GetHandle()->AddValueWithTimestamp(
+        metric_timestamp, scale_factor);
+
+    // And also the per-path splits from the output.
+    RecordPathSplitsAndTotalDelay(*output, *graph_, metric_timestamp);
+  }
 
   // Record by how much we had to scale each aggregate to make it fit.
   ADD_AGGREGATE_MAP_TO_METRIC(scale_fractions, per_aggregate_scale_fraction,
@@ -247,14 +264,6 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   // Will record the input that generated the output.
   ADD_AGGREGATE_MAP_TO_METRIC(input, per_aggregate_predicted_input,
                               map_value.first.Mbps());
-
-  double scale_factor = output->ToDemandMatrix()->MaxCommodityScaleFractor();
-  max_commodity_scale_predicted_input->GetHandle()->AddValueWithTimestamp(
-      metric_timestamp, scale_factor);
-
-  // And also the per-path splits from the output.
-  CHECK(output);
-  RecordPathSplitsAndTotalDelay(*output, *graph_, metric_timestamp);
 
   return output;
 }

@@ -282,6 +282,19 @@ void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
 
 std::string TrafficMatrix::ToString() const {
   std::vector<std::string> out;
+  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix = ToDemandMatrix();
+  std::vector<double> sp_utilizations;
+  nc::net::GraphLinkMap<double> per_link_utilization =
+      demand_matrix->SPUtilization();
+  for (const auto& link_and_utilization : per_link_utilization) {
+    sp_utilizations.emplace_back(*link_and_utilization.second);
+  }
+  std::sort(sp_utilizations.begin(), sp_utilizations.end());
+
+  out.emplace_back(
+      nc::StrCat("TM with ", demands_.size(), " demands, scale factor ",
+                 demand_matrix->MaxCommodityScaleFractor(),
+                 " sp link utilizations: ", nc::Join(sp_utilizations, ",")));
   for (const auto& aggregate_and_demand : demands_) {
     const AggregateId& aggregate = aggregate_and_demand.first;
     out.emplace_back(AggregateToString(aggregate));

@@ -103,3 +103,9 @@ endif()
 
 add_executable(metrics_explore src/metrics/metrics_explore.cc)
 target_link_libraries(metrics_explore metrics_parser gflags)
+
+add_executable(tm_gen_util src/tm_gen_util.cc)
+target_link_libraries(tm_gen_util ncode gflags)
+
+add_executable(opt_eval src/opt_eval.cc)
+target_link_libraries(opt_eval ctr_base)

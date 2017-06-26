@@ -599,7 +599,8 @@ std::vector<PcapDataTraceBin> PcapDataTrace::BinsCombined(
   const CachedBins* cached = nc::FindOrNull(bins_cache_, slices);
   if (cached == nullptr || (cached->from > start_bin || cached->to < end_bin)) {
     uint64_t offset = (end_bin - start_bin) * 10;
-    size_t cache_end = std::min(trace_pb_.bin_count(), end_bin + offset);
+    size_t cache_end = std::min(static_cast<uint64_t>(trace_pb_.bin_count()),
+                                static_cast<uint64_t>(end_bin + offset));
     size_t cache_start = offset > start_bin ? 0 : start_bin - offset;
     cached = AddToBinCache(slices, cache_start, cache_end);
   }
