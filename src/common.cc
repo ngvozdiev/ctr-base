@@ -1,11 +1,28 @@
-#include "ncode_common/src/common.h"
 #include "common.h"
 
-#include <tuple>
+#include <stdint.h>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <ratio>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-#include "ncode_common/src/lp/demand_matrix.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/event_queue.h"
+#include "ncode_common/src/logging.h"
+#include "ncode_common/src/map_util.h"
 #include "ncode_common/src/net/algorithm.h"
+#include "ncode_common/src/perfect_hash.h"
+#include "ncode_common/src/stats.h"
+#include "ncode_common/src/strutil.h"
+#include "ncode_common/src/substitute.h"
 #include "ncode_common/src/viz/graph.h"
 #include "opt/oversubscription_model.h"
 
@@ -637,6 +654,103 @@ AggregateHistory AggregateHistory::SubtractRate(nc::net::Bandwidth rate) const {
   }
 
   return {bins_copy, bin_size_, flow_count_};
+}
+
+TLDRRequest::TLDRRequest(
+    nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
+    nc::EventQueueTime time_sent, uint64_t request_id, bool quick,
+    const std::map<AggregateId, AggregateHistory>& aggregates)
+    : nc::htsim::Message(ip_src, ip_dst, kTLDRRequestType, time_sent),
+      round_id_(request_id),
+      aggregates_(aggregates),
+      quick_(quick) {}
+
+const std::map<AggregateId, AggregateHistory>& TLDRRequest::aggregates() {
+  return aggregates_;
+}
+
+std::string TLDRRequest::ToString() const {
+  std::string out =
+      nc::Substitute("MSG $0 -> $1 : TLDRRequest id $2 ",
+                     nc::net::IPToStringOrDie(five_tuple_.ip_src()),
+                     nc::net::IPToStringOrDie(five_tuple_.ip_dst()), round_id_);
+  for (const auto& id_and_rate : aggregates_) {
+    AggregateHistory rate_and_flow_count = id_and_rate.second;
+    uint32_t bin_count = rate_and_flow_count.bins().size();
+    nc::StrAppend(&out, nc::StrCat("{", bin_count, "bins, q:", quick_, "}"));
+  }
+
+  nc::StrAppend(&out, " sent at ", time_sent().Raw());
+  return out;
+}
+
+nc::htsim::PacketPtr TLDRRequest::Duplicate() const {
+  return nc::make_unique<TLDRRequest>(five_tuple_.ip_src(),
+                                      five_tuple_.ip_dst(), time_sent(),
+                                      round_id_, quick_, aggregates_);
+}
+
+TLDRForceRequest::TLDRForceRequest(nc::net::IPAddress ip_src,
+                                   nc::net::IPAddress ip_dst,
+                                   nc::EventQueueTime time_sent)
+    : nc::htsim::Message(ip_src, ip_dst, kTLDRForceRequestType, time_sent) {}
+
+std::string TLDRForceRequest::ToString() const {
+  return nc::Substitute("MSG $0 -> $1 : TLDRForceRequest",
+                        nc::net::IPToStringOrDie(five_tuple_.ip_src()),
+                        nc::net::IPToStringOrDie(five_tuple_.ip_dst()));
+}
+
+nc::htsim::PacketPtr TLDRForceRequest::Duplicate() const {
+  return nc::make_unique<TLDRForceRequest>(five_tuple_.ip_src(),
+                                           five_tuple_.ip_dst(), time_sent());
+}
+
+TLDRTriggerReoptimize::TLDRTriggerReoptimize(nc::net::IPAddress ip_src,
+                                             nc::net::IPAddress ip_dst,
+                                             nc::EventQueueTime time_sent)
+    : nc::htsim::Message(ip_src, ip_dst, kTLDRTriggerReoptimizeType,
+                         time_sent) {}
+
+std::string TLDRTriggerReoptimize::ToString() const {
+  return nc::Substitute("MSG $0 -> $1 : TLDRTriggerReoptimize",
+                        nc::net::IPToStringOrDie(five_tuple_.ip_src()),
+                        nc::net::IPToStringOrDie(five_tuple_.ip_dst()));
+}
+
+nc::htsim::PacketPtr TLDRTriggerReoptimize::Duplicate() const {
+  return nc::make_unique<TLDRTriggerReoptimize>(
+      five_tuple_.ip_src(), five_tuple_.ip_dst(), time_sent());
+}
+
+TLDRUpdate::TLDRUpdate(
+    nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
+    nc::EventQueueTime time_sent,
+    const std::map<AggregateId, AggregateUpdateState>& aggregate_updates)
+    : ::nc::htsim::Message(ip_src, ip_dst, kTLDRUpdateType, time_sent) {
+  nc::AppendValuesFromMap(aggregate_updates, &aggregates_);
+}
+
+const std::vector<AggregateUpdateState>& TLDRUpdate::aggregates() const {
+  return aggregates_;
+}
+
+nc::htsim::PacketPtr TLDRUpdate::Duplicate() const {
+  std::map<AggregateId, AggregateUpdateState> id_to_aggregate;
+  for (const auto& aggregate : aggregates_) {
+    id_to_aggregate.emplace(aggregate.aggregate_id, aggregate);
+  }
+
+  return nc::make_unique<TLDRUpdate>(five_tuple_.ip_src(), five_tuple_.ip_dst(),
+                                     time_sent(), id_to_aggregate);
+}
+
+std::string TLDRUpdate::ToString() const {
+  std::string out =
+      nc::Substitute("MSG $0 -> $1 : TLDRUpdate",
+                     nc::net::IPToStringOrDie(five_tuple_.ip_src()),
+                     nc::net::IPToStringOrDie(five_tuple_.ip_dst()));
+  return out;
 }
 
 }  // namespace ctr

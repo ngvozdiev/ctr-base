@@ -17,6 +17,14 @@ class RoutingSystem;
 
 namespace ctr {
 
+class MockDevice : public nc::htsim::SimComponent,
+                   public nc::htsim::PacketHandler {
+ public:
+ private:
+  // Traffic that enters the "network" via this device.
+  std::map<nc::htsim::MatchRuleKey, BinSequence> bin_sequence_;
+};
+
 class NetMock {
  public:
   NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,

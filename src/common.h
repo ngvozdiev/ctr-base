@@ -3,17 +3,20 @@
 
 #include <stddef.h>
 #include <random>
-#include <string>
+#include <set>
+#include <tuple>
 
-#include "ncode_common/src/lp/mc_flow.h"
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/htsim/match.h"
+#include "ncode_common/src/htsim/packet.h"
+#include "ncode_common/src/lp/demand_matrix.h"
+#include "ncode_common/src/lp/mc_flow.h"
 #include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/viz/web_page.h"
 
 namespace nc {
-namespace lp {
-class DemandMatrix;
-} /* namespace lp */
+namespace viz {
+class HtmlPage;
+} /* namespace viz */
 } /* namespace nc */
 
 namespace ctr {
@@ -215,6 +218,9 @@ class AggregateHistory {
   AggregateHistory(nc::net::Bandwidth rate, size_t bin_count,
                    std::chrono::milliseconds bin_size, size_t flow_count);
 
+  AggregateHistory(const AggregateHistory& other)
+      : AggregateHistory(other.bins_, other.bin_size_, other.flow_count_) {}
+
   // The mean rate.
   nc::net::Bandwidth mean_rate() const;
 
@@ -252,6 +258,128 @@ class AggregateHistory {
 
   // Number of flows.
   uint64_t flow_count_;
+};
+
+// Message from TLDR to the controller. This is essentially a request for
+// capacity. For each aggregate that TLDR's endpoint controls there is the bins
+// seen over the last period.
+class TLDRRequest : public ::nc::htsim::Message {
+ public:
+  static constexpr uint8_t kTLDRRequestType = 181;
+
+  TLDRRequest(nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
+              nc::EventQueueTime time_sent, uint64_t round_id, bool quick,
+              const std::map<AggregateId, AggregateHistory>& aggregates);
+
+  const std::map<AggregateId, AggregateHistory>& aggregates();
+
+  nc::htsim::PacketPtr Duplicate() const override;
+
+  std::string ToString() const override;
+
+  uint64_t round_id() const { return round_id_; }
+
+  bool quick() const { return quick_; }
+
+ private:
+  // Each request carries an id that identifies the round.
+  uint64_t round_id_;
+
+  // For each aggregate the history.
+  std::map<AggregateId, AggregateHistory> aggregates_;
+
+  // If this flag is set the optimization round will be quick -- only currently
+  // installed paths in the network will be used. All requests for the same
+  // round should carry the same quick_ flag.
+  bool quick_;
+};
+
+// Message from the controller to TLDR, to force the generation of a
+// TLDRRequest.
+class TLDRForceRequest : public ::nc::htsim::Message {
+ public:
+  static constexpr uint8_t kTLDRForceRequestType = 170;
+
+  TLDRForceRequest(nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
+                   nc::EventQueueTime time_sent);
+
+  nc::htsim::PacketPtr Duplicate() const override;
+
+  std::string ToString() const override;
+};
+
+// Sent from TLDR to the controller to trigger a re-optimization outside of the
+// regular periodic optimizations. The controller will then generate
+// TLDRForceRequests to all TLDR instances and they will send TLDRRequests.
+class TLDRTriggerReoptimize : public ::nc::htsim::Message {
+ public:
+  static constexpr uint8_t kTLDRTriggerReoptimizeType = 171;
+
+  TLDRTriggerReoptimize(nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
+                        nc::EventQueueTime time_sent);
+
+  nc::htsim::PacketPtr Duplicate() const override;
+
+  std::string ToString() const override;
+};
+
+struct PathUpdateState {
+  PathUpdateState(nc::htsim::PacketTag tag,
+                  nc::net::DevicePortNumber output_port_num,
+                  const RouteAndFraction& route_and_fraction)
+      : tag(tag),
+        output_port_num(output_port_num),
+        route_and_fraction(route_and_fraction) {}
+
+  // Packets that belong to this path are identified by the tag.
+  nc::htsim::PacketTag tag;
+
+  // Port on the switch managed by the observer that this path's traffic should
+  // exit via.
+  nc::net::DevicePortNumber output_port_num;
+
+  // The route and the fraction of the aggregate that should go on it.
+  RouteAndFraction route_and_fraction;
+};
+
+// Aggregate state sent from the controller to the observer.
+struct AggregateUpdateState {
+  AggregateUpdateState(AggregateId aggregate_id, ::nc::htsim::MatchRuleKey key)
+      : aggregate_id(aggregate_id), key(key) {}
+
+  AggregateId aggregate_id;
+
+  // Incoming traffic should match this key to be considered part of the
+  // aggregate.
+  ::nc::htsim::MatchRuleKey key;
+
+  // Paths in the aggregate.
+  std::vector<PathUpdateState> paths;
+
+  // If traffic exceeds this limit, a quick update is triggered.
+  nc::net::Bandwidth limit;
+};
+
+// Message sent from the controller to the observer. Has for each aggregate the
+// paths and rates to enforce,
+class TLDRUpdate : public ::nc::htsim::Message {
+ public:
+  static constexpr uint8_t kTLDRUpdateType = 182;
+
+  TLDRUpdate(
+      nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
+      nc::EventQueueTime time_sent,
+      const std::map<AggregateId, AggregateUpdateState>& aggregate_updates);
+
+  const std::vector<AggregateUpdateState>& aggregates() const;
+
+  nc::htsim::PacketPtr Duplicate() const override;
+
+  std::string ToString() const override;
+
+ private:
+  // Each aggregate's paths.
+  std::vector<AggregateUpdateState> aggregates_;
 };
 
 }  // namespace ctr
