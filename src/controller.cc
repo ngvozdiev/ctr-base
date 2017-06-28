@@ -190,18 +190,18 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
 }
 
 uint32_t Controller::TagForPath(const nc::net::Walk* path) {
-  uint32_t* current_tag = nc::FindOrNull(path_to_tag_, path->links());
+  uint32_t* current_tag = nc::FindOrNull(path_to_tag_, path);
   if (current_tag != nullptr) {
     return *current_tag;
   }
 
   uint32_t new_tag = path_to_tag_.size() + 1;
-  path_to_tag_.emplace(path->links(), new_tag);
+  path_to_tag_.emplace(path, new_tag);
   return new_tag;
 }
 
 uint32_t Controller::TagForPathOrDie(const nc::net::Walk* path) const {
-  return nc::FindOrDieNoPrint(path_to_tag_, path->links());
+  return nc::FindOrDieNoPrint(path_to_tag_, path);
 }
 
 void Controller::ReOptimize(RoundState* round) {
@@ -302,6 +302,19 @@ void Controller::HandlePacket(::nc::htsim::PacketPtr pkt) {
   }
 }
 
+const nc::net::Walk* Controller::PathForTagOrDie(uint32_t tag) const {
+  for (const auto& path_and_tag : path_to_tag_) {
+    const nc::net::Walk* path = path_and_tag.first;
+    uint32_t current_tag = path_and_tag.second;
+    if (current_tag == tag) {
+      return path;
+    }
+  }
+
+  LOG(FATAL) << "Unable to find tag for path";
+  return nullptr;
+}
+
 void Controller::CommitPendingOutput(RoundState* round_state) {
   std::map<AggregateId, AggregateUpdateState>& pending_output =
       round_state->pending_output;
@@ -334,16 +347,17 @@ void Controller::CommitPendingOutput(RoundState* round_state) {
 
 NetworkContainer::NetworkContainer(const NetworkContainerConfig& config,
                                    const TLDRConfig& tldr_config,
-                                   std::unique_ptr<Controller> controller,
                                    const nc::net::GraphStorage* graph,
+                                   Controller* controller,
+                                   DeviceFactory* device_factory,
                                    nc::EventQueue* event_queue)
     : config_(config),
       tldr_config_(tldr_config),
       event_queue_(event_queue),
       graph_(graph),
-      controller_(std::move(controller)),
-      network_(event_queue->ToTime(std::chrono::milliseconds(10)),
-               event_queue) {
+      controller_(controller),
+      network_(event_queue->ToTime(std::chrono::milliseconds(10)), event_queue),
+      device_factory_(device_factory) {
   CHECK(tldr_config.ip_src == nc::htsim::kWildIPAddress)
       << "TLDR config should have default source address";
   CHECK(tldr_config.ip_switch_dst == nc::htsim::kWildIPAddress)
@@ -383,7 +397,7 @@ void NetworkContainer::Init() {
                                       id_to_aggregate_state_);
 }
 
-nc::htsim::Device* NetworkContainer::AddOrFindDevice(
+nc::htsim::DeviceInterface* NetworkContainer::AddOrFindDevice(
     const std::string& id,
     std::uniform_int_distribution<size_t>* tldr_device_delay_dist,
     std::uniform_int_distribution<size_t>* controller_tldr_device_dist,
@@ -404,8 +418,8 @@ nc::htsim::Device* NetworkContainer::AddOrFindDevice(
   nc::net::IPAddress tldr_address =
       nc::net::IPAddress(config_.tldr_ip_address_base.Raw() + n);
 
-  auto new_device =
-      nc::make_unique<nc::htsim::Device>(id, address, event_queue_);
+  std::unique_ptr<nc::htsim::DeviceInterface> new_device =
+      device_factory_->NewDevice(id, address, event_queue_);
   network_.AddDevice(new_device.get());
 
   // Port that accepts traffic from the TLDR.
@@ -414,7 +428,7 @@ nc::htsim::Device* NetworkContainer::AddOrFindDevice(
 
   std::string tldr_id = nc::StrCat(id, "_tldr");
   nc::htsim::PacketHandler* tldr_to_device = from_tldr;
-  nc::htsim::PacketHandler* tldr_to_controller = controller_.get();
+  nc::htsim::PacketHandler* tldr_to_controller = controller_;
   if (delay_tldr_device.count()) {
     auto new_pipe = nc::make_unique<nc::htsim::Pipe>(
         tldr_id, id, event_queue_->ToTime(delay_tldr_device), event_queue_);
@@ -427,7 +441,7 @@ nc::htsim::Device* NetworkContainer::AddOrFindDevice(
     auto new_pipe = nc::make_unique<nc::htsim::Pipe>(
         tldr_id, "controller", event_queue_->ToTime(delay_controller_tldr),
         event_queue_);
-    new_pipe->Connect(controller_.get());
+    new_pipe->Connect(controller_);
     tldr_to_controller = new_pipe.get();
     pipes_.emplace_back(std::move(new_pipe));
   }
@@ -464,16 +478,15 @@ nc::htsim::Device* NetworkContainer::AddOrFindDevice(
       std::forward_as_tuple(graph_->NodeFromStringOrDie(id)),
       std::forward_as_tuple(tldr_address, controller_to_tldr));
 
-  nc::htsim::Device* raw_ptr = new_device.get();
+  nc::htsim::DeviceInterface* raw_ptr = new_device.get();
   new_device->set_tx_replies_handler(device_to_tldr);
-  new_device->EnableSampling(device_to_tldr, 100);
   devices_.emplace(id, std::move(new_device));
   tldrs_.emplace_back(std::move(new_tldr));
 
   return raw_ptr;
 }
 
-static void AddSrcOrDstBasedRoute(nc::htsim::Device* device,
+static void AddSrcOrDstBasedRoute(nc::htsim::DeviceInterface* device,
                                   nc::net::IPAddress address, bool src,
                                   nc::net::DevicePortNumber out_port,
                                   nc::htsim::PacketTag tag) {
@@ -501,19 +514,21 @@ static void AddSrcOrDstBasedRoute(nc::htsim::Device* device,
   device->HandlePacket(std::move(message));
 }
 
-static void AddDstBasedRoute(nc::htsim::Device* device, nc::net::IPAddress dst,
+static void AddDstBasedRoute(nc::htsim::DeviceInterface* device,
+                             nc::net::IPAddress dst,
                              nc::net::DevicePortNumber out_port,
                              nc::htsim::PacketTag tag) {
   AddSrcOrDstBasedRoute(device, dst, false, out_port, tag);
 }
 
-static void AddSrcBasedRoute(nc::htsim::Device* device, nc::net::IPAddress src,
+static void AddSrcBasedRoute(nc::htsim::DeviceInterface* device,
+                             nc::net::IPAddress src,
                              nc::net::DevicePortNumber out_port,
                              nc::htsim::PacketTag tag) {
   AddSrcOrDstBasedRoute(device, src, true, out_port, tag);
 }
 
-static void AddDefaultRoute(nc::htsim::Device* device,
+static void AddDefaultRoute(nc::htsim::DeviceInterface* device,
                             nc::net::DevicePortNumber out_port,
                             nc::htsim::PacketTag tag) {
   AddDstBasedRoute(device, nc::htsim::kWildIPAddress, out_port, tag);
@@ -524,8 +539,8 @@ void NetworkContainer::ConnectToSink(const std::string& device,
                                      nc::htsim::PacketTag reverse_tag) {
   auto it = devices_.find(device);
   CHECK(it != devices_.end());
-  nc::htsim::Device* device_ptr = it->second.get();
-  nc::htsim::Device* sink_ptr = GetSinkDevice();
+  nc::htsim::DeviceInterface* device_ptr = it->second.get();
+  nc::htsim::DeviceInterface* sink_ptr = GetSinkDevice();
 
   nc::htsim::Port* port_on_device =
       device_ptr->FindOrCreatePort(config_.default_enter_port);
@@ -576,7 +591,7 @@ NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
   // so that the return path works.
   auto it = devices_.find(source);
   CHECK(it != devices_.end());
-  nc::htsim::Device* source_device = it->second.get();
+  nc::htsim::DeviceInterface* source_device = it->second.get();
   nc::htsim::Port* port = source_device->NextAvailablePort();
   port->Connect(new_device->FindOrCreatePort(nc::net::DevicePortNumber(1)));
   AddDstBasedRoute(source_device, ip_source, port->number(),
@@ -596,7 +611,7 @@ NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
 void NetworkContainer::AddDefaultRouteToDummyHandler(const std::string device) {
   auto it = devices_.find(device);
   CHECK(it != devices_.end());
-  nc::htsim::Device* device_ptr = it->second.get();
+  nc::htsim::DeviceInterface* device_ptr = it->second.get();
 
   nc::htsim::Port* port = device_ptr->NextAvailablePort();
   port->Connect(&dummy_handler_);
@@ -646,7 +661,7 @@ void NetworkContainer::FromGraph() {
   }
 }
 
-nc::htsim::Device* NetworkContainer::GetSinkDevice() {
+nc::htsim::DeviceInterface* NetworkContainer::GetSinkDevice() {
   if (sink_device_) {
     return sink_device_.get();
   }
@@ -655,7 +670,7 @@ nc::htsim::Device* NetworkContainer::GetSinkDevice() {
                                                     event_queue_);
 
   for (const auto& id_and_device : devices_) {
-    nc::htsim::Device* device = id_and_device.second.get();
+    nc::htsim::DeviceInterface* device = id_and_device.second.get();
     nc::htsim::Port* port = device->FindOrCreatePort(kDeviceToSinkPort);
     nc::htsim::Port* sink_port =
         sink_device_->FindOrCreatePort(kDeviceToSinkPort);

@@ -98,6 +98,8 @@ class Controller : public ::nc::htsim::PacketHandler {
     return id_to_aggregate_state_;
   }
 
+  const nc::net::Walk* PathForTagOrDie(uint32_t tag) const;
+
  private:
   struct MessageAndNode {
     std::unique_ptr<nc::htsim::SSCPAddOrUpdate> message;
@@ -185,8 +187,14 @@ class Controller : public ::nc::htsim::PacketHandler {
   // The routing system actually does the prediction and optimization.
   RoutingSystem* routing_system_;
 
+  struct WalkPtrComparator {
+    bool operator()(const nc::net::Walk* lhs, const nc::net::Walk* rhs) const {
+      return *lhs < *rhs;
+    }
+  };
+
   // Per-path tag.
-  std::map<nc::net::Links, uint32_t> path_to_tag_;
+  std::map<const nc::net::Walk*, uint32_t, WalkPtrComparator> path_to_tag_;
 
   const nc::net::GraphStorage* graph_;
 };
@@ -242,6 +250,15 @@ struct NetworkContainerConfig {
   bool random_queues;
 };
 
+class DeviceFactory {
+ public:
+  virtual ~DeviceFactory(){};
+
+  virtual std::unique_ptr<nc::htsim::DeviceInterface> NewDevice(
+      const std::string& id, nc::net::IPAddress address,
+      nc::EventQueue* event_queue) = 0;
+};
+
 // A container class that constructs a network, per-device TLDR instance and a
 // controller. Aggregates and packet generators can be added to the network.
 class NetworkContainer {
@@ -255,9 +272,8 @@ class NetworkContainer {
 
   NetworkContainer(const NetworkContainerConfig& config,
                    const TLDRConfig& tldr_config,
-                   std::unique_ptr<Controller> controller,
-                   const nc::net::GraphStorage* graph,
-                   nc::EventQueue* event_queue);
+                   const nc::net::GraphStorage* graph, Controller* controller,
+                   DeviceFactory* device_factory, nc::EventQueue* event_queue);
 
   // Adds a new aggregate.
   void AddAggregate(const AggregateId& id, AggregateState aggregate_state);
@@ -304,13 +320,13 @@ class NetworkContainer {
   const nc::net::GraphStorage* graph() { return graph_; }
 
  private:
-  nc::htsim::Device* AddOrFindDevice(
+  nc::htsim::DeviceInterface* AddOrFindDevice(
       const std::string& id,
       std::uniform_int_distribution<size_t>* tldr_device_delay_dist,
       std::uniform_int_distribution<size_t>* controller_tldr_device_dist,
       std::default_random_engine* engine);
 
-  nc::htsim::Device* GetSinkDevice();
+  nc::htsim::DeviceInterface* GetSinkDevice();
 
   void FromGraph();
 
@@ -326,11 +342,11 @@ class NetworkContainer {
 
   // The controller config and the controller.
   std::map<AggregateId, AggregateState> id_to_aggregate_state_;
-  std::unique_ptr<Controller> controller_;
+  Controller* controller_;
 
   nc::htsim::Network network_;
   std::map<nc::net::GraphNodeIndex, TLDRNode> device_id_to_tldr_node_;
-  std::map<std::string, std::unique_ptr<nc::htsim::Device>> devices_;
+  std::map<std::string, std::unique_ptr<nc::htsim::DeviceInterface>> devices_;
   std::vector<std::unique_ptr<nc::htsim::Pipe>> pipes_;
   std::vector<std::unique_ptr<nc::htsim::Queue>> queues_;
 
@@ -342,10 +358,13 @@ class NetworkContainer {
   std::vector<std::unique_ptr<TLDR>> tldrs_;
 
   // TCP connections are terminated here.
-  std::unique_ptr<nc::htsim::Device> sink_device_;
+  std::unique_ptr<nc::htsim::DeviceInterface> sink_device_;
 
   // Boring traffic dies here.
   nc::htsim::DummyPacketHandler dummy_handler_;
+
+  // Constructs devices.
+  DeviceFactory* device_factory_;
 };
 
 }  // namespace controller

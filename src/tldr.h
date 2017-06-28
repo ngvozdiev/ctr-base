@@ -17,7 +17,6 @@
 #include "ncode_common/src/htsim/packet.h"
 #include "ncode_common/src/net/net_common.h"
 #include "common.h"
-#include "flow_counter.h"
 
 namespace ctr {
 
@@ -25,14 +24,16 @@ struct TLDRConfig {
   TLDRConfig(const nc::ThresholdEnforcerPolicy& threshold_enforcer_policy,
              nc::net::IPAddress ip_src, nc::net::IPAddress ip_switch_dst,
              nc::net::IPAddress ip_controller_dst,
-             std::chrono::milliseconds period_len,
-             std::chrono::milliseconds switch_poll_period)
+             std::chrono::milliseconds round_len,
+             std::chrono::milliseconds switch_poll_period,
+             size_t flow_count_sample_n)
       : ip_src(ip_src),
         ip_switch_dst(ip_switch_dst),
         ip_controller_dst(ip_controller_dst),
-        period_len(period_len),
+        round_len(round_len),
         threshold_enforcer_policy(threshold_enforcer_policy),
-        switch_poll_period(switch_poll_period) {}
+        switch_poll_period(switch_poll_period),
+        flow_count_sample_n(flow_count_sample_n) {}
 
   // All messages will have this address as source.
   nc::net::IPAddress ip_src;
@@ -44,29 +45,16 @@ struct TLDRConfig {
   nc::net::IPAddress ip_controller_dst;
 
   // How often to send LDR estimates to the controller.
-  std::chrono::milliseconds period_len;
+  std::chrono::milliseconds round_len;
 
   // Configures the threshold enforcer that limits churn to the switch.
   nc::ThresholdEnforcerPolicy threshold_enforcer_policy;
 
   // How often to poll the switch for per-rule stats.
   std::chrono::milliseconds switch_poll_period;
-};
 
-// Periodically sends stats requests to a device.
-class DevicePoller : public ::nc::EventConsumer {
- public:
-  DevicePoller(const std::string& id, const TLDRConfig& config,
-               nc::htsim::PacketHandler* to_device,
-               nc::EventQueue* event_queue);
-
-  void HandleEvent() override;
-
- private:
-  const TLDRConfig config_;
-
-  nc::EventQueueTime period_;
-  nc::htsim::PacketHandler* to_device_;
+  // One in N packets will be sampled to estimate flow counts at the switch.
+  size_t flow_count_sample_n;
 };
 
 // Bins data to later be fed to the LDR estimator.
@@ -138,9 +126,6 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
     // Bins incoming traffic.
     std::unique_ptr<VariableBinBinner> binner;
 
-    // Estimates expected number of flows.
-    std::unique_ptr<FlowCounter> flow_counter;
-
     // To make things more stable flows are only counted once per period, and
     // the value is cached, then the counter reset. Every time a flow count is
     // needed the cached value is used.
@@ -148,7 +133,7 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
 
     // Triggered optimization requests are allowed only if the max rate is above
     // this watermark value.
-    uint64_t watermark_bps;
+    nc::net::Bandwidth watermark;
 
     // The most recent update sent from the central controller. This contains
     // per-path limits.
@@ -185,8 +170,6 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
   void UpdateAggregateState(
       const std::vector<AggregateUpdateState>& aggregates);
 
-  void EnqueueNext();
-
   // Returns the fractional change (in range 0-1) of a path's fraction from the
   // currently assigned fraction.
   double FindChange(nc::htsim::PacketTag tag, double new_fraction);
@@ -194,6 +177,10 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
   // Returns the history seen for a given aggregate.
   AggregateHistory GetHistoryForAggregate(
       const TLDRAggregateState& aggregate_state) const;
+
+  void HandleStatsReplyNoFlowCounts(const nc::htsim::SSCPStatsReply& reply);
+
+  void HandleStatsReplyFlowCounts(const nc::htsim::SSCPStatsReply& reply);
 
   // A copy of the initial config.
   const TLDRConfig tldr_config_;
@@ -214,11 +201,15 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
   // The graph.
   const nc::net::GraphStorage* graph_;
 
-  // How often to run the main loop that sends data to the controller.
-  nc::EventQueueTime period_;
+  // How often to query the device.
+  nc::EventQueueTime device_poll_period_;
 
-  // Polls the switch for per-rule stats periodically.
-  DevicePoller poller_;
+  // How many times the device should be polled each round.
+  uint64_t device_polls_in_round_;
+
+  // How many times the device has been polled. Needed in order to figure out
+  // when to send a request that resets flow counts.
+  uint64_t device_poll_count_;
 
   // Generates round ids.
   uint64_t round_id_gen_;

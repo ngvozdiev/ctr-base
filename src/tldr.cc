@@ -85,135 +85,188 @@ void VariableBinBinner::AddBin(size_t bin_size) {
   last_bin_size_ = bin_size;
 }
 
+static bool MessageContainsFlowCounts(
+    const nc::htsim::SSCPStatsReply& message) {
+  bool has_flow_counts = false;
+  bool first = true;
+  for (const auto& key_and_stats : message.stats()) {
+    const std::vector<nc::htsim::ActionStats>& action_stats =
+        key_and_stats.second;
+
+    for (const auto& stats : action_stats) {
+      bool flow_count_meaningful =
+          stats.flow_count != std::numeric_limits<uint64_t>::max();
+      if (first) {
+        has_flow_counts = flow_count_meaningful;
+        first = false;
+      } else {
+        CHECK(has_flow_counts == flow_count_meaningful);
+      }
+    }
+  }
+
+  return has_flow_counts;
+}
+
+void TLDR::HandleStatsReplyNoFlowCounts(
+    const nc::htsim::SSCPStatsReply& stats_message) {
+  std::map<AggregateId, uint64_t> id_to_bytes_matched;
+  for (const auto& key_and_actions : stats_message.stats()) {
+    for (const nc::htsim::ActionStats action_stats : key_and_actions.second) {
+      // Need to figure out which aggregate the action belongs to by looking
+      // at the tag.
+      nc::htsim::PacketTag tag = action_stats.tag;
+      AggregateId* id = nc::FindOrNull(tag_to_aggregate_id_, tag);
+      if (id == nullptr) {
+        continue;
+      }
+
+      id_to_bytes_matched[*id] += action_stats.total_bytes_matched;
+    }
+  }
+
+  bool need_update = false;
+  for (const auto& id_and_bytes_matched : id_to_bytes_matched) {
+    AggregateId aggregate_id = id_and_bytes_matched.first;
+    uint64_t bytes_matched = id_and_bytes_matched.second;
+
+    TLDRAggregateState& aggregate_state =
+        nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate_id);
+    aggregate_state.binner->AddBin(bytes_matched);
+
+    // Now that we have updated the aggregate's rates we can check to see if
+    // we need to send a message to he controller to force a new
+    // optimization pass.
+    AggregateHistory history = GetHistoryForAggregate(aggregate_state);
+    if (history.bins().empty()) {
+      continue;
+    }
+
+    if (aggregate_state.watermark > nc::net::Bandwidth::Zero()) {
+      if (history.max_rate() < aggregate_state.watermark) {
+        continue;
+      }
+
+      double delta_f = (history.max_rate() - aggregate_state.watermark) /
+                       aggregate_state.watermark;
+      if (delta_f < 0.05) {
+        continue;
+      }
+    }
+    aggregate_state.watermark = history.max_rate();
+
+    CHECK(aggregate_state.most_recent_update);
+    nc::net::Bandwidth rate_limit = aggregate_state.most_recent_update->limit;
+
+    std::chrono::milliseconds max_queue = history.MaxQueueAtRate(rate_limit);
+    if (max_queue > std::chrono::milliseconds(10)) {
+      LOG(ERROR) << "Need update at " << id() << " aggregate id "
+                 << aggregate_id.ToString(*graph_) << " max queue is "
+                 << max_queue.count() << "ms rate limit is " << rate_limit;
+      need_update = true;
+    }
+  }
+
+  nc::EventQueueTime now = event_queue()->CurrentTime();
+  CHECK(last_trigered_update_ < now);
+  nc::EventQueueTime delta = now - last_trigered_update_;
+  if (delta > event_queue()->ToTime(std::chrono::milliseconds(100)) &&
+      need_update) {
+    LOG(ERROR) << "Will trigger update at " << id();
+    auto msg = nc::make_unique<TLDRTriggerReoptimize>(
+        tldr_config_.ip_src, tldr_config_.ip_controller_dst,
+        event_queue()->CurrentTime());
+    to_controller_->HandlePacket(std::move(msg));
+    last_trigered_update_ = event_queue()->CurrentTime();
+  }
+}
+
+void TLDR::HandleStatsReplyFlowCounts(
+    const nc::htsim::SSCPStatsReply& stats_message) {
+  std::map<AggregateId, std::pair<uint64_t, uint64_t>>
+      id_to_bytes_and_flow_counts;
+  for (const auto& key_and_actions : stats_message.stats()) {
+    for (const nc::htsim::ActionStats action_stats : key_and_actions.second) {
+      nc::htsim::PacketTag tag = action_stats.tag;
+      AggregateId* id = nc::FindOrNull(tag_to_aggregate_id_, tag);
+      if (id == nullptr) {
+        continue;
+      }
+
+      std::pair<uint64_t, uint64_t>& bytes_and_flow_counts =
+          id_to_bytes_and_flow_counts[*id];
+
+      bytes_and_flow_counts.first += action_stats.total_bytes_matched;
+      bytes_and_flow_counts.second += action_stats.flow_count;
+    }
+  }
+
+  for (const auto& id_and_bytes_and_flow_counts : id_to_bytes_and_flow_counts) {
+    AggregateId aggregate_id = id_and_bytes_and_flow_counts.first;
+    uint64_t bytes_matched, flow_count;
+    std::tie(bytes_matched, flow_count) = id_and_bytes_and_flow_counts.second;
+
+    TLDRAggregateState& aggregate_state =
+        nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate_id);
+    aggregate_state.binner->AddBin(bytes_matched);
+    aggregate_state.cached_flow_count = flow_count;
+    aggregate_state.watermark = nc::net::Bandwidth::Zero();
+  }
+
+  SendRequestToController(false);
+}
+
 void TLDR::HandlePacket(::nc::htsim::PacketPtr pkt) {
   using nc::htsim::SSCPAddOrUpdate;
   using nc::htsim::SSCPAck;
   using nc::htsim::SSCPStatsReply;
 
-  if (pkt->size_bytes() == 0) {
-    uint8_t type = pkt->five_tuple().ip_proto().Raw();
+  CHECK(pkt->size_bytes() == 0) << "Non-message packet at TLDR";
 
-    if (type == TLDRUpdate::kTLDRUpdateType) {
-      TLDRUpdate* update_message = static_cast<TLDRUpdate*>(pkt.get());
-      HandleUpdate(*update_message);
-    } else if (type == SSCPAddOrUpdate::kSSCPAddOrUpdateType) {
-      // SSPC messages / replies are directly forwarded to the switch /
-      // controller.
-      SSCPAddOrUpdate* original_update =
-          static_cast<SSCPAddOrUpdate*>(pkt.get());
+  uint8_t type = pkt->five_tuple().ip_proto().Raw();
+  if (type == TLDRUpdate::kTLDRUpdateType) {
+    TLDRUpdate* update_message = static_cast<TLDRUpdate*>(pkt.get());
+    HandleUpdate(*update_message);
+  } else if (type == SSCPAddOrUpdate::kSSCPAddOrUpdateType) {
+    // SSPC messages / replies are directly forwarded to the switch /
+    // controller.
+    SSCPAddOrUpdate* original_update = static_cast<SSCPAddOrUpdate*>(pkt.get());
 
-      auto update = nc::make_unique<SSCPAddOrUpdate>(
-          tldr_config_.ip_src, tldr_config_.ip_switch_dst, pkt->time_sent(),
-          original_update->TakeRule());
-      update->set_tx_id(original_update->tx_id());
-      to_switch_->HandlePacket(std::move(update));
-    } else if (type == SSCPAck::kSSCPAckType) {
-      SSCPAck* original_ack = static_cast<SSCPAck*>(pkt.get());
-      auto ack = nc::make_unique<SSCPAck>(
-          tldr_config_.ip_src, tldr_config_.ip_controller_dst, pkt->time_sent(),
-          original_ack->tx_id());
-      to_controller_->HandlePacket(std::move(ack));
-    } else if (type == SSCPStatsReply::kSSCPStatsReplyType) {
-      SSCPStatsReply* stats_message = static_cast<SSCPStatsReply*>(pkt.get());
+    auto update = nc::make_unique<SSCPAddOrUpdate>(
+        tldr_config_.ip_src, tldr_config_.ip_switch_dst, pkt->time_sent(),
+        original_update->TakeRule());
+    update->set_tx_id(original_update->tx_id());
+    to_switch_->HandlePacket(std::move(update));
+  } else if (type == SSCPAck::kSSCPAckType) {
+    SSCPAck* original_ack = static_cast<SSCPAck*>(pkt.get());
+    auto ack = nc::make_unique<SSCPAck>(
+        tldr_config_.ip_src, tldr_config_.ip_controller_dst, pkt->time_sent(),
+        original_ack->tx_id());
+    to_controller_->HandlePacket(std::move(ack));
+  } else if (type == SSCPStatsReply::kSSCPStatsReplyType) {
+    SSCPStatsReply* stats_message = static_cast<SSCPStatsReply*>(pkt.get());
 
-      std::map<AggregateId, uint64_t> id_to_bytes_matched;
-      for (const auto& key_and_actions : stats_message->stats()) {
-        for (const nc::htsim::ActionStats action_stats :
-             key_and_actions.second) {
-          // Need to figure out which aggregate the action belongs to by looking
-          // at the tag.
-          nc::htsim::PacketTag tag = action_stats.tag;
-          AggregateId* id = nc::FindOrNull(tag_to_aggregate_id_, tag);
-          if (id == nullptr) {
-            continue;
-          }
-
-          id_to_bytes_matched[*id] += action_stats.total_bytes_matched;
-        }
-      }
-
-      bool need_update = false;
-      for (const auto& id_and_bytes_matched : id_to_bytes_matched) {
-        AggregateId aggregate_id = id_and_bytes_matched.first;
-        uint64_t bytes_matched = id_and_bytes_matched.second;
-
-        TLDRAggregateState& aggregate_state =
-            nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate_id);
-        aggregate_state.binner->AddBin(bytes_matched);
-
-        // Now that we have updated the aggregate's rates we can check to see if
-        // we need to send a message to he controller to force a new
-        // optimization pass.
-        AggregateHistory history = GetHistoryForAggregate(aggregate_state);
-        if (history.bins().empty()) {
-          continue;
-        }
-
-        if (aggregate_state.watermark_bps > 0) {
-          if (history.max_rate().bps() < aggregate_state.watermark_bps) {
-            continue;
-          }
-
-          double delta_f =
-              (history.max_rate().bps() - aggregate_state.watermark_bps) /
-              static_cast<double>(aggregate_state.watermark_bps);
-          if (delta_f < 0.05) {
-            continue;
-          }
-        }
-        aggregate_state.watermark_bps = history.max_rate().bps();
-
-        CHECK(aggregate_state.most_recent_update);
-        nc::net::Bandwidth rate_limit =
-            aggregate_state.most_recent_update->limit;
-
-        std::chrono::milliseconds max_queue =
-            history.MaxQueueAtRate(rate_limit);
-        if (max_queue > std::chrono::milliseconds(10)) {
-          LOG(ERROR) << "Need update at " << id() << " aggregate id "
-                     << aggregate_id.ToString(*graph_) << " max queue is "
-                     << max_queue.count() << "ms rate limit is " << rate_limit;
-          need_update = true;
-        }
-      }
-
-      nc::EventQueueTime now = event_queue()->CurrentTime();
-      CHECK(last_trigered_update_ < now);
-      nc::EventQueueTime delta = now - last_trigered_update_;
-      if (delta > event_queue()->ToTime(std::chrono::milliseconds(100)) &&
-          need_update) {
-        LOG(ERROR) << "Will trigger update at " << id();
-        auto msg = nc::make_unique<TLDRTriggerReoptimize>(
-            tldr_config_.ip_src, tldr_config_.ip_controller_dst,
-            event_queue()->CurrentTime());
-        to_controller_->HandlePacket(std::move(msg));
-        last_trigered_update_ = event_queue()->CurrentTime();
-      }
-    } else if (type == TLDRForceRequest::kTLDRForceRequestType) {
-      SendRequestToController(true);
+    if (MessageContainsFlowCounts(*stats_message)) {
+      HandleStatsReplyFlowCounts(*stats_message);
+    } else {
+      HandleStatsReplyNoFlowCounts(*stats_message);
     }
 
-    return;
+  } else if (type == TLDRForceRequest::kTLDRForceRequestType) {
+    SendRequestToController(true);
   }
-
-  CHECK(pkt->tag() != nc::htsim::kDefaultTag) << "Untagged packet at TLDR "
-                                              << pkt->ToString();
-  // Need to figure out which aggregate the packet belongs to by looking at
-  // the tag.
-  AggregateId id = nc::FindOrDie(tag_to_aggregate_id_, pkt->tag());
-  TLDRAggregateState& aggregate_state =
-      nc::FindOrDieNoPrint(id_to_aggregate_state_, id);
-  aggregate_state.flow_counter->NewPacket(pkt->five_tuple());
 }
 
 AggregateHistory TLDR::GetHistoryForAggregate(
     const TLDRAggregateState& aggregate_state) const {
   auto now = event_queue()->CurrentTime();
-  if (now < period_) {
+  nc::EventQueueTime time_for_round =
+      device_poll_period_ * device_polls_in_round_;
+  if (now < time_for_round) {
     return {{}, std::chrono::milliseconds::max(), 0};
   }
   std::vector<uint64_t> bins =
-      aggregate_state.binner->GetBinsSince(now - period_);
+      aggregate_state.binner->GetBinsSince(now - time_for_round);
   if (bins.empty()) {
     return {{}, std::chrono::milliseconds::max(), 0};
   }
@@ -254,18 +307,13 @@ void TLDR::SendRequestToController(bool quick) {
 }
 
 void TLDR::HandleEvent() {
-  for (auto& id_and_estimator : id_to_aggregate_state_) {
-    TLDRAggregateState& tldr_aggregate_state = id_and_estimator.second;
-    tldr_aggregate_state.cached_flow_count =
-        tldr_aggregate_state.flow_counter->EstimateCount();
-    tldr_aggregate_state.watermark_bps = 0;
-  }
-
-  SendRequestToController(false);
-  EnqueueNext();
+  bool include_flow_counts = ++device_poll_count_ % device_polls_in_round_ == 0;
+  auto request = nc::make_unique<nc::htsim::SSCPStatsRequest>(
+      tldr_config_.ip_src, tldr_config_.ip_switch_dst,
+      event_queue()->CurrentTime(), include_flow_counts);
+  to_switch_->HandlePacket(std::move(request));
+  EnqueueIn(device_poll_period_);
 }
-
-void TLDR::EnqueueNext() { EnqueueIn(period_); }
 
 void TLDR::HandleUpdate(const TLDRUpdate& update) {
   LOG(INFO) << "Rx " << update.ToString();
@@ -358,7 +406,8 @@ void TLDR::RepackPaths(const AggregateUpdateState& aggregate) {
     auto action = nc::make_unique<nc::htsim::MatchRuleAction>(
         path.output_port_num, tag, weight);
     current_state.actions_installed.emplace(path.output_port_num, tag);
-    action->set_sample(true);
+
+    action->EnableFlowCounter(tldr_config_.flow_count_sample_n, event_queue());
     match_rule->AddAction(std::move(action));
   }
 
@@ -401,12 +450,10 @@ void TLDR::UpdateAggregateState(
       state_to_update->binner =
           nc::make_unique<VariableBinBinner>(event_queue(), true);
       state_to_update->cached_flow_count = 1;
-      state_to_update->watermark_bps = 0;
-
+      state_to_update->watermark = nc::net::Bandwidth::Zero();
       LOG(INFO) << "Added state for aggregate " << id.ToString(*graph_);
     }
 
-    state_to_update->flow_counter = nc::make_unique<FlowCounter>(event_queue());
     state_to_update->most_recent_update =
         nc::make_unique<AggregateUpdateState>(aggregate);
   }
@@ -433,28 +480,14 @@ TLDR::TLDR(const std::string& id, const TLDRConfig& config,
       to_switch_(to_switch),
       to_controller_(to_controller),
       graph_(graph_storage),
-      period_(event_queue->ToTime(tldr_config_.period_len)),
-      poller_(nc::StrCat(id, "_poller"), config, to_switch, event_queue),
+      device_poll_period_(event_queue->ToTime(tldr_config_.switch_poll_period)),
+      device_poll_count_(0),
       round_id_gen_(0),
       last_trigered_update_(nc::EventQueueTime::ZeroTime()) {
-  EnqueueNext();
+  size_t round_count = tldr_config_.round_len.count();
+  size_t poll_period_count = tldr_config_.switch_poll_period.count();
+  device_polls_in_round_ = round_count / poll_period_count;
+  CHECK(round_count % poll_period_count == 0);
+  EnqueueIn(device_poll_period_);
 }
-
-DevicePoller::DevicePoller(const std::string& id, const TLDRConfig& config,
-                           nc::htsim::PacketHandler* to_device,
-                           nc::EventQueue* event_queue)
-    : ::nc::EventConsumer(id, event_queue),
-      config_(config),
-      period_(event_queue->ToTime(config.switch_poll_period)),
-      to_device_(to_device) {
-  EnqueueIn(period_);
-}
-
-void DevicePoller::HandleEvent() {
-  auto request = nc::make_unique<nc::htsim::SSCPStatsRequest>(
-      config_.ip_src, config_.ip_switch_dst, event_queue()->CurrentTime());
-  to_device_->HandlePacket(std::move(request));
-  EnqueueIn(period_);
-}
-
 }  // namespace tldr

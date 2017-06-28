@@ -3,21 +3,29 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/event_queue.h"
 #include "ncode_common/src/file.h"
+#include "ncode_common/src/htsim/match.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
 #include "common.h"
+#include "controller.h"
 #include "mean_est/mean_est.h"
+#include "metrics/metrics.h"
 #include "net_mock.h"
-#include "opt/opt.h"
 #include "opt/ctr.h"
+#include "opt/opt.h"
+#include "opt/path_provider.h"
 #include "pcap_data.h"
 #include "routing_system.h"
-#include "metrics/metrics.h"
+#include "tldr.h"
 
 DEFINE_string(topology, "", "A file with a topology");
 DEFINE_string(traffic_matrix, "", "A file with a traffic matrix");
@@ -89,8 +97,25 @@ int main(int argc, char** argv) {
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
 
-  ctr::NetMock net_mock(
-      initial_sequences, std::chrono::milliseconds(FLAGS_period_duration_ms),
-      std::chrono::milliseconds(FLAGS_history_bin_size_ms), &routing_system);
-  net_mock.Run();
+  nc::SimTimeEventQueue event_queue;
+  nc::net::IPAddress controller_ip(100);
+  nc::net::IPAddress device_ip_base(2000);
+  nc::net::IPAddress tldr_ip_base(3000);
+  nc::net::DevicePortNumber enter_port(4000);
+  nc::net::DevicePortNumber exit_port(5000);
+
+  ctr::controller::Controller controller(controller_ip, &routing_system,
+                                         &event_queue, &graph);
+  ctr::MockDeviceFactory device_factory(&controller);
+  ctr::controller::NetworkContainerConfig containter_config(
+      device_ip_base, tldr_ip_base, enter_port, exit_port,
+      std::chrono::milliseconds(100), false);
+  ctr::TLDRConfig tldr_config(
+      {}, nc::htsim::kWildIPAddress, nc::htsim::kWildIPAddress, controller_ip,
+      std::chrono::milliseconds(60000), std::chrono::milliseconds(100), 100);
+  ctr::controller::NetworkContainer network_container(
+      containter_config, tldr_config, &graph, &controller, &device_factory,
+      &event_queue);
+
+  network_container.Init();
 }

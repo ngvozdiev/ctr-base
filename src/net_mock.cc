@@ -1,178 +1,160 @@
 #include "net_mock.h"
 
 #include <algorithm>
-#include <limits>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <set>
+#include <tuple>
 #include <utility>
+#include <vector>
 
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/logging.h"
 #include "ncode_common/src/map_util.h"
-#include "routing_system.h"
-#include "metrics/metrics.h"
+#include "controller.h"
 
 namespace ctr {
 
-static auto* link_utilization_metric =
-    nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<double, std::string, std::string>(
-            "link_utilization", "Records per-link utilization", "Link source",
-            "Link destination");
-
-NetMock::NetMock(const std::map<AggregateId, BinSequence>& initial_sequences,
-                 std::chrono::milliseconds period_duration,
-                 std::chrono::milliseconds history_bin_size,
-                 RoutingSystem* routing_system)
-    : history_bin_size_(history_bin_size),
-      initial_sequences_(initial_sequences),
-      routing_system_(routing_system),
-      graph_(routing_system_->graph()) {
-  CHECK(!initial_sequences.empty());
-  size_t min_bin_count = std::numeric_limits<size_t>::max();
-  std::chrono::milliseconds bin_size = std::chrono::milliseconds::zero();
-  for (const auto& id_and_bin_sequence : initial_sequences) {
-    const BinSequence& bin_sequence = id_and_bin_sequence.second;
-    if (bin_size == std::chrono::milliseconds::zero()) {
-      bin_size = std::chrono::duration_cast<std::chrono::milliseconds>(
-          bin_sequence.bin_size());
-    } else {
-      CHECK(bin_size == bin_sequence.bin_size());
-    }
-
-    size_t count = bin_sequence.bin_count();
-    min_bin_count = std::min(min_bin_count, count);
-  }
-
-  period_duration_bins_ = period_duration.count() / bin_size.count();
-  CHECK(period_duration_bins_ > 0);
-  period_count_ = min_bin_count / period_duration_bins_;
+void MockDevice::HandlePacketFromPort(nc::htsim::Port* input_port,
+                                      nc::htsim::PacketPtr pkt) {
+  nc::Unused(input_port);
+  CHECK(pkt->five_tuple().ip_dst() == ip_address());
+  HandlePacket(std::move(pkt));
 }
 
-// Generates the input to the system.
-std::map<AggregateId, AggregateHistory> NetMock::GenerateInput(
-    std::map<AggregateId, BinSequence>* period_sequences) const {
-  std::map<AggregateId, AggregateHistory> input;
-  for (auto& aggregate_and_bins : *period_sequences) {
-    const AggregateId& aggregate = aggregate_and_bins.first;
-    BinSequence& bins = aggregate_and_bins.second;
+void MockDevice::HandleStateUpdate(const nc::htsim::SSCPAddOrUpdate& update) {
+  AdvanceTime();
 
-    input.emplace(
-        std::piecewise_construct, std::forward_as_tuple(aggregate),
-        std::forward_as_tuple(bins.GenerateHistory(history_bin_size_)));
+  const nc::htsim::MatchRule& rule = update.rule();
+  const nc::htsim::MatchRuleKey& key = rule.key();
+  AggregateState& state = nc::FindOrDie(states_, key);
+
+  double total_weight = 0;
+  for (const nc::htsim::MatchRuleAction* action : rule.actions()) {
+    total_weight += action->weight();
   }
 
-  return input;
+  // Each action in the rule is a separate path.
+  std::set<nc::htsim::PacketTag> tags_in_actions;
+  for (const nc::htsim::MatchRuleAction* action : rule.actions()) {
+    nc::htsim::PacketTag tag = action->tag();
+    CHECK(tag.IsNotZero());
+    tags_in_actions.emplace(tag);
+
+    const nc::net::Walk* path = controller_->PathForTagOrDie(tag.Raw());
+    double fraction = action->weight() / total_weight;
+
+    auto it_and_bool = state.paths.emplace(
+        std::piecewise_construct, std::forward_as_tuple(tag),
+        std::forward_as_tuple(path, action->output_port(), tag));
+    PathState& path_state = it_and_bool.first->second;
+    path_state.fraction = fraction;
+  }
+
+  // There should be no paths removed.
+  for (const auto& tag_and_path_state : state.paths) {
+    CHECK(nc::ContainsKey(tags_in_actions, tag_and_path_state.first));
+  }
 }
 
-nc::net::GraphLinkMap<std::vector<double>> NetMock::CheckOutput(
-    const std::map<AggregateId, BinSequence>& period_sequences,
-    const RoutingConfiguration& configuration) const {
-  nc::net::GraphLinkMap<std::unique_ptr<BinSequence>> link_to_bins;
+void MockDevice::AdvanceTime() {
+  using namespace std::chrono;
 
-  // First need to figure out which paths cross each link. Will also build a
-  // map from paths to aggregates and path indices.
-  for (const auto& aggregate_and_routes : configuration.routes()) {
-    const AggregateId& aggregate = aggregate_and_routes.first;
-    const std::vector<RouteAndFraction>& routes = aggregate_and_routes.second;
+  auto now = event_queue_->CurrentTime();
+  microseconds now_micros =
+      duration_cast<microseconds>(event_queue_->TimeToNanos(now));
+  microseconds last_advance_time_micros = duration_cast<microseconds>(
+      event_queue_->TimeToNanos(last_advance_time_));
+  if (now_micros == last_advance_time_micros) {
+    return;
+  }
 
-    std::vector<double> fractions;
-    for (const auto& route_and_fraction : routes) {
-      fractions.emplace_back(route_and_fraction.second);
-    }
+  for (auto& key_and_state : states_) {
+    AggregateState& state = key_and_state.second;
+    BinSequence& bin_sequence = state.bin_sequence;
+    microseconds bin_size = bin_sequence.bin_size();
 
-    // For each of the aggregate's paths, the bins that go on that path.
-    std::vector<BinSequence> aggregate_split =
-        nc::FindOrDieNoPrint(period_sequences, aggregate)
-            .PreciseSplitOrDie(fractions);
+    // Need to convert microseconds to bin counts. Will also check to make
+    // sure they are proper multiples of eachother.
+    size_t now_bin_count = now_micros.count() / bin_size.count();
+    CHECK(now_micros.count() % bin_size.count() == 0);
 
-    for (size_t i = 0; i < routes.size(); ++i) {
-      const nc::net::Walk* path = routes[i].first;
-      for (nc::net::GraphLinkIndex link : path->links()) {
-        std::unique_ptr<BinSequence>& bin_sequence_ptr = link_to_bins[link];
-        if (!bin_sequence_ptr) {
-          bin_sequence_ptr = nc::make_unique<BinSequence>(aggregate_split[i]);
-        } else {
-          bin_sequence_ptr->Combine(aggregate_split[i]);
-        }
+    size_t last_advance_bin_count =
+        last_advance_time_micros.count() / bin_size.count();
+    CHECK(last_advance_time_micros.count() % bin_size.count() == 0);
+
+    BinSequence to_end = bin_sequence.CutFromStart(now_bin_count);
+    BinSequence period_sequence = to_end.Offset(last_advance_bin_count);
+
+    for (auto& tag_and_path_state : state.paths) {
+      PathState& path_state = tag_and_path_state.second;
+      BinSequence split_sequence =
+          period_sequence.PreciseSplitOrDie({path_state.fraction})[0];
+
+      std::vector<PcapDataTraceBin> bins =
+          split_sequence.AccumulateBins(bin_size);
+      for (const auto& bin : bins) {
+        path_state.stats.total_bytes_matched += bin.bytes;
+        path_state.stats.total_pkts_matched += bin.packets;
+        path_state.total_syns += bin.flows_enter;
       }
     }
   }
 
-  nc::net::GraphLinkMap<std::vector<double>> out;
-  for (const auto& link_and_bins : link_to_bins) {
-    nc::net::GraphLinkIndex link = link_and_bins.first;
-    nc::net::Bandwidth rate = graph_->GetLink(link)->bandwidth();
-    out[link] = (*link_and_bins.second)->Residuals(rate);
-  }
-
-  return out;
+  last_advance_time_ = now;
 }
 
-std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(size_t n) const {
-  size_t period_start_bin = n * period_duration_bins_;
-  size_t period_end_bin = (n + 1) * period_duration_bins_;
+void MockDevice::ReplyToRequest(const nc::htsim::SSCPStatsRequest& request,
+                                nc::htsim::SSCPStatsReply* reply) {
+  AdvanceTime();
+  for (auto& key_and_state : states_) {
+    AggregateState& state = key_and_state.second;
 
-  std::map<AggregateId, BinSequence> out;
-  for (const auto& aggregate_and_bins : initial_sequences_) {
-    const AggregateId& aggregate = aggregate_and_bins.first;
-    const BinSequence& bins = aggregate_and_bins.second;
+    std::vector<nc::htsim::ActionStats> stats;
+    for (auto& tag_and_path : state.paths) {
+      PathState& path_state = tag_and_path.second;
 
-    BinSequence to_end = bins.CutFromStart(period_end_bin);
-    BinSequence period_sequence = to_end.Offset(period_start_bin);
-    out.emplace(std::piecewise_construct, std::forward_as_tuple(aggregate),
-                std::forward_as_tuple(period_sequence));
-  }
-
-  return out;
-}
-
-std::unique_ptr<RoutingConfiguration> NetMock::InitialOutput() const {
-  std::map<AggregateId, BinSequence> zero_period = GetNthPeriod(0);
-  std::map<AggregateId, AggregateHistory> input = GenerateInput(&zero_period);
-  return routing_system_->Update(input, 0);
-}
-
-static size_t CheckSameSize(
-    const nc::net::GraphLinkMap<std::vector<double>>& values) {
-  size_t i = 0;
-  for (const auto& link_and_values : values) {
-    const std::vector<double>& v = *link_and_values.second;
-    CHECK(v.size() > 0);
-    if (i == 0) {
-      i = v.size();
-    } else {
-      CHECK(i == v.size());
-    }
-  }
-
-  return i;
-}
-
-void NetMock::Run() {
-  std::unique_ptr<RoutingConfiguration> output = InitialOutput();
-  size_t timestamp = 0;
-  for (size_t i = 0; i < period_count_; ++i) {
-    LOG(ERROR) << "Period " << i;
-
-    std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(i);
-    nc::net::GraphLinkMap<std::vector<double>> per_link_residuals =
-        CheckOutput(period_sequences, *output);
-    size_t num_residuals = CheckSameSize(per_link_residuals);
-
-    for (auto link_and_residuals : per_link_residuals) {
-      nc::net::GraphLinkIndex link = link_and_residuals.first;
-      std::vector<double>& residuals = *link_and_residuals.second;
-
-      const nc::net::GraphLink* link_ptr = graph_->GetLink(link);
-      auto* handle = link_utilization_metric->GetHandle(link_ptr->src_id(),
-                                                        link_ptr->dst_id());
-      size_t t = timestamp;
-      for (double v : residuals) {
-        handle->AddValueWithTimestamp(t++, v);
+      nc::htsim::ActionStats to_add = path_state.stats;
+      if (request.include_flow_counts()) {
+        to_add.flow_count = path_state.total_syns;
+        path_state.total_syns = 0;
       }
+
+      stats.emplace_back(to_add);
     }
 
-    timestamp += num_residuals;
-    std::map<AggregateId, AggregateHistory> input =
-        GenerateInput(&period_sequences);
-    output = routing_system_->Update(input, timestamp);
+    reply->AddStats(key_and_state.first, stats);
+  }
+}
+
+void MockDevice::HandlePacket(nc::htsim::PacketPtr pkt) {
+  using namespace nc::htsim;
+  CHECK(pkt->size_bytes() == 0);
+  uint8_t type = pkt->five_tuple().ip_proto().Raw();
+  if (type == SSCPAddOrUpdate::kSSCPAddOrUpdateType) {
+    SSCPAddOrUpdate* add_or_update_message =
+        static_cast<SSCPAddOrUpdate*>(pkt.get());
+    HandleStateUpdate(*add_or_update_message);
+    if (add_or_update_message->tx_id() != SSCPMessage::kNoTxId &&
+        replies_handler_ != nullptr) {
+      auto reply = nc::make_unique<SSCPAck>(
+          ip_address_, pkt->five_tuple().ip_src(), event_queue_->CurrentTime(),
+          add_or_update_message->tx_id());
+
+      LOG(INFO) << "Will TX ACK " << reply->ToString();
+      replies_handler_->HandlePacket(std::move(reply));
+    }
+  } else if (type == SSCPStatsRequest::kSSCPStatsRequestType) {
+    SSCPStatsRequest* stats_request_message =
+        static_cast<SSCPStatsRequest*>(pkt.get());
+
+    auto reply = nc::make_unique<SSCPStatsReply>(
+        ip_address_, pkt->five_tuple().ip_src(), event_queue_->CurrentTime());
+    ReplyToRequest(*stats_request_message, reply.get());
+
+    CHECK(replies_handler_) << "Received stats request, but no output handler";
+    replies_handler_->HandlePacket(std::move(reply));
   }
 }
 
