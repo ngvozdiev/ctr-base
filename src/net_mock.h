@@ -43,6 +43,11 @@ class MockDevice : public nc::htsim::DeviceInterface {
   void HandlePacketFromPort(nc::htsim::Port* input_port,
                             nc::htsim::PacketPtr pkt) override;
 
+  void AddAggregate(const nc::htsim::MatchRuleKey& key,
+                    BinSequence bin_sequence) {
+    states_.emplace(key, bin_sequence);
+  }
+
  private:
   struct PathState {
     PathState(const nc::net::Walk* path, nc::net::DevicePortNumber output_port,
@@ -56,6 +61,8 @@ class MockDevice : public nc::htsim::DeviceInterface {
   };
 
   struct AggregateState {
+    AggregateState(BinSequence bin_sequence) : bin_sequence(bin_sequence) {}
+
     // The most recent routes for this aggregate.
     std::map<nc::htsim::PacketTag, PathState> paths;
 

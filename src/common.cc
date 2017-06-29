@@ -308,10 +308,10 @@ std::string TrafficMatrix::ToString() const {
   }
   std::sort(sp_utilizations.begin(), sp_utilizations.end());
 
-  out.emplace_back(
-      nc::StrCat("TM with ", demands_.size(), " demands, scale factor ",
-                 demand_matrix->MaxCommodityScaleFractor(),
-                 " sp link utilizations: ", nc::Join(sp_utilizations, ",")));
+  out.emplace_back(nc::StrCat(
+      "TM with ", static_cast<uint64_t>(demands_.size()),
+      " demands, scale factor ", demand_matrix->MaxCommodityScaleFractor(),
+      " sp link utilizations: ", nc::Join(sp_utilizations, ",")));
   for (const auto& aggregate_and_demand : demands_) {
     const AggregateId& aggregate = aggregate_and_demand.first;
     out.emplace_back(AggregateToString(aggregate));
