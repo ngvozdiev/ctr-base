@@ -347,8 +347,7 @@ BalancingObserver::BalancingObserver(
 }
 
 void BalancingObserver::ObservePacket(const nc::htsim::Packet& pkt) {
-  nc::htsim::MatchRuleAction* action =
-      dispatch_rule_->ChooseOrNull(pkt.five_tuple());
+  const nc::htsim::MatchRuleAction* action = dispatch_rule_->ChooseOrNull(pkt);
   CHECK(action != nullptr);
 
   uint32_t index = action->output_port().Raw();
@@ -592,13 +591,17 @@ void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
   }
 }
 
+static constexpr size_t kCacheSizeMb = 10;
+
 std::vector<PcapDataTraceBin> PcapDataTrace::BinsCombined(
     const std::set<size_t>& slices, size_t start_bin, size_t end_bin) {
   CHECK(end_bin <= trace_pb_.bin_count());
 
   const CachedBins* cached = nc::FindOrNull(bins_cache_, slices);
   if (cached == nullptr || (cached->from > start_bin || cached->to < end_bin)) {
-    uint64_t offset = (end_bin - start_bin) * 10;
+    size_t element_count = kCacheSizeMb * 1000000 / sizeof(PcapDataTraceBin);
+    uint64_t offset = std::max(element_count / 2, end_bin - start_bin);
+
     size_t cache_end = std::min(static_cast<uint64_t>(trace_pb_.bin_count()),
                                 static_cast<uint64_t>(end_bin + offset));
     size_t cache_start = offset > start_bin ? 0 : start_bin - offset;
@@ -809,6 +812,14 @@ BinSequence BinSequence::CutFromStart(size_t offset_from_start) const {
   }
 
   return {new_traces};
+}
+
+BinSequence BinSequence::CutFromStart(
+    std::chrono::microseconds duration) const {
+  std::chrono::microseconds bin_size_micros = bin_size();
+  CHECK(duration.count() % bin_size_micros.count() == 0);
+  size_t bin_count = duration.count() / bin_size_micros.count();
+  return CutFromStart(bin_count);
 }
 
 BinSequence BinSequence::Offset(size_t offset) const {

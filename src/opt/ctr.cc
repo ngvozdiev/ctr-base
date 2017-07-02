@@ -350,7 +350,9 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   nc::net::GraphLinkMap<std::vector<PathAndCost>> link_to_paths;
   nc::net::GraphLinkMap<VariableIndex> link_to_oversubscription_variable;
   std::map<AggregateId, std::vector<PathAndCost>> aggregate_to_paths;
-  CHECK(paths_->size() == input_->demands().size()) << "Inconsistent path map";
+  CHECK(paths_->size() == input_->demands().size()) << "Inconsistent path map "
+                                                    << paths_->size() << " vs "
+                                                    << input_->demands().size();
 
   // The main LP.
   Problem problem(nc::lp::MINIMIZE);

@@ -100,6 +100,10 @@ class Controller : public ::nc::htsim::PacketHandler {
 
   const nc::net::Walk* PathForTagOrDie(uint32_t tag) const;
 
+  const nc::net::GraphStorage* graph() const { return graph_; }
+
+  const nc::EventQueue* event_queue() const { return event_queue_; }
+
  private:
   struct MessageAndNode {
     std::unique_ptr<nc::htsim::SSCPAddOrUpdate> message;

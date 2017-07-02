@@ -57,7 +57,7 @@ def Update(val):
     if check.lines[0][0].get_visible():
         dampen_ratio = True
 
-    cmd = '../build/stability_eval_dependent --cd_link_gbps {} --cd_link_ms {} --cd_aggregate_gbps {} --cd_aggregate_flows {} --ab_link_gbps {} --ab_link_ms {} --ab_aggregate_gbps {} --ab_aggregate_flows {} --decay_factor {} --steps {} --opt="{}" --dampen_ratio={}'.format(cd_capacity, cd_delay, cd_demand, int(cd_flows), ab_capacity, ab_delay, ab_demand, int(ab_flows), decay_factor, 100, opt, dampen_ratio)
+    cmd = '../build/stability_eval_dependent --cd_link_gbps {} --cd_link_ms {} --cd_aggregate_gbps {} --cd_aggregate_flows {} --ab_link_gbps {} --ab_link_ms {} --ab_aggregate_gbps {} --ab_aggregate_flows {} --decay_factor {} --steps {} --opt="{}" --dampen_ratio={}'.format(cd_capacity, cd_delay, cd_demand, int(cd_flows), ab_capacity, ab_delay, ab_demand, int(ab_flows), decay_factor, 1000, opt, dampen_ratio)
     #print cmd
     start_time = timeit.default_timer()
     output = subprocess.check_output(cmd, shell=True)

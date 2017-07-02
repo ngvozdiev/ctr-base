@@ -167,11 +167,15 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
     const std::vector<RouteAndFraction>& routes = id_and_routes.second;
     const AggregateState& aggregate_state =
         nc::FindOrDieNoPrint(id_to_aggregate_state_, id);
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(routing_config.demands(), id);
+    nc::net::Bandwidth demand = demand_and_flow_count.first;
 
     AggregateUpdateState update_state(id, aggregate_state.key());
     for (const auto& route_and_fraction : routes) {
       // The output port is the first port in the path.
       const nc::net::Walk* path = route_and_fraction.first;
+
       const nc::net::Links& links = path->links();
       nc::net::GraphLinkIndex first_link_index = links.front();
       const nc::net::GraphLink* first_link = graph_->GetLink(first_link_index);
@@ -182,7 +186,10 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
       update_state.paths.emplace_back(path_update_state);
     }
 
-    // TODO: populate the aggregate's limit.
+    // TODO: This should be higher (if there is slack capacity) or lower (if
+    // traffic does not fit).
+    update_state.limit = demand;
+
     out.emplace(id, update_state);
   }
 
@@ -209,7 +216,7 @@ void Controller::ReOptimize(RoundState* round) {
       round->pending_output;
   std::set<uint64_t>& outstanding_tx_ids = round->outstanding_tx_ids;
 
-  CHECK(!pending_output.empty());
+  CHECK(pending_output.empty());
   CHECK(outstanding_tx_ids.empty());
   nc::EventQueueTime delta = event_queue_->CurrentTime() - last_optimize_time_;
   if (last_optimize_time_ != nc::EventQueueTime::ZeroTime() &&
@@ -249,13 +256,21 @@ void Controller::ReOptimize(RoundState* round) {
   // Need to do this in 2 passes - the message may return as soon as it is sent,
   // which will cause problems.
   for (const auto& message_and_node : messages_to_send) {
+    LOG(ERROR) << message_and_node.message->ToString() << " node "
+               << message_and_node.node->tldr_address;
     outstanding_tx_ids.emplace(message_and_node.message->tx_id());
   }
 
+  uint64_t round_id = round->round_id;
   for (auto& message_and_node : messages_to_send) {
     LOG(INFO) << "Tx " << message_and_node.message->ToString();
     PacketHandler* to_tldr = message_and_node.node->to_tldr;
     to_tldr->HandlePacket(std::move(message_and_node.message));
+  }
+
+  if (!nc::ContainsKey(round_states_, round_id)) {
+    // Round was already committed by HandlePacket immediately returning.
+    return;
   }
 
   if (outstanding_tx_ids.empty()) {

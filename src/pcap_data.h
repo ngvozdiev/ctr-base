@@ -146,6 +146,10 @@ class BinSequence {
   // first 'offset_from_start' bins.
   BinSequence CutFromStart(size_t offset_from_start) const;
 
+  // Same as above, but takes in a duration. The duration should be an exact
+  // multiple of bin_size.
+  BinSequence CutFromStart(std::chrono::microseconds duration) const;
+
   // Offsets both the start and the end bin of this sequence.
   BinSequence Offset(size_t bin_count) const;
 

@@ -140,6 +140,9 @@ class StabilityEvalHarness {
         CHECK(total_mbps == total_mbps);
       }
 
+      std::mt19937 rnd(1);
+      std::uniform_real_distribution<double> dist(1, 10);
+
       double new_flow_count = flow_count;
       if (FLAGS_dampen_ratio) {
         // The demand in the output will not be the same as the one in the input
@@ -276,7 +279,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
   PathProvider path_provider(&graph);
   std::unique_ptr<Optimizer> opt;
   if (FLAGS_opt == "CTR") {
-    opt = nc::make_unique<CTROptimizer>(&path_provider, false);
+    opt = nc::make_unique<CTROptimizer>(&path_provider, true);
   } else if (FLAGS_opt == "B4") {
     opt = nc::make_unique<B4Optimizer>(&path_provider, false);
   } else if (FLAGS_opt == "B4(P)") {
@@ -287,7 +290,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
 
   MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
-  RoutingSystem routing_system({}, opt.get(), &estimator_factory);
+  RoutingSystem routing_system({}, opt.get(), &estimator_factory, false);
   StabilityEvalHarness harness(&initial_tm, &routing_system, FLAGS_steps);
   harness.DumpAggregateVolumes();
   harness.DumpLinkFractions();

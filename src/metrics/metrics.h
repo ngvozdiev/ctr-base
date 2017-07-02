@@ -754,6 +754,39 @@ class DefaultMetricManagerPoller : public EventConsumer {
   std::chrono::milliseconds period_;
 };
 
+// A timestamp provider that is based off an event queue.
+class SimTimestampProvider : public TimestampProviderInterface {
+ public:
+  static constexpr const char* kPicoseconds = "picoseconds";
+  SimTimestampProvider(SimTimeEventQueue* event_queue)
+      : event_queue_(event_queue) {}
+
+  uint64_t GetTimestamp() const override {
+    return event_queue_->CurrentTime().Raw();
+  }
+
+  const char* TimestampUnits() const override { return kPicoseconds; }
+
+  std::string TimestampToString(uint64_t timestamp) const override {
+    using std::chrono::system_clock;
+    const auto dt = SimTimeEventQueue::picoseconds(timestamp);
+    const std::chrono::time_point<system_clock> tp_after_duration(
+        std::chrono::duration_cast<std::chrono::milliseconds>(dt));
+    time_t time_after_duration = system_clock::to_time_t(tp_after_duration);
+    uint64_t milliseconds_remainder = (timestamp / 1000) % 1000;
+
+    char s[128];
+    strftime(s, 128, "%H:%M:%S ", std::localtime(&time_after_duration));
+
+    std::string time_str(s);
+    time_str += std::to_string(milliseconds_remainder) + "ms";
+    return time_str;
+  }
+
+ private:
+  SimTimeEventQueue* event_queue_;
+};
+
 }  // namespace metrics
 }  // namespace nc
 

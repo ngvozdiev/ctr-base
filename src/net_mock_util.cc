@@ -40,9 +40,39 @@ DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
 
+static nc::htsim::MatchRuleKey KeyFromAggregateId(const ctr::AggregateId& id) {
+  using namespace nc::htsim;
+  using namespace nc::net;
+  FiveTuple five_tuple(IPAddress(id.src()), IPAddress(id.dst()), kWildIPProto,
+                       kWildAccessLayerPort, kWildAccessLayerPort);
+  return {kWildPacketTag, kWildDevicePortNumber, {five_tuple}};
+}
+
+// A global variable that will keep a reference to the event queue, useful for
+// logging, as the logging handler only accepts a C-style function pointer.
+static nc::EventQueue* event_queue_global_ptr;
+
+void CustomLogHandler(nc::LogLevel level, const char* filename, int line,
+                      const std::string& message, nc::LogColor color) {
+  uint64_t time_as_ms = event_queue_global_ptr->TimeToRawMillis(
+      event_queue_global_ptr->CurrentTime());
+  std::string new_message = nc::StrCat(time_as_ms, "ms ", message);
+  nc::DefaultLogHandler(level, filename, line, new_message, color);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
+
+  // The event queue.
+  nc::SimTimeEventQueue event_queue;
+  event_queue_global_ptr = &event_queue;
+  nc::SetLogHandler(CustomLogHandler);
+
+  auto timestamp_provider =
+      ::nc::make_unique<nc::metrics::SimTimestampProvider>(&event_queue);
+  nc::metrics::DefaultMetricManager()->set_timestamp_provider(
+      std::move(timestamp_provider));
 
   CHECK(!FLAGS_topology.empty());
   CHECK(!FLAGS_traffic_matrix.empty());
@@ -79,6 +109,7 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
+    //    break;
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -97,25 +128,54 @@ int main(int argc, char** argv) {
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
 
-  nc::SimTimeEventQueue event_queue;
   nc::net::IPAddress controller_ip(100);
   nc::net::IPAddress device_ip_base(2000);
   nc::net::IPAddress tldr_ip_base(3000);
   nc::net::DevicePortNumber enter_port(4000);
   nc::net::DevicePortNumber exit_port(5000);
 
+  std::chrono::milliseconds round_duration(60000);
+  std::chrono::milliseconds poll_period(100);
+
   ctr::controller::Controller controller(controller_ip, &routing_system,
                                          &event_queue, &graph);
-  ctr::MockDeviceFactory device_factory(&controller);
+  ctr::MockSimDeviceFactory device_factory(enter_port, &event_queue);
+  for (const auto& id_and_bin_sequence : initial_sequences) {
+    const ctr::AggregateId& id = id_and_bin_sequence.first;
+    const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
+    nc::htsim::MatchRuleKey key_for_aggregate = KeyFromAggregateId(id);
+
+    // Will add the bin sequence to the source device.
+    const std::string& src_device_id = graph.GetNode(id.src())->id();
+    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
+                                  bin_sequence);
+  }
+
   ctr::controller::NetworkContainerConfig containter_config(
       device_ip_base, tldr_ip_base, enter_port, exit_port,
       std::chrono::milliseconds(100), false);
-  ctr::TLDRConfig tldr_config(
-      {}, nc::htsim::kWildIPAddress, nc::htsim::kWildIPAddress, controller_ip,
-      std::chrono::milliseconds(60000), std::chrono::milliseconds(100), 100);
+  ctr::TLDRConfig tldr_config({}, nc::htsim::kWildIPAddress,
+                              nc::htsim::kWildIPAddress, controller_ip,
+                              round_duration, poll_period, 100);
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &device_factory,
       &event_queue);
 
+  for (const auto& id_and_bin_sequence : initial_sequences) {
+    const ctr::AggregateId& id = id_and_bin_sequence.first;
+    const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
+
+    ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
+    ctr::AggregateHistory init_history =
+        from_start.GenerateHistory(poll_period);
+    nc::htsim::MatchRuleKey key_for_aggregate = KeyFromAggregateId(id);
+
+    ctr::controller::AggregateState aggregate_state(
+        id.src(), id.dst(), key_for_aggregate, init_history);
+    network_container.AddAggregate(id, aggregate_state);
+  }
+
   network_container.Init();
+  device_factory.Init();
+  event_queue.RunAndStopIn(std::chrono::seconds(900));
 }

@@ -87,8 +87,6 @@ void VariableBinBinner::AddBin(size_t bin_size) {
 
 static bool MessageContainsFlowCounts(
     const nc::htsim::SSCPStatsReply& message) {
-  bool has_flow_counts = false;
-  bool first = true;
   for (const auto& key_and_stats : message.stats()) {
     const std::vector<nc::htsim::ActionStats>& action_stats =
         key_and_stats.second;
@@ -96,16 +94,13 @@ static bool MessageContainsFlowCounts(
     for (const auto& stats : action_stats) {
       bool flow_count_meaningful =
           stats.flow_count != std::numeric_limits<uint64_t>::max();
-      if (first) {
-        has_flow_counts = flow_count_meaningful;
-        first = false;
-      } else {
-        CHECK(has_flow_counts == flow_count_meaningful);
+      if (flow_count_meaningful) {
+        return true;
       }
     }
   }
 
-  return has_flow_counts;
+  return false;
 }
 
 void TLDR::HandleStatsReplyNoFlowCounts(

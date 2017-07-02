@@ -25,6 +25,8 @@ class Optimizer {
 
   const nc::net::GraphStorage* graph() { return path_provider_->graph(); }
 
+  const PathProvider* path_provider() const { return path_provider_; }
+
  protected:
   // Provides paths to the optimizer.
   PathProvider* path_provider_;

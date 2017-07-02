@@ -16,17 +16,18 @@ namespace ctr {
 class RoutingSystem {
  public:
   RoutingSystem(const ProbModelConfig& prob_model_config, Optimizer* optimizer,
-                PerAggregateMeanEstimatorFactory* mean_estimator_factory)
+                PerAggregateMeanEstimatorFactory* mean_estimator_factory,
+                bool store_to_metrics = true)
       : prob_model_config_(prob_model_config),
         optimizer_(optimizer),
         estimator_(mean_estimator_factory),
-        graph_(optimizer_->graph()) {}
+        graph_(optimizer_->graph()),
+        store_to_metrics_(store_to_metrics) {}
 
   virtual ~RoutingSystem() {}
 
   std::unique_ptr<RoutingConfiguration> Update(
-      const std::map<AggregateId, AggregateHistory>& history,
-      uint64_t metric_timestamp = std::numeric_limits<uint64_t>::max());
+      const std::map<AggregateId, AggregateHistory>& history);
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 
@@ -60,6 +61,9 @@ class RoutingSystem {
   MeanEstimator estimator_;
 
   const nc::net::GraphStorage* graph_;
+
+  // If true will record to metrics.
+  bool store_to_metrics_;
 };
 
 }  // namespace ctr
