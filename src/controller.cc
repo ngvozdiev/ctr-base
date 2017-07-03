@@ -372,7 +372,10 @@ NetworkContainer::NetworkContainer(const NetworkContainerConfig& config,
       graph_(graph),
       controller_(controller),
       network_(event_queue->ToTime(std::chrono::milliseconds(10)), event_queue),
-      device_factory_(device_factory) {
+      device_factory_(device_factory),
+      animation_container_("AnimationContainer", std::chrono::milliseconds(10),
+                           event_queue),
+      seed_gen_(1.0) {
   CHECK(tldr_config.ip_src == nc::htsim::kWildIPAddress)
       << "TLDR config should have default source address";
   CHECK(tldr_config.ip_switch_dst == nc::htsim::kWildIPAddress)
@@ -382,6 +385,15 @@ NetworkContainer::NetworkContainer(const NetworkContainerConfig& config,
   CHECK(config_.min_delay_tldr_device <= config.max_delay_tldr_device);
 
   FromGraph();
+}
+
+std::vector<const nc::htsim::Queue*> NetworkContainer::queues() const {
+  std::vector<const nc::htsim::Queue*> queues_raw;
+  for (const auto& queue_ptr : queues_) {
+    queues_raw.emplace_back(queue_ptr.get());
+  }
+
+  return queues_raw;
 }
 
 void NetworkContainer::AddAggregate(const AggregateId& id,
@@ -549,33 +561,33 @@ static void AddDefaultRoute(nc::htsim::DeviceInterface* device,
   AddDstBasedRoute(device, nc::htsim::kWildIPAddress, out_port, tag);
 }
 
-void NetworkContainer::ConnectToSink(const std::string& device,
+void NetworkContainer::ConnectToSink(nc::net::GraphNodeIndex device_index,
                                      nc::net::IPAddress src,
                                      nc::htsim::PacketTag reverse_tag) {
-  auto it = devices_.find(device);
-  CHECK(it != devices_.end());
-  nc::htsim::DeviceInterface* device_ptr = it->second.get();
+  const std::string& device_id = graph_->GetNode(device_index)->id();
+  nc::htsim::DeviceInterface& device =
+      nc::FindSmartPtrOrDie(devices_, device_id);
   nc::htsim::DeviceInterface* sink_ptr = GetSinkDevice();
 
   nc::htsim::Port* port_on_device =
-      device_ptr->FindOrCreatePort(config_.default_enter_port);
+      device.FindOrCreatePort(config_.default_enter_port);
   nc::htsim::Port* port_on_sink = sink_ptr->NextAvailablePort();
   port_on_sink->Connect(port_on_device);
 
-  AddSrcBasedRoute(device_ptr, src, kDeviceToSinkPort,
-                   nc::htsim::kNullPacketTag);
+  AddSrcBasedRoute(&device, src, kDeviceToSinkPort, nc::htsim::kNullPacketTag);
   AddDstBasedRoute(sink_ptr, src, port_on_sink->number(), reverse_tag);
 }
 
 std::pair<nc::htsim::Connection*, nc::htsim::Queue*>
 NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
                                nc::htsim::PacketTag forward_tag,
-                               const std::string& source,
+                               nc::net::GraphNodeIndex source,
                                std::chrono::milliseconds delay,
                                size_t max_queue_size_bytes,
                                nc::net::Bandwidth forward_queue_rate,
                                bool random_queue, double seed) {
-  CHECK(!source.empty());
+  const nc::net::GraphNode* node_ptr = graph_->GetNode(source);
+  const std::string& src_id = node_ptr->id();
 
   // Let's first add the new device where the connection will originate.
   std::string id = nc::StrCat("D_", std::to_string(devices_.size()));
@@ -589,27 +601,26 @@ NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
   std::unique_ptr<nc::htsim::Queue> forward_queue;
   if (random_queue) {
     forward_queue = nc::make_unique<nc::htsim::RandomQueue>(
-        id, source, forward_queue_rate, max_queue_size_bytes,
+        id, src_id, forward_queue_rate, max_queue_size_bytes,
         max_queue_size_bytes * 0.5, seed, event_queue_);
     LOG(INFO) << "Added TCP source with RED queue " << max_queue_size_bytes;
   } else {
     forward_queue = nc::make_unique<nc::htsim::FIFOQueue>(
-        id, source, forward_queue_rate, max_queue_size_bytes, event_queue_);
+        id, src_id, forward_queue_rate, max_queue_size_bytes, event_queue_);
     LOG(INFO) << "Added TCP source with FIFO queue " << max_queue_size_bytes;
   }
 
   auto forward_pipe = nc::make_unique<nc::htsim::Pipe>(
-      id, source, event_queue_->ToTime(delay), event_queue_);
+      id, src_id, event_queue_->ToTime(delay), event_queue_);
   network_.AddLink(forward_queue.get(), forward_pipe.get());
 
   // Also have to pick a new port on the source and connect it to the new device
   // so that the return path works.
-  auto it = devices_.find(source);
-  CHECK(it != devices_.end());
-  nc::htsim::DeviceInterface* source_device = it->second.get();
-  nc::htsim::Port* port = source_device->NextAvailablePort();
+  nc::htsim::DeviceInterface& source_device =
+      nc::FindSmartPtrOrDie(devices_, src_id);
+  nc::htsim::Port* port = source_device.NextAvailablePort();
   port->Connect(new_device->FindOrCreatePort(nc::net::DevicePortNumber(1)));
-  AddDstBasedRoute(source_device, ip_source, port->number(),
+  AddDstBasedRoute(&source_device, ip_source, port->number(),
                    nc::htsim::kDefaultTag);
 
   nc::htsim::Connection* new_connection = new_device->AddTCPGenerator(
@@ -621,6 +632,82 @@ NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
   queues_.emplace_back(std::move(forward_queue));
   pipes_.emplace_back(std::move(forward_pipe));
   return {new_connection, forward_queue_raw_ptr};
+}
+
+void NetworkContainer::AddTCPFlowGroup(const TCPFlowGroup& flow_group,
+                                       nc::net::GraphNodeIndex src,
+                                       nc::net::GraphNodeIndex dst,
+                                       nc::htsim::PacketTag forward_tag,
+                                       nc::htsim::PacketTag reverse_tag) {
+  using namespace std::chrono;
+  std::default_random_engine generator(++seed_gen_);
+  std::uniform_int_distribution<size_t> time_distribution(
+      flow_group.min_delay.count(), flow_group.max_delay.count());
+
+  double spread = flow_group.rate_spread;
+  CHECK(spread < 1 && spread > 0);
+
+  CHECK(flow_group.key_frames.size() > 0);
+  for (size_t i = 0; i < flow_group.flow_count; ++i) {
+    nc::net::IPAddress src_address(
+        config_.tcp_group_source_ip_address_base.Raw() + flow_drivers_.size());
+
+    uint64_t max_rate_bps = 0;
+    std::vector<nc::htsim::KeyFrame> key_frames;
+    for (const RateKeyFrame& rate_key_frame : flow_group.key_frames) {
+      uint64_t mean_rate_bps =
+          rate_key_frame.rate.bps() / flow_group.flow_count;
+
+      std::uniform_int_distribution<uint64_t> rate_distribution(
+          (1 - spread) * mean_rate_bps, (1 + spread) * mean_rate_bps);
+      double rate_bps = rate_distribution(generator);
+      if (rate_bps > max_rate_bps) {
+        max_rate_bps = rate_bps;
+      }
+
+      key_frames.push_back({rate_key_frame.at, rate_bps});
+    }
+    CHECK(key_frames.size() > 0);
+
+    nc::net::Bandwidth start_rate = flow_group.key_frames.front().rate;
+    milliseconds delay = milliseconds(time_distribution(generator));
+
+    // The AggregateId object has a convenient method to get the SP delay.
+    ctr::AggregateId aggregate_id(src, dst);
+    milliseconds sp_delay =
+        duration_cast<milliseconds>(aggregate_id.GetSPDelay(*graph_));
+
+    // Will size the queue according to the highest rate -- this may cause
+    // some flows to have too deep queues if they start off very small.
+    double total_delay_sec = (delay.count() + sp_delay.count()) / 1000.0;
+    size_t queue_size_bytes = max_rate_bps / 8.0 * total_delay_sec;
+
+    nc::htsim::Connection* connection;
+    nc::htsim::Queue* queue;
+    std::tie(connection, queue) = AddTCPSource(
+        src_address, forward_tag, src, delay, queue_size_bytes, start_rate,
+        flow_group.random_access_link_queue, ++seed_gen_);
+    ConnectToSink(dst, src_address, reverse_tag);
+
+    auto animator =
+        nc::make_unique<nc::htsim::LinearAnimator>(key_frames, false, queue);
+    animation_container_.AddAnimator(std::move(animator));
+
+    auto object_sizes_and_wait_times_gen =
+        nc::make_unique<nc::htsim::DefaultObjectSizeAndWaitTimeGenerator>(
+            flow_group.mean_object_size_bytes,
+            flow_group.mean_object_size_fixed, flow_group.mean_wait_time,
+            flow_group.mean_wait_time_fixed, ++seed_gen_, event_queue_);
+    object_sizes_and_wait_times_gen->set_constant_delay(
+        flow_group.initial_time_offset);
+
+    std::string driver_id = nc::StrCat(connection->id(), "_driver");
+    auto flow_driver = nc::make_unique<nc::htsim::FeedbackLoopFlowDriver>(
+        driver_id, std::move(object_sizes_and_wait_times_gen), event_queue_);
+
+    flow_driver->ConnectionAttached(connection);
+    flow_drivers_.emplace_back(std::move(flow_driver));
+  }
 }
 
 void NetworkContainer::AddDefaultRouteToDummyHandler(const std::string device) {

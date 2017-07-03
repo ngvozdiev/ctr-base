@@ -116,7 +116,7 @@ class MockDeviceFactory : public controller::DeviceFactory {
     auto new_device = nc::make_unique<MockDevice>(
         id, bins_[id], address, &mock_network_, controller_, event_queue);
     mock_network_.AddMockDevice(new_device.get());
-    return new_device;
+    return std::move(new_device);
   }
 
   void AddBinSequence(const std::string& device_id,
@@ -240,7 +240,7 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
     auto new_device =
         nc::make_unique<MockSimDevice>(id, bins_[id], address, event_queue);
     mock_network_.AddMockDevice(new_device.get());
-    return new_device;
+    return std::move(new_device);
   }
 
   void AddBinSequence(const std::string& device_id,

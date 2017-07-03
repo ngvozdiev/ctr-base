@@ -15,7 +15,9 @@
 
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/event_queue.h"
+#include "ncode_common/src/htsim/animator.h"
 #include "ncode_common/src/htsim/bulk_gen.h"
+#include "ncode_common/src/htsim/flow_driver.h"
 #include "ncode_common/src/htsim/match.h"
 #include "ncode_common/src/htsim/network.h"
 #include "ncode_common/src/htsim/packet.h"
@@ -206,12 +208,14 @@ class Controller : public ::nc::htsim::PacketHandler {
 struct NetworkContainerConfig {
   NetworkContainerConfig(nc::net::IPAddress device_ip_address_base,
                          nc::net::IPAddress tldr_ip_address_base,
+                         nc::net::IPAddress tcp_group_source_address_base,
                          nc::net::DevicePortNumber default_enter_port,
                          nc::net::DevicePortNumber default_tldr_input_port,
                          std::chrono::milliseconds max_queue_depth,
                          bool random_queues)
       : device_ip_address_base(device_ip_address_base),
         tldr_ip_address_base(tldr_ip_address_base),
+        tcp_group_source_ip_address_base(tcp_group_source_address_base),
         default_enter_port(default_enter_port),
         default_tldr_input_port(default_tldr_input_port),
         min_delay_tldr_device(0),
@@ -229,6 +233,10 @@ struct NetworkContainerConfig {
   // TLDR instances in the network will have addresses assigned starting with
   // this address.
   nc::net::IPAddress tldr_ip_address_base;
+
+  // The addresses of all devices in TCP groups will have this address as their
+  // base.
+  nc::net::IPAddress tcp_group_source_ip_address_base;
 
   // Traffic that enters the network will do so via this port on the first hop.
   nc::net::DevicePortNumber default_enter_port;
@@ -263,6 +271,36 @@ class DeviceFactory {
       nc::EventQueue* event_queue) = 0;
 };
 
+struct RateKeyFrame {
+  size_t flow_count;
+  nc::net::Bandwidth rate;
+  std::chrono::milliseconds at;
+};
+
+struct TCPFlowGroup {
+  std::chrono::milliseconds min_delay;
+  std::chrono::milliseconds max_delay;
+  std::vector<RateKeyFrame> key_frames;
+  double rate_spread;
+  size_t flow_count;
+  bool random_access_link_queue;
+
+  size_t mean_object_size_bytes;
+  bool mean_object_size_fixed;
+  std::chrono::milliseconds mean_wait_time;
+  bool mean_wait_time_fixed;
+
+  std::chrono::milliseconds initial_time_offset;
+};
+
+struct DataStream {
+  nc::net::GraphNodeIndex src;
+  nc::net::GraphNodeIndex dst;
+  nc::htsim::PacketTag forward_tag;
+  nc::htsim::PacketTag reverse_tag;
+  std::vector<TCPFlowGroup> flow_groups;
+};
+
 // A container class that constructs a network, per-device TLDR instance and a
 // controller. Aggregates and packet generators can be added to the network.
 class NetworkContainer {
@@ -291,7 +329,7 @@ class NetworkContainer {
   // Connects a port on a device directly to the universal sink. Also installs a
   // route at the sink to direct traffic from the sink to a given destination
   // back to the device.
-  void ConnectToSink(const std::string& device, nc::net::IPAddress src,
+  void ConnectToSink(nc::net::GraphNodeIndex dst, nc::net::IPAddress src,
                      nc::htsim::PacketTag reverse_tag);
 
   // Adds a default route from the given device to a dummy handler. Useful if
@@ -308,9 +346,27 @@ class NetworkContainer {
   // device creates will have an ip of 'ip_source'.
   std::pair<nc::htsim::Connection*, nc::htsim::Queue*> AddTCPSource(
       nc::net::IPAddress ip_source, nc::htsim::PacketTag forward_tag,
-      const std::string& source, std::chrono::milliseconds delay,
+      nc::net::GraphNodeIndex source, std::chrono::milliseconds delay,
       size_t max_queue_size_bytes, nc::net::Bandwidth forward_queue_rate,
       bool random_queue, double seed);
+
+  // Adds a number of TCP sources, one for each flow in a flow group. Attached
+  // to each source will be a flow driver, which will add data to it according
+  // to the distributions in 'flow_group'.
+  void AddTCPFlowGroup(const TCPFlowGroup& flow_group,
+                       nc::net::GraphNodeIndex src, nc::net::GraphNodeIndex dst,
+                       nc::htsim::PacketTag forward_tag,
+                       nc::htsim::PacketTag reverse_tag);
+
+  // Multiple flow groups can be combined into a DataStream.
+  void AddDataStreams(const std::vector<DataStream>& data_streams) {
+    for (const DataStream& data_stream : data_streams) {
+      for (const TCPFlowGroup& flow_group : data_stream.flow_groups) {
+        AddTCPFlowGroup(flow_group, data_stream.src, data_stream.dst,
+                        data_stream.forward_tag, data_stream.reverse_tag);
+      }
+    }
+  }
 
   void Init();
 
@@ -322,6 +378,8 @@ class NetworkContainer {
   nc::htsim::Network* network() { return &network_; }
 
   const nc::net::GraphStorage* graph() { return graph_; }
+
+  std::vector<const nc::htsim::Queue*> queues() const;
 
  private:
   nc::htsim::DeviceInterface* AddOrFindDevice(
@@ -350,6 +408,9 @@ class NetworkContainer {
 
   nc::htsim::Network network_;
   std::map<nc::net::GraphNodeIndex, TLDRNode> device_id_to_tldr_node_;
+
+  // Stores devices, indexed by string not by NodeIndex, because there will be
+  // some "fake" devices added to originate TCP connections.
   std::map<std::string, std::unique_ptr<nc::htsim::DeviceInterface>> devices_;
   std::vector<std::unique_ptr<nc::htsim::Pipe>> pipes_;
   std::vector<std::unique_ptr<nc::htsim::Queue>> queues_;
@@ -369,6 +430,12 @@ class NetworkContainer {
 
   // Constructs devices.
   DeviceFactory* device_factory_;
+
+  std::vector<std::unique_ptr<nc::htsim::FlowDriver>> flow_drivers_;
+
+  nc::htsim::AnimationContainer animation_container_;
+
+  size_t seed_gen_;
 };
 
 }  // namespace controller

@@ -175,6 +175,8 @@ int main(int argc, char** argv) {
     network_container.AddAggregate(id, aggregate_state);
   }
 
+  ctr::NetInstrument net_instrument(network_container.queues(),
+                                    std::chrono::milliseconds(1), &event_queue);
   network_container.Init();
   device_factory.Init();
   event_queue.RunAndStopIn(std::chrono::seconds(900));
