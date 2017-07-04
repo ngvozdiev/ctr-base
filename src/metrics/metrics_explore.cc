@@ -29,6 +29,9 @@ DEFINE_bool(plot_combined, false,
             "produce one plot.");
 DEFINE_bool(plot_limiting, false,
             "If true will only plot the last value of each field set");
+DEFINE_bool(incremental, false,
+            "If true the metric(s) matched will be assumed to be incrementally "
+            "increasing.");
 DEFINE_uint64(line_plot_bin_size, 1,
               "Will bin every N values based on "
               "timestamp and plot the means in each bin.");
@@ -62,6 +65,22 @@ static std::string DataSummaryToString(
                     Join(percentiles, ",", [](double v) {
                       return nc::ToStringMaxDecimals(v, 3);
                     }));
+}
+
+// For a series (t1, v1), (t2, v2), (t3, v3) ... returns (t2, v2 - v1), (t3, v3
+// - v2), ...
+static std::vector<std::pair<uint64_t, double>> TakeDeltas(
+    const std::vector<std::pair<uint64_t, double>>& values) {
+  CHECK(!values.empty());
+
+  std::vector<std::pair<uint64_t, double>> out;
+  for (size_t i = 0; i < values.size() - 1; ++i) {
+    uint64_t timestamp = values[i + 1].first;
+    double value = values[i + 1].second - values[i].second;
+    out.emplace_back(timestamp, value);
+  }
+
+  return out;
 }
 
 // Plots a CDF of the values in one (or more) metrics. The input map is as
@@ -151,6 +170,15 @@ static void HandlePlot(const std::string& input_file) {
           input_file, FLAGS_metric, FLAGS_fields, FLAGS_plot_timestamp_min,
           FLAGS_plot_timestamp_max,
           FLAGS_plot_limiting ? std::numeric_limits<uint64_t>::max() : 0);
+
+  if (FLAGS_incremental) {
+    for (auto& id_and_data : data) {
+      std::vector<std::pair<uint64_t, double>>& metric_data =
+          id_and_data.second;
+      metric_data = TakeDeltas(metric_data);
+    }
+  }
+
   if (FLAGS_plot_type == "cdf") {
     PlotCDF(data);
   } else if (FLAGS_plot_type == "line") {
