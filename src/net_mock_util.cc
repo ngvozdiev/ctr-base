@@ -1,5 +1,10 @@
 #include <gflags/gflags.h>
+#include <stddef.h>
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <iomanip>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <string>
@@ -15,12 +20,13 @@
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
+#include "ncode_common/src/strutil.h"
 #include "common.h"
 #include "controller.h"
 #include "mean_est/mean_est.h"
 #include "metrics/metrics.h"
-#include "net_mock.h"
 #include "net_instrument.h"
+#include "net_mock.h"
 #include "opt/ctr.h"
 #include "opt/opt.h"
 #include "opt/path_provider.h"
@@ -38,6 +44,86 @@ DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
+
+template <typename T>
+static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
+  namespace sc = std::chrono;
+  auto diff = sc::duration_cast<sc::milliseconds>(chrono_diff).count();
+  auto const msecs = diff % 1000;
+  diff /= 1000;
+  auto const secs = diff % 60;
+  diff /= 60;
+  auto const mins = diff % 60;
+  diff /= 60;
+  auto const hours = diff % 24;
+  diff /= 24;
+  auto const days = diff;
+
+  bool printed_earlier = false;
+  if (days >= 1) {
+    printed_earlier = true;
+    out << days << (1 != days ? " days" : " day") << ' ';
+  }
+  if (printed_earlier || hours >= 1) {
+    printed_earlier = true;
+    out << hours << (1 != hours ? " hours" : " hour") << ' ';
+  }
+  if (printed_earlier || mins >= 1) {
+    printed_earlier = true;
+    out << mins << (1 != mins ? " minutes" : " minute") << ' ';
+  }
+  if (printed_earlier || secs >= 1) {
+    printed_earlier = true;
+    out << secs << (1 != secs ? " seconds" : " second") << ' ';
+  }
+  if (printed_earlier || msecs >= 1) {
+    printed_earlier = true;
+    out << msecs << (1 != msecs ? " milliseconds" : " millisecond");
+  }
+}
+
+static std::chrono::milliseconds TimeNow() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now().time_since_epoch());
+}
+
+class ProgressIndicator : public nc::EventConsumer {
+ public:
+  ProgressIndicator(std::chrono::milliseconds update_period,
+                    nc::EventQueue* event_queue)
+      : nc::EventConsumer("ProgressIndicator", event_queue),
+        period_(event_queue->ToTime(update_period)),
+        init_real_time_(TimeNow()) {
+    EnqueueIn(period_);
+  }
+
+  void HandleEvent() override {
+    double progress = event_queue()->Progress();
+    CHECK(progress >= 0 && progress <= 1.0);
+    std::cout << "\rProgress: " << std::setprecision(3) << (progress * 100.0)
+              << "% ";
+
+    auto real_time_delta = TimeNow() - init_real_time_;
+    if (real_time_delta.count() > 0) {
+      std::cout << "time remaining: ";
+      auto remaining = std::chrono::milliseconds(static_cast<uint64_t>(
+          real_time_delta.count() / progress * (1 - progress)));
+
+      PrintTimeDiff(std::cout, remaining);
+      std::cout << "                ";
+    }
+
+    std::cout << std::flush;
+    EnqueueIn(period_);
+  }
+
+ private:
+  // How often (in simulated time) to update the indicator.
+  nc::EventQueueTime period_;
+
+  // The initial time.
+  std::chrono::milliseconds init_real_time_;
+};
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -120,7 +206,6 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
-    break;
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -133,6 +218,8 @@ int main(int argc, char** argv) {
     opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true);
   } else if (FLAGS_opt == "MinMax") {
     opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider);
+  } else if (FLAGS_opt == "SP") {
+    opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
   }
 
   ctr::MeanScaleEstimatorFactory estimator_factory(
@@ -192,7 +279,7 @@ int main(int argc, char** argv) {
     ctr::controller::TCPFlowGroup flow_group(
         10, std::chrono::milliseconds(20), std::chrono::milliseconds(50), 10000,
         std::chrono::milliseconds(100));
-    flow_group.set_mean_object_size_fixed(false);
+    flow_group.set_mean_object_size_fixed(true);
     flow_group.set_mean_wait_time_fixed(false);
     flow_group.AddKeyFrame(std::chrono::milliseconds(0), 10,
                            nc::net::Bandwidth::FromGBitsPerSecond(10));
@@ -204,6 +291,9 @@ int main(int argc, char** argv) {
       network_container.queues(), network_container.flow_group_tcp_sources(),
       std::chrono::milliseconds(10), &event_queue);
   device_factory.Init();
+
+  ProgressIndicator progress_indicator(std::chrono::milliseconds(100),
+                                       &event_queue);
   event_queue.RunAndStopIn(std::chrono::seconds(90));
   nc::metrics::DefaultMetricManager()->PersistAllMetrics();
 }

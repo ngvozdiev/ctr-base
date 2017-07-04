@@ -198,8 +198,10 @@ class PcapDataTrace {
 
   // Like Bins, but combines multiple slices into one. Will also pull the
   // results from the bin cache if possible.
-  std::vector<PcapDataTraceBin> BinsCombined(const std::set<size_t>& slices,
-                                             size_t start_bin, size_t end_bin);
+  std::pair<std::vector<PcapDataTraceBin>::const_iterator,
+            std::vector<PcapDataTraceBin>::const_iterator>
+  BinsCombined(const std::set<size_t>& slices, size_t start_bin,
+               size_t end_bin);
 
   std::set<size_t> AllSlices() const;
 

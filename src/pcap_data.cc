@@ -591,10 +591,12 @@ void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
   }
 }
 
-static constexpr size_t kCacheSizeMb = 10;
+static constexpr size_t kCacheSizeMb = 50;
 
-std::vector<PcapDataTraceBin> PcapDataTrace::BinsCombined(
-    const std::set<size_t>& slices, size_t start_bin, size_t end_bin) {
+std::pair<std::vector<PcapDataTraceBin>::const_iterator,
+          std::vector<PcapDataTraceBin>::const_iterator>
+PcapDataTrace::BinsCombined(const std::set<size_t>& slices, size_t start_bin,
+                            size_t end_bin) {
   CHECK(end_bin <= trace_pb_.bin_count());
 
   const CachedBins* cached = nc::FindOrNull(bins_cache_, slices);

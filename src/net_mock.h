@@ -263,6 +263,20 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
   MockSimNetwork mock_network_;
 };
 
+class DefaultDeviceFactory : public controller::DeviceFactory {
+ public:
+  DefaultDeviceFactory() {}
+
+  virtual std::unique_ptr<nc::htsim::DeviceInterface> NewDevice(
+      const std::string& id, nc::net::IPAddress address,
+      nc::EventQueue* event_queue) override {
+    auto new_device =
+        nc::make_unique<nc::htsim::Device>(id, address, event_queue);
+    new_device->set_die_on_fail_to_match(true);
+    return std::move(new_device);
+  }
+};
+
 }  // namespace ctr
 
 #endif

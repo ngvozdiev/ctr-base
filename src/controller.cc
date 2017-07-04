@@ -758,7 +758,7 @@ void NetworkContainer::AddTCPFlowGroup(const AggregateId& id,
         flow_group.initial_time_offset());
 
     std::string driver_id = nc::StrCat(connection->id(), "_driver");
-    auto flow_driver = nc::make_unique<nc::htsim::FeedbackLoopFlowDriver>(
+    auto flow_driver = nc::make_unique<nc::htsim::OpenLoopFlowDriver>(
         driver_id, std::move(object_sizes_and_wait_times_gen), event_queue_);
 
     flow_driver->ConnectionAttached(connection);
