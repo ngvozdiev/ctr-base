@@ -1,6 +1,12 @@
 #ifndef NET_INSTRUMENT
 #define NET_INSTRUMENT
 
+#include <chrono>
+#include <vector>
+
+#include "ncode_common/src/htsim/queue.h"
+#include "ncode_common/src/htsim/tcp.h"
+
 namespace ctr {
 
 // Instruments the network by periodically recording per-queue and per-link
@@ -10,6 +16,7 @@ class NetInstrument : public nc::EventConsumer {
   static constexpr char kNetInstrumentId[] = "NetInstrument";
 
   NetInstrument(const std::vector<const nc::htsim::Queue*>& queues,
+                const std::vector<nc::htsim::TCPSource*>& tcp_sources,
                 std::chrono::milliseconds record_period,
                 nc::EventQueue* event_queue);
 

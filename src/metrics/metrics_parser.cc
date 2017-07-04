@@ -22,11 +22,6 @@ namespace nc {
 namespace metrics {
 namespace parser {
 
-constexpr char FieldsMatcher::kIntMatcher[];
-constexpr char FieldsMatcher::kLtMatcher[];
-constexpr char FieldsMatcher::kGtMatcher[];
-constexpr char FieldsMatcher::kStringMatcher[];
-
 constexpr size_t kNumericFieldWidth = 10;
 constexpr size_t kLongTextWidth = 100;
 constexpr size_t kShortTextWidth = 40;
@@ -169,149 +164,6 @@ bool InputStream::ReadDelimitedFrom(PBMetricEntry* message) {
   return true;
 }
 
-std::unique_ptr<SingleFieldMatcher> SingleFieldMatcher::FromString(
-    const std::string& matcher_name, const std::string& matcher_string) {
-  std::unique_ptr<SingleFieldMatcher> return_ptr;
-  if (matcher_name == FieldsMatcher::kIntMatcher) {
-    uint64_t value;
-    if (safe_strtou64(matcher_string, &value)) {
-      return_ptr = make_unique<NumericValueExactMatcher>(value);
-    }
-  } else if (matcher_name == FieldsMatcher::kLtMatcher) {
-    uint64_t value;
-    if (safe_strtou64(matcher_string, &value)) {
-      return_ptr = make_unique<NumericValueRangeMatcher>(
-          std::numeric_limits<uint64_t>::min(), value);
-    }
-  } else if (matcher_name == FieldsMatcher::kGtMatcher) {
-    uint64_t value;
-    if (safe_strtou64(matcher_string, &value)) {
-      return_ptr = make_unique<NumericValueRangeMatcher>(
-          value, std::numeric_limits<uint64_t>::max());
-    }
-  } else if (matcher_name == FieldsMatcher::kStringMatcher) {
-    return_ptr = make_unique<StringRegexMatcher>(matcher_string);
-  }
-
-  return return_ptr;
-}
-
-bool NumericValueExactMatcher::Matches(const PBMetricField& field) const {
-  switch (field.type()) {
-    case PBMetricField::UINT32:
-      return field.uint32_value() == value_;
-
-    case PBMetricField::UINT64:
-      return field.uint64_value() == value_;
-
-    case PBMetricField::BOOL:
-      return field.bool_value() == value_;
-
-    default:
-      break;
-  }
-
-  return false;
-}
-
-bool NumericValueRangeMatcher::Matches(const PBMetricField& field) const {
-  switch (field.type()) {
-    case PBMetricField::UINT32:
-      return min_ < field.uint32_value() && max_ > field.uint32_value();
-
-    case PBMetricField::UINT64:
-      return min_ < field.uint64_value() && max_ > field.uint64_value();
-
-    default:
-      break;
-  }
-
-  return false;
-}
-
-StringRegexMatcher::StringRegexMatcher(const std::string& regex_string)
-    : field_regex_(Substitute("$0$1$2", '^', regex_string, '$'),
-                   std::regex_constants::icase) {}
-
-bool StringRegexMatcher::Matches(const PBMetricField& field) const {
-  if (field.type() == PBMetricField::STRING) {
-    return std::regex_search(field.string_value(), field_regex_);
-  }
-
-  return false;
-}
-
-FieldsMatcher FieldsMatcher::FromString(const std::string& str) {
-  FieldsMatcher matcher({});
-  CHECK(FromString(str, &matcher));
-  return matcher;
-}
-
-bool FieldsMatcher::FromString(const std::string& str, FieldsMatcher* out) {
-  const char opening_parent = '(';
-  const char closing_parent = ')';
-
-  size_t parent_count = 0;
-  std::string matcher_identifier;
-  std::string matcher_string;
-  std::vector<std::unique_ptr<SingleFieldMatcher>> fields;
-  for (char c : str) {
-    if (parent_count == 0 && c == ' ') {
-      continue;
-    }
-
-    if (c == opening_parent) {
-      if (parent_count != 0) {
-        matcher_string += c;
-      }
-
-      ++parent_count;
-    } else if (c == closing_parent) {
-      --parent_count;
-      if (parent_count == 0) {
-        std::unique_ptr<SingleFieldMatcher> field =
-            SingleFieldMatcher::FromString(matcher_identifier, matcher_string);
-        if (!field) {
-          LOG(ERROR) << "Invalid argument: " << str;
-          return false;
-        }
-
-        fields.emplace_back(std::move(field));
-        matcher_identifier.clear();
-        matcher_string.clear();
-      } else {
-        matcher_string += c;
-      }
-    } else if (parent_count == 0) {
-      matcher_identifier += c;
-    } else {
-      matcher_string += c;
-    }
-  }
-
-  if (fields.empty() || parent_count != 0) {
-    LOG(ERROR) << "Invalid argument: " << str;
-    return false;
-  }
-
-  out->matchers_ = std::move(fields);
-  return true;
-}
-
-bool FieldsMatcher::Matches(const FieldList& fields) const {
-  for (size_t index = 0; index < static_cast<size_t>(fields.size()); ++index) {
-    if (index == matchers_.size()) {
-      break;
-    }
-
-    if (!matchers_[index]->Matches(fields.Get(index))) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 void MetricsParser::Parse() {
   InputStream input_stream(metrics_file_);
 
@@ -352,7 +204,6 @@ void MetricsParser::Parse() {
       }
 
       manifest_index_to_processors.emplace_back(interested);
-
       auto manifest_entry_ptr =
           std::unique_ptr<PBManifestEntry>(entry.release_manifest_entry());
       manifest_entries.emplace_back(std::move(manifest_entry_ptr));
@@ -761,18 +612,12 @@ NumericMetricsResultHandle* MetricsParserParse(const char* metrics_file,
     }
   };
 
-  FieldsMatcher matcher({});
-  if (!FieldsMatcher::FromString(fields_to_match, &matcher)) {
-    return nullptr;
-  }
   auto double_processor = make_unique<DoubleProcessor>(
-      metric_regex, std::move(matcher), double_callback);
-  FieldsMatcher::FromString(fields_to_match, &matcher);
+      metric_regex, fields_to_match, double_callback);
   auto uint32_processor = make_unique<Uint32Processor>(
-      metric_regex, std::move(matcher), uint32_callback);
-  FieldsMatcher::FromString(fields_to_match, &matcher);
+      metric_regex, fields_to_match, uint32_callback);
   auto uint64_processor = make_unique<Uint64Processor>(
-      metric_regex, std::move(matcher), uint64_callback);
+      metric_regex, fields_to_match, uint64_callback);
 
   MetricsParser parser(metrics_file);
   parser.AddProcessor(std::move(double_processor));
@@ -804,11 +649,9 @@ BytesMetricsResultHandle* MetricsParserBytesParse(const char* metrics_file,
     }
   };
 
-  FieldsMatcher bytes_matcher = FieldsMatcher::FromString(fields_to_match);
   auto bytes_processor = make_unique<BytesProcessor>(
-      metric_regex, std::move(bytes_matcher), bytes_callback);
+      metric_regex, fields_to_match, bytes_callback);
 
-  FieldsMatcher dist_matcher = FieldsMatcher::FromString(fields_to_match);
   MetricsParser parser(metrics_file);
   parser.AddProcessor(std::move(bytes_processor));
 

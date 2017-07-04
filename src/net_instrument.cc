@@ -1,6 +1,19 @@
 #include "net_instrument.h"
 
+#include <stddef.h>
+#include <algorithm>
+#include <cstdint>
+#include <iostream>
+
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/event_queue.h"
+#include "ncode_common/src/htsim/packet.h"
+#include "ncode_common/src/net/net_common.h"
+#include "metrics/metrics.h"
+
 namespace ctr {
+
+constexpr char NetInstrument::kNetInstrumentId[];
 
 static auto* queue_size_pkts =
     nc::metrics::DefaultMetricManager()
@@ -40,6 +53,26 @@ static auto* queue_pkts_dropped =
             "Number of pkts a queue has dropped. Cumulative.",
             "queue identifier");
 
+static auto* tcp_source_fast_retx =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+            "tcp_src_fast_retx", "Fast retransmissions", "IP source",
+            "IP destination", "TCP source port", "TCP destination port");
+
+static auto* tcp_source_retx_timeouts =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+            "tcp_src_retx_timeout", "Retransmission timeouts", "IP source",
+            "IP destination", "TCP source port", "TCP destination port");
+
+static auto* tcp_source_completion_times =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+            "tcp_source_completion_times",
+            "Completion time for each TCP flow as measured by the source",
+            "IP source", "IP destination", "TCP source port",
+            "TCP destination port");
+
 static std::chrono::milliseconds GetQueueSizeMs(
     const nc::htsim::QueueStats& stats, nc::net::Bandwidth rate) {
   double bytes_per_sec = rate.bps() / 8;
@@ -68,12 +101,42 @@ void NetInstrument::HandleEvent() {
   EnqueueIn(event_queue()->ToTime(period_));
 }
 
-NetInstrument::NetInstrument(const std::vector<const nc::htsim::Queue*>& queues,
-                             std::chrono::milliseconds record_period,
-                             nc::EventQueue* event_queue)
+NetInstrument::NetInstrument(
+    const std::vector<const nc::htsim::Queue*>& queues,
+    const std::vector<nc::htsim::TCPSource*>& tcp_sources,
+    std::chrono::milliseconds record_period, nc::EventQueue* event_queue)
     : nc::EventConsumer(kNetInstrumentId, event_queue),
       period_(record_period),
       queues_(queues) {
+  for (nc::htsim::TCPSource* tcp_source : tcp_sources) {
+    tcp_source->set_complection_times_callback(
+        [tcp_source, event_queue](nc::EventQueueTime duration) {
+          const nc::net::FiveTuple& five_tuple = tcp_source->five_tuple();
+          auto* handle = tcp_source_completion_times->GetHandle(
+              five_tuple.ip_src().Raw(), five_tuple.ip_dst().Raw(),
+              five_tuple.src_port().Raw(), five_tuple.dst_port().Raw());
+
+          size_t time_ms = event_queue->TimeToRawMillis(duration);
+          handle->AddValue(time_ms);
+        });
+
+    tcp_source->set_fast_retx_callback([tcp_source](uint64_t seq_num) {
+      const nc::net::FiveTuple& five_tuple = tcp_source->five_tuple();
+      auto* handle = tcp_source_fast_retx->GetHandle(
+          five_tuple.ip_src().Raw(), five_tuple.ip_dst().Raw(),
+          five_tuple.src_port().Raw(), five_tuple.dst_port().Raw());
+      handle->AddValue(seq_num);
+    });
+
+    tcp_source->set_retx_timeout_callback([tcp_source](uint64_t seq_num) {
+      const nc::net::FiveTuple& five_tuple = tcp_source->five_tuple();
+      auto* handle = tcp_source_retx_timeouts->GetHandle(
+          five_tuple.ip_src().Raw(), five_tuple.ip_dst().Raw(),
+          five_tuple.src_port().Raw(), five_tuple.dst_port().Raw());
+      handle->AddValue(seq_num);
+    });
+  }
+
   EnqueueIn(event_queue->ToTime(period_));
 }
 

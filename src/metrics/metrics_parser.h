@@ -89,92 +89,6 @@ class InputStream {
 // Returns a human-readable string that described the fields in the entry.
 std::string GetFieldString(const PBManifestEntry& entry);
 
-// A class that knows how to match against a single field.
-class SingleFieldMatcher {
- public:
-  static std::unique_ptr<SingleFieldMatcher> FromString(
-      const std::string& matcher_name, const std::string& matcher_string);
-
-  virtual ~SingleFieldMatcher() {}
-
-  virtual bool Matches(const PBMetricField& field) const = 0;
-};
-
-// Matches numeric values exactly.
-class NumericValueExactMatcher : public SingleFieldMatcher {
- public:
-  NumericValueExactMatcher(uint64_t value) : value_(value) {}
-
-  bool Matches(const PBMetricField& field) const;
-
- private:
-  uint64_t value_;
-};
-
-// Matches if a value is in range.
-class NumericValueRangeMatcher : public SingleFieldMatcher {
- public:
-  NumericValueRangeMatcher(uint64_t min, uint64_t max) : min_(min), max_(max) {}
-
-  bool Matches(const PBMetricField& field) const;
-
- private:
-  uint64_t min_;
-  uint64_t max_;
-};
-
-// Matches string fields based on a regex. Case is ignored.
-class StringRegexMatcher : public SingleFieldMatcher {
- public:
-  StringRegexMatcher(const std::string& regex_string);
-
-  bool Matches(const PBMetricField& field) const;
-
- private:
-  std::regex field_regex_;
-};
-
-// A class that knows how to match against a set of fields.
-class FieldsMatcher {
- public:
-  using FieldList = ::google::protobuf::RepeatedPtrField<PBMetricField>;
-
-  static constexpr char kIntMatcher[] = "int";
-  static constexpr char kLtMatcher[] = "lt";
-  static constexpr char kGtMatcher[] = "gt";
-  static constexpr char kStringMatcher[] = "string";
-
-  // Constructs a field matcher from a string. The string contains
-  // comma-separated matcher descriptions. The format is as follows:
-  // int(5) -- matches the integer value (5 in this case) exactly
-  // int_lt(4) -- matches anything less than 4
-  // int_gt(4) -- matches anything greater than 4
-  // string(value) -- the field is a string that matches the value regex
-  //
-  // For example: int(5),string(ab[cd]) will match fields 5,abc and 5,abd
-  static FieldsMatcher FromString(const std::string& str);
-
-  // Similar to above, but instead of CHECK-failing on illegal syntax will
-  // return false and not populate the output argument.
-  static bool FromString(const std::string& str, FieldsMatcher* out);
-
-  FieldsMatcher(FieldsMatcher&& other)
-      : matchers_(std::move(other.matchers_)) {}
-
-  FieldsMatcher(std::vector<std::unique_ptr<SingleFieldMatcher>> matchers)
-      : matchers_(std::move(matchers)) {}
-
-  // Returns true if the fields match.
-  bool Matches(const FieldList& fields) const;
-
- private:
-  // The matchers. All of them have to match incoming fields. The matcher at
-  // index i has to match an incoming field at index i. If there are more
-  // matchers than fields the extra matchers are ignored. If there are less
-  // matchers than fields all extra fields are considered matched.
-  std::vector<std::unique_ptr<SingleFieldMatcher>> matchers_;
-};
-
 // A generic interface for classes that know how to process metrics.
 class MetricProcessor {
  public:
@@ -231,12 +145,12 @@ template <typename T, PBManifestEntry::Type EntryType>
 class QueryCallbackProcessor : public CallbackProcessor<T> {
  public:
   QueryCallbackProcessor(const std::string& metric_regex_string,
-                         FieldsMatcher fields_matcher,
+                         const std::string& fields_regex_string,
                          typename CallbackProcessor<T>::Callback callback)
       : CallbackProcessor<T>(callback),
         original_string_(metric_regex_string),
         metric_regex_(metric_regex_string, std::regex_constants::icase),
-        fields_matcher_(std::move(fields_matcher)) {}
+        fields_regex_(fields_regex_string, std::regex_constants::icase) {}
 
   bool InterestedIn(const PBManifestEntry& manifest_entry,
                     uint32_t manifest_index) override {
@@ -249,7 +163,7 @@ class QueryCallbackProcessor : public CallbackProcessor<T> {
       return false;
     }
 
-    return fields_matcher_.Matches(manifest_entry.fields());
+    return std::regex_search(GetFieldString(manifest_entry), fields_regex_);
   }
 
  private:
@@ -259,7 +173,7 @@ class QueryCallbackProcessor : public CallbackProcessor<T> {
   std::regex metric_regex_;
 
   // The fields of the metric will be matched against this.
-  FieldsMatcher fields_matcher_;
+  std::regex fields_regex_;
 };
 
 // A callback processor that can be used if the manifest ids are known ahead of

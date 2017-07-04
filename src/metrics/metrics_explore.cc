@@ -21,7 +21,7 @@ DEFINE_string(input, "", "The metrics file.");
 DEFINE_string(metric, "",
               "The id of the metric. If missing will print summary of all "
               "metrics. Can be a regex and can match more than one metric.");
-DEFINE_string(fields, "string(.*)", "The fields to match.");
+DEFINE_string(fields, ".*", "The fields to match.");
 DEFINE_string(output, "metrics_explorer_out", "Output directory for plots");
 DEFINE_string(plot_type, "", "Either cdf or line, no plot generated if empty.");
 DEFINE_bool(plot_combined, false,

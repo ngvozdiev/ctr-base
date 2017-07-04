@@ -37,6 +37,8 @@ class AggregateId {
   // aggregate can be routed on.
   nc::net::Delay GetSPDelay(const nc::net::GraphStorage& graph) const;
 
+  AggregateId Reverse() const { return {dst_, src_}; }
+
   friend bool operator<(const AggregateId& a, const AggregateId& b);
   friend bool operator==(const AggregateId& a, const AggregateId& b);
   friend bool operator!=(const AggregateId& a, const AggregateId& b);

@@ -16,196 +16,6 @@ namespace test {
 
 using DoubleProcessor = QueryCallbackProcessor<double, PBManifestEntry::DOUBLE>;
 
-#define CHECK_BAD_FIELDS(x) EXPECT_DEATH(FieldsMatcher::FromString(x), ".*");
-
-#define CHECK_GOOD_FIELDS(x) \
-  FieldsMatcher::FromString(Substitute(x, FieldsMatcher::kIntMatcher, 50));
-
-#define CHECK_BAD_FIELDS_MULTI(x)                                             \
-  EXPECT_DEATH(                                                               \
-      FieldsMatcher::FromString(Substitute(x, FieldsMatcher::kIntMatcher, 50, \
-                                           FieldsMatcher::kIntMatcher, 50)),  \
-      ".*");
-
-#define CHECK_GOOD_FIELDS_MULTI(x)                                        \
-  FieldsMatcher::FromString(Substitute(x, FieldsMatcher::kIntMatcher, 50, \
-                                       FieldsMatcher::kIntMatcher, 50));
-
-// A bunch of bad fields strings.
-TEST(FieldsMatcherString, BadStrings) {
-  CHECK_BAD_FIELDS("");
-  CHECK_BAD_FIELDS("junk");
-  CHECK_BAD_FIELDS("junk(");
-  CHECK_BAD_FIELDS("junk()");
-  CHECK_BAD_FIELDS("junk( )");
-  CHECK_BAD_FIELDS(Substitute("$0", FieldsMatcher::kStringMatcher));
-  CHECK_BAD_FIELDS(Substitute("$0(", FieldsMatcher::kStringMatcher));
-  CHECK_BAD_FIELDS(Substitute("$0)", FieldsMatcher::kStringMatcher));
-  CHECK_BAD_FIELDS(Substitute("$0($1))", FieldsMatcher::kIntMatcher, 50));
-  CHECK_BAD_FIELDS(Substitute("$0(($1)", FieldsMatcher::kIntMatcher, 50));
-  CHECK_BAD_FIELDS(Substitute("($0($1)", FieldsMatcher::kIntMatcher, 50));
-  CHECK_BAD_FIELDS(Substitute("($0($1))", FieldsMatcher::kIntMatcher, 50));
-}
-
-TEST(FieldsMatcherString, GoodStrings) {
-  CHECK_GOOD_FIELDS("$0($1)");
-  CHECK_GOOD_FIELDS("$0( $1)");
-  CHECK_GOOD_FIELDS("$0( $1 )");
-  CHECK_GOOD_FIELDS("$0( $1  )");
-  CHECK_GOOD_FIELDS("$0 ($1)");
-  CHECK_GOOD_FIELDS("$0 ( $1)");
-  CHECK_GOOD_FIELDS("$0 ( $1 ) ");
-}
-
-TEST(FieldsMatcherString, BadStringsMulti) {
-  CHECK_BAD_FIELDS_MULTI("$0($1)|$2($3)");
-  CHECK_BAD_FIELDS_MULTI("$0($1),$2($3)");
-}
-
-TEST(FieldsMatcherString, GoodStringsMulti) {
-  CHECK_GOOD_FIELDS_MULTI("$0($1)$2($3)");
-  CHECK_GOOD_FIELDS_MULTI("$0($1) $2($3)");
-  CHECK_GOOD_FIELDS_MULTI(" $0($1)   $2($3)  ");
-}
-
-static void CheckIntField(const FieldsMatcher& matcher, uint32_t value,
-                          bool ok) {
-  FieldsMatcher::FieldList field_list;
-  PBMetricField* field = field_list.Add();
-  field->set_type(PBMetricField::UINT32);
-  field->set_uint32_value(value);
-  if (ok) {
-    ASSERT_TRUE(matcher.Matches(field_list));
-  } else {
-    ASSERT_FALSE(matcher.Matches(field_list));
-  }
-
-  field_list.Clear();
-  field = field_list.Add();
-  field->set_type(PBMetricField::UINT64);
-  field->set_uint64_value(value);
-  if (ok) {
-    ASSERT_TRUE(matcher.Matches(field_list));
-  } else {
-    ASSERT_FALSE(matcher.Matches(field_list));
-  }
-}
-
-static void CheckStringField(const FieldsMatcher& matcher,
-                             const std::string& value, bool ok) {
-  FieldsMatcher::FieldList field_list;
-  PBMetricField* field = field_list.Add();
-  field->set_type(PBMetricField::STRING);
-  field->set_string_value(value);
-  if (ok) {
-    ASSERT_TRUE(matcher.Matches(field_list));
-  } else {
-    ASSERT_FALSE(matcher.Matches(field_list));
-  }
-}
-
-TEST(FieldsMatcherString, SingleInt) {
-  FieldsMatcher fields_matcher = FieldsMatcher::FromString(
-      Substitute("$0($1)", FieldsMatcher::kIntMatcher, 50));
-
-  FieldsMatcher::FieldList field_list;
-  ASSERT_TRUE(fields_matcher.Matches(field_list));
-
-  PBMetricField* field = field_list.Add();
-  field->set_type(PBMetricField::BOOL);
-  field->set_bool_value(true);
-  ASSERT_FALSE(fields_matcher.Matches(field_list));
-
-  CheckStringField(fields_matcher, "50", false);
-  CheckIntField(fields_matcher, 49, false);
-  CheckIntField(fields_matcher, 50, true);
-  CheckIntField(fields_matcher, 500, false);
-
-  field_list.Clear();
-  field = field_list.Add();
-  field->set_type(PBMetricField::UINT32);
-  field->set_uint32_value(50);
-  field = field_list.Add();
-  field->set_type(PBMetricField::UINT64);
-  field->set_uint64_value(500);
-  ASSERT_TRUE(fields_matcher.Matches(field_list));
-
-  field_list.Clear();
-  field = field_list.Add();
-  field->set_type(PBMetricField::UINT32);
-  field->set_uint32_value(500);
-  field = field_list.Add();
-  field->set_type(PBMetricField::UINT64);
-  field->set_uint64_value(50);
-  ASSERT_FALSE(fields_matcher.Matches(field_list));
-}
-
-TEST(FieldsMatcherString, SingleIntLt) {
-  FieldsMatcher fields_matcher = FieldsMatcher::FromString(
-      Substitute("$0($1)", FieldsMatcher::kLtMatcher, 50));
-
-  CheckIntField(fields_matcher, 50, false);
-  CheckIntField(fields_matcher, 51, false);
-  CheckIntField(fields_matcher, 49, true);
-}
-
-TEST(FieldsMatcherString, Combined) {
-  FieldsMatcher matcher = FieldsMatcher::FromString(
-      Substitute("$0($1) $2($3)", FieldsMatcher::kIntMatcher, 50,
-                 FieldsMatcher::kStringMatcher, "some_string"));
-
-  FieldsMatcher::FieldList field_list;
-  PBMetricField* field = field_list.Add();
-  field->set_type(PBMetricField::UINT32);
-  field->set_uint32_value(50);
-
-  field = field_list.Add();
-  field->set_type(PBMetricField::STRING);
-  field->set_string_value("some_string");
-
-  ASSERT_TRUE(matcher.Matches(field_list));
-}
-
-TEST(FieldsMatcherString, SingleIntGt) {
-  FieldsMatcher fields_matcher = FieldsMatcher::FromString(
-      Substitute("$0($1)", FieldsMatcher::kGtMatcher, 50));
-
-  CheckIntField(fields_matcher, 50, false);
-  CheckIntField(fields_matcher, 51, true);
-  CheckIntField(fields_matcher, 49, false);
-}
-
-TEST(FieldsMatcherString, SingleStringExact) {
-  FieldsMatcher fields_matcher = FieldsMatcher::FromString(
-      Substitute("$0($1)", FieldsMatcher::kStringMatcher, "some string"));
-
-  CheckStringField(fields_matcher, "some string", true);
-  CheckStringField(fields_matcher, "some other string", false);
-
-  // The string is a regex, but it is more convenient if the beginning and end
-  // of string characters are implied (anchored regex).
-  CheckStringField(fields_matcher, "some string other", false);
-  CheckStringField(fields_matcher, "other some string", false);
-}
-
-TEST(FieldsMatcherString, SingleStringRegex) {
-  FieldsMatcher fields_matcher = FieldsMatcher::FromString(
-      Substitute("$0($1)", FieldsMatcher::kStringMatcher, ".*"));
-
-  CheckStringField(fields_matcher, "", true);
-  CheckStringField(fields_matcher, "abracadabra", true);
-}
-
-TEST(FieldsMatcherString, SingleStringRegexNested) {
-  FieldsMatcher fields_matcher = FieldsMatcher::FromString(Substitute(
-      "$0($1)", FieldsMatcher::kStringMatcher, "abra(c(a)d)[ab]ra(\\.\\*)?"));
-
-  CheckStringField(fields_matcher, "", false);
-  CheckStringField(fields_matcher, "abracadara.*", true);
-  CheckStringField(fields_matcher, "abracadara", true);
-  CheckStringField(fields_matcher, "abracadabra", false);
-}
-
 TEST_F(MetricFixture, DoubleParser) {
   auto* metric = metric_manager_->GetUnsafeMetric<double, std::string>(
       kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
@@ -224,11 +34,8 @@ TEST_F(MetricFixture, DoubleParser) {
     all_values.emplace_back(entry.value);
   };
 
-  auto fields_matcher =
-      FieldsMatcher::FromString(Substitute("string($0)", kMetricFieldStrValue));
-
-  auto double_processor = make_unique<DoubleProcessor>(
-      ".*", std::move(fields_matcher), double_callback);
+  auto double_processor =
+      make_unique<DoubleProcessor>(".*", kMetricFieldStrValue, double_callback);
 
   MetricsParser parser(kTestOutput);
   parser.AddProcessor(std::move(double_processor));
@@ -250,16 +57,14 @@ TEST_F(MetricFixture, ExternalNoMetrics) {
   metric_manager_.reset();
 
   NumericMetricsResultHandle* result_handle = MetricsParserParse(
-      kTestOutput, ".*", Substitute("string($0)", kJunk).c_str(), 0,
-      std::numeric_limits<uint64_t>::max(), 0);
+      kTestOutput, ".*", kJunk, 0, std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_FALSE(result_handle->Advance());
   MetricsParserResultHandleFree(result_handle);
 
   result_handle =
-      MetricsParserParse(kTestOutput, kJunk,
-                         Substitute("string($0)", kMetricFieldStrValue).c_str(),
-                         0, std::numeric_limits<uint64_t>::max(), 0);
+      MetricsParserParse(kTestOutput, kJunk, kMetricFieldStrValue, 0,
+                         std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_FALSE(result_handle->Advance());
   MetricsParserResultHandleFree(result_handle);
@@ -275,8 +80,7 @@ TEST_F(MetricFixture, External) {
   metric_manager_.reset();
 
   NumericMetricsResultHandle* result_handle =
-      MetricsParserParse(kTestOutput, kMetricComonentId,
-                         Substitute("string($0)", kMetricFieldStrValue).c_str(),
+      MetricsParserParse(kTestOutput, kMetricComonentId, kMetricFieldStrValue,
                          0, std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_TRUE(result_handle->Advance());
@@ -340,14 +144,14 @@ TEST_F(MetricFixture, ExternalBytes) {
   }
   metric_manager_.reset();
 
-  NumericMetricsResultHandle* numeric_result_handle = MetricsParserParse(
-      kTestOutput, ".*", Substitute("string($0)", kMetricFieldStrValue).c_str(),
-      0, std::numeric_limits<uint64_t>::max(), 0);
+  NumericMetricsResultHandle* numeric_result_handle =
+      MetricsParserParse(kTestOutput, ".*", kMetricFieldStrValue, 0,
+                         std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_FALSE(numeric_result_handle->Advance());
 
-  BytesMetricsResultHandle* bytes_result_handle = MetricsParserBytesParse(
-      kTestOutput, ".*", Substitute("string($0)", kMetricFieldStrValue).c_str(),
-      0, std::numeric_limits<uint64_t>::max(), 0);
+  BytesMetricsResultHandle* bytes_result_handle =
+      MetricsParserBytesParse(kTestOutput, ".*", kMetricFieldStrValue, 0,
+                              std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, bytes_result_handle);
   ASSERT_TRUE(bytes_result_handle->Advance());
 
@@ -400,29 +204,26 @@ TEST_F(MetricFixture, ExternalTimestampLimits) {
   }
   metric_manager_.reset();
 
-  NumericMetricsResultHandle* result_handle = MetricsParserParse(
-      kTestOutput, ".*", Substitute("string($0)", kMetricFieldStrValue).c_str(),
-      0, 0, 0);
+  NumericMetricsResultHandle* result_handle =
+      MetricsParserParse(kTestOutput, ".*", kMetricFieldStrValue, 0, 0, 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_FALSE(result_handle->Advance());
 
-  result_handle = MetricsParserParse(
-      kTestOutput, ".*", Substitute("string($0)", kMetricFieldStrValue).c_str(),
-      std::numeric_limits<uint64_t>::max(),
-      std::numeric_limits<uint64_t>::max(), 0);
+  result_handle = MetricsParserParse(kTestOutput, ".*", kMetricFieldStrValue,
+                                     std::numeric_limits<uint64_t>::max(),
+                                     std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_FALSE(result_handle->Advance());
 
-  result_handle = MetricsParserParse(
-      kTestOutput, ".*", Substitute("string($0)", kMetricFieldStrValue).c_str(),
-      std::numeric_limits<uint64_t>::max(), 0, 0);
+  result_handle =
+      MetricsParserParse(kTestOutput, ".*", kMetricFieldStrValue,
+                         std::numeric_limits<uint64_t>::max(), 0, 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_FALSE(result_handle->Advance());
 
-  result_handle = MetricsParserParse(
-      kTestOutput, ".*", Substitute("string($0)", kMetricFieldStrValue).c_str(),
-      0, std::numeric_limits<uint64_t>::max(),
-      std::numeric_limits<uint64_t>::max());
+  result_handle = MetricsParserParse(kTestOutput, ".*", kMetricFieldStrValue, 0,
+                                     std::numeric_limits<uint64_t>::max(),
+                                     std::numeric_limits<uint64_t>::max());
   ASSERT_NE(nullptr, result_handle);
   ASSERT_TRUE(result_handle->Advance());
 
@@ -448,9 +249,8 @@ TEST_F(MetricFixture, ExternalMultiFieldsMatched) {
   }
   metric_manager_.reset();
 
-  NumericMetricsResultHandle* result_handle =
-      MetricsParserParse(kTestOutput, ".*", "string(.*)", 0,
-                         std::numeric_limits<uint64_t>::max(), 0);
+  NumericMetricsResultHandle* result_handle = MetricsParserParse(
+      kTestOutput, ".*", ".*", 0, std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, result_handle);
 
   std::map<std::pair<std::string, std::string>, std::vector<double>> values_map;

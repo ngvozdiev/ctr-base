@@ -60,6 +60,8 @@ class AggregateState {
 
   const AggregateHistory& initial_history() const { return initial_history_; }
 
+  AggregateHistory& initial_history() { return initial_history_; }
+
  private:
   // Key to match at source and endpoints.
   nc::htsim::MatchRuleKey key_;
@@ -271,34 +273,128 @@ class DeviceFactory {
       nc::EventQueue* event_queue) = 0;
 };
 
-struct RateKeyFrame {
-  size_t flow_count;
-  nc::net::Bandwidth rate;
-  std::chrono::milliseconds at;
+class RateKeyFrame {
+ public:
+  RateKeyFrame(std::chrono::milliseconds at, size_t flow_count,
+               nc::net::Bandwidth rate)
+      : at_(at), flow_count_(flow_count), rate_(rate) {}
+
+  // The time for this key frame.
+  std::chrono::milliseconds at() const { return at_; }
+
+  // Number of flow affected by the key frame.
+  size_t flow_count() const { return flow_count_; }
+
+  // What the rate of those flows should be at time 'at'.
+  nc::net::Bandwidth rate() const { return rate_; }
+
+ private:
+  std::chrono::milliseconds at_;
+  size_t flow_count_;
+  nc::net::Bandwidth rate_;
 };
 
-struct TCPFlowGroup {
-  std::chrono::milliseconds min_delay;
-  std::chrono::milliseconds max_delay;
-  std::vector<RateKeyFrame> key_frames;
-  double rate_spread;
-  size_t flow_count;
-  bool random_access_link_queue;
+// A bunch of TCP flows. Each flow will have a separate access link, each access
+// link will have a rate based on a series of key frames, allowing to change the
+// access links' rates as the animation progresses. The flows will have
+// data added at either uniform or exponential intervals. The amount of data
+// added is either uniform or exponential.
+class TCPFlowGroup {
+ public:
+  TCPFlowGroup(size_t flow_count, std::chrono::milliseconds min_external_delay,
+               std::chrono::milliseconds max_external_delay,
+               size_t mean_object_size_bytes,
+               std::chrono::milliseconds mean_wait_time)
+      : flow_count_(flow_count),
+        min_external_delay_(min_external_delay),
+        max_external_delay_(max_external_delay),
+        access_link_rate_spread_(0.0),
+        random_access_link_queue_(false),
+        mean_object_size_bytes_(mean_object_size_bytes),
+        mean_wait_time_(mean_wait_time),
+        mean_object_size_fixed_(false),
+        mean_wait_time_fixed_(false),
+        initial_time_offset_(std::chrono::milliseconds::zero()) {}
 
-  size_t mean_object_size_bytes;
-  bool mean_object_size_fixed;
-  std::chrono::milliseconds mean_wait_time;
-  bool mean_wait_time_fixed;
+  // A constant offset to be applied to when data is added to each TCP flow's
+  // connection.
+  std::chrono::milliseconds initial_time_offset() const {
+    return initial_time_offset_;
+  }
 
-  std::chrono::milliseconds initial_time_offset;
-};
+  void set_initial_time_offset(std::chrono::milliseconds initial_time_offset) {
+    initial_time_offset_ = initial_time_offset;
+  }
 
-struct DataStream {
-  nc::net::GraphNodeIndex src;
-  nc::net::GraphNodeIndex dst;
-  nc::htsim::PacketTag forward_tag;
-  nc::htsim::PacketTag reverse_tag;
-  std::vector<TCPFlowGroup> flow_groups;
+  // If set to true the same amount of bytes (equal to 'mean_object_size_bytes')
+  // will be added to all TCP flows' connections. If false the data added will
+  // be exponentially distributed around the mean.
+  void set_mean_object_size_fixed(bool mean_object_size_fixed) {
+    mean_object_size_fixed_ = mean_object_size_fixed;
+  }
+
+  // Same as above, but for wait times between when data is added.
+  void set_mean_wait_time_fixed(bool mean_wait_time_fixed) {
+    mean_wait_time_fixed_ = mean_wait_time_fixed;
+  }
+
+  // If true will use RED on the queues.
+  void set_random_access_link_queue(bool random_access_link_queue) {
+    random_access_link_queue_ = random_access_link_queue;
+  }
+
+  // A value between 0 and 1, if 0 each flow's access link will have the value
+  // from the key frame. If spread is 1 each flow's access link value will be
+  // uniformly picked between 0 and 2 x the value from the keyframe.
+  void set_access_link_rate_spread(double rate_spread) {
+    access_link_rate_spread_ = rate_spread;
+  }
+
+  // Adds a new keyframe. Keyframes dictate the rates of flows' access links. At
+  // least one keyframe is needed.
+  void AddKeyFrame(std::chrono::milliseconds at, size_t flow_count,
+                   nc::net::Bandwidth rate) {
+    key_frames_.emplace_back(at, flow_count, rate);
+  }
+
+  size_t flow_count() const { return flow_count_; }
+
+  const std::vector<RateKeyFrame>& key_frames() const { return key_frames_; }
+
+  std::chrono::milliseconds max_external_delay() const {
+    return max_external_delay_;
+  }
+
+  size_t mean_object_size_bytes() const { return mean_object_size_bytes_; }
+
+  bool mean_object_size_fixed() const { return mean_object_size_fixed_; }
+
+  std::chrono::milliseconds mean_wait_time() const { return mean_wait_time_; }
+
+  bool mean_wait_time_fixed() const { return mean_wait_time_fixed_; }
+
+  std::chrono::milliseconds min_external_delay() const {
+    return min_external_delay_;
+  }
+
+  bool random_access_link_queue() const { return random_access_link_queue_; }
+
+  double access_link_rate_spread() const { return access_link_rate_spread_; }
+
+ private:
+  size_t flow_count_;
+  std::chrono::milliseconds min_external_delay_;
+  std::chrono::milliseconds max_external_delay_;
+  std::vector<RateKeyFrame> key_frames_;
+  double access_link_rate_spread_;
+
+  bool random_access_link_queue_;
+  size_t mean_object_size_bytes_;
+  std::chrono::milliseconds mean_wait_time_;
+  bool mean_object_size_fixed_;
+  bool mean_wait_time_fixed_;
+
+  std::chrono::milliseconds initial_time_offset_;
 };
 
 // A container class that constructs a network, per-device TLDR instance and a
@@ -315,10 +411,11 @@ class NetworkContainer {
   NetworkContainer(const NetworkContainerConfig& config,
                    const TLDRConfig& tldr_config,
                    const nc::net::GraphStorage* graph, Controller* controller,
-                   DeviceFactory* device_factory, nc::EventQueue* event_queue);
+                   nc::EventQueue* event_queue);
 
   // Adds a new aggregate.
-  void AddAggregate(const AggregateId& id, AggregateState aggregate_state);
+  nc::htsim::MatchRuleKey AddAggregate(const AggregateId& id,
+                                       const AggregateHistory& initial_history);
 
   // Adds a number of sources attached at 'input_device'. All packets will be
   // tagged with the given tag.
@@ -326,15 +423,43 @@ class NetworkContainer {
       const std::string& input_device, nc::htsim::PacketTag tag,
       std::vector<std::unique_ptr<nc::htsim::BulkPacketSource>> sources);
 
+  // Adds a number of TCP sources, one for each flow in a flow group. Attached
+  // to each source will be a flow driver, which will add data to it according
+  // to the distributions in 'flow_group'.
+  void AddTCPFlowGroup(const AggregateId& id, const TCPFlowGroup& flow_group);
+
+  // Adds all devices and links from the graph to the container. Will construct
+  // devices using the device factory.
+  void AddElementsFromGraph(DeviceFactory* device_factory);
+
+  // Inializes the controller with per-aggregate state.
+  void InitAggregatesInController();
+
+  nc::EventQueue* event_queue() { return event_queue_; }
+
+  const NetworkContainerConfig& config() const { return config_; }
+  const TLDRConfig& tldr_config() const { return tldr_config_; }
+
+  nc::htsim::Network* network() { return &network_; }
+
+  const nc::net::GraphStorage* graph() { return graph_; }
+
+  std::vector<const nc::htsim::Queue*> queues() const;
+
+  const std::vector<nc::htsim::TCPSource*>& flow_group_tcp_sources() const {
+    return flow_group_tcp_sources_;
+  }
+
+ private:
+  // Adds a default route from the given device to a dummy handler. Useful if
+  // you worry about dropping packets at the device.
+  void AddDefaultRouteToDummyHandler(nc::htsim::DeviceInterface* device_ptr);
+
   // Connects a port on a device directly to the universal sink. Also installs a
   // route at the sink to direct traffic from the sink to a given destination
   // back to the device.
   void ConnectToSink(nc::net::GraphNodeIndex dst, nc::net::IPAddress src,
                      nc::htsim::PacketTag reverse_tag);
-
-  // Adds a default route from the given device to a dummy handler. Useful if
-  // you worry about dropping packets at the device.
-  void AddDefaultRouteToDummyHandler(const std::string device);
 
   // Adds a TCP source that will send data packets between a device one hop
   // before 'source' and 'destination'. The TCP stream will originate at its own
@@ -350,47 +475,13 @@ class NetworkContainer {
       size_t max_queue_size_bytes, nc::net::Bandwidth forward_queue_rate,
       bool random_queue, double seed);
 
-  // Adds a number of TCP sources, one for each flow in a flow group. Attached
-  // to each source will be a flow driver, which will add data to it according
-  // to the distributions in 'flow_group'.
-  void AddTCPFlowGroup(const TCPFlowGroup& flow_group,
-                       nc::net::GraphNodeIndex src, nc::net::GraphNodeIndex dst,
-                       nc::htsim::PacketTag forward_tag,
-                       nc::htsim::PacketTag reverse_tag);
-
-  // Multiple flow groups can be combined into a DataStream.
-  void AddDataStreams(const std::vector<DataStream>& data_streams) {
-    for (const DataStream& data_stream : data_streams) {
-      for (const TCPFlowGroup& flow_group : data_stream.flow_groups) {
-        AddTCPFlowGroup(flow_group, data_stream.src, data_stream.dst,
-                        data_stream.forward_tag, data_stream.reverse_tag);
-      }
-    }
-  }
-
-  void Init();
-
-  nc::EventQueue* event_queue() { return event_queue_; }
-
-  const NetworkContainerConfig& config() const { return config_; }
-  const TLDRConfig& tldr_config() const { return tldr_config_; }
-
-  nc::htsim::Network* network() { return &network_; }
-
-  const nc::net::GraphStorage* graph() { return graph_; }
-
-  std::vector<const nc::htsim::Queue*> queues() const;
-
- private:
   nc::htsim::DeviceInterface* AddOrFindDevice(
       const std::string& id,
       std::uniform_int_distribution<size_t>* tldr_device_delay_dist,
       std::uniform_int_distribution<size_t>* controller_tldr_device_dist,
-      std::default_random_engine* engine);
+      std::default_random_engine* engine, DeviceFactory* device_factory);
 
   nc::htsim::DeviceInterface* GetSinkDevice();
-
-  void FromGraph();
 
   // Configuration of the container.
   const NetworkContainerConfig config_;
@@ -428,14 +519,19 @@ class NetworkContainer {
   // Boring traffic dies here.
   nc::htsim::DummyPacketHandler dummy_handler_;
 
-  // Constructs devices.
-  DeviceFactory* device_factory_;
-
   std::vector<std::unique_ptr<nc::htsim::FlowDriver>> flow_drivers_;
 
   nc::htsim::AnimationContainer animation_container_;
 
-  size_t seed_gen_;
+  uint64_t seed_gen_;
+
+  // Each aggregate will be assigned a unique tag, that external packets
+  // arriving at the source will be tagged with.
+  std::map<AggregateId, nc::htsim::PacketTag> aggregate_id_to_tag;
+
+  // Records all TCP sources created as part of flow groups. Owned by the
+  // respective devices.
+  std::vector<nc::htsim::TCPSource*> flow_group_tcp_sources_;
 };
 
 }  // namespace controller
