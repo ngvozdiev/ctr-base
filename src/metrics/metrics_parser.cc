@@ -265,7 +265,7 @@ static double ExtractNumericValueOrDie(PBManifestEntry::Type type,
 void WrappedEntry::ChildEntry(bool numeric, double value) {
   ++num_entries_;
   if (numeric) {
-    sum_ += value;
+    summary_stats_.Add(value);
     if (value > 0) {
       ++num_non_zero_entries_;
     }
@@ -276,7 +276,7 @@ Manifest MetricsParser::ParseManifest() const {
   InputStream input_stream(metrics_file_);
 
   // Manifest entries.
-  std::vector<WrappedEntry> all_entries;
+  std::vector<std::unique_ptr<WrappedEntry>> all_entries;
 
   uint32_t manifest_index;
   PBMetricEntry entry;
@@ -294,13 +294,14 @@ Manifest MetricsParser::ParseManifest() const {
 
       auto manifest_entry_ptr =
           std::unique_ptr<PBManifestEntry>(entry.release_manifest_entry());
-      all_entries.emplace_back(all_entries.size(),
-                               std::move(manifest_entry_ptr));
+      auto new_entry_ptr = nc::make_unique<WrappedEntry>(
+          all_entries.size(), std::move(manifest_entry_ptr));
+      all_entries.emplace_back(std::move(new_entry_ptr));
     } else {
       CHECK(manifest_index < all_entries.size())
           << "Unknown manifest index " << manifest_index
           << " only know indices up to " << all_entries.size();
-      WrappedEntry& wrapped_entry = all_entries[manifest_index];
+      WrappedEntry& wrapped_entry = *(all_entries[manifest_index]);
 
       bool numeric;
       double value = 0.0;
@@ -322,9 +323,10 @@ Manifest MetricsParser::ParseManifest() const {
     }
   }
 
-  std::map<std::string, std::vector<WrappedEntry>> id_to_manifest;
+  std::map<std::string, std::vector<std::unique_ptr<WrappedEntry>>>
+      id_to_manifest;
   for (auto& wrapped_entry : all_entries) {
-    const std::string& id = wrapped_entry.manifest_entry().id();
+    const std::string& id = wrapped_entry->manifest_entry().id();
     id_to_manifest[id].emplace_back(std::move(wrapped_entry));
   }
 
@@ -348,22 +350,23 @@ std::string Manifest::FullToString() const {
      << std::endl;
   for (const auto& id_and_manifest_entries : entries_) {
     const std::string& id = id_and_manifest_entries.first;
-    const std::vector<WrappedEntry>& entries = id_and_manifest_entries.second;
+    const std::vector<std::unique_ptr<WrappedEntry>>& entries =
+        id_and_manifest_entries.second;
 
     size_t total_values = 0;
-    for (const WrappedEntry& entry : entries) {
-      total_values += entry.num_entries();
+    for (const auto& entry : entries) {
+      total_values += entry->num_entries();
     }
 
     // Entries with the same id will have the same fields. The values of those
     // fields will be different.
-    const WrappedEntry& first_entry = entries.front();
+    const WrappedEntry* first_entry = entries.front().get();
     ss << std::setw(kShortTextWidth) << std::left << id;
     ss << std::setw(kShortTextWidth) << std::left
-       << PBManifestEntry_Type_Name(first_entry.manifest_entry().type());
+       << PBManifestEntry_Type_Name(first_entry->manifest_entry().type());
 
     std::vector<std::string> fields_strings;
-    for (const PBMetricField& field : first_entry.manifest_entry().fields()) {
+    for (const PBMetricField& field : first_entry->manifest_entry().fields()) {
       fields_strings.emplace_back(StrCat(PBMetricField::Type_Name(field.type()),
                                          "(", field.description(), ")"));
     }
@@ -395,19 +398,19 @@ static std::string GetFieldsString(
 }
 
 std::string Manifest::ToString(const std::string& metric_id) const {
-  const std::vector<WrappedEntry>& metric_entries =
+  const std::vector<std::unique_ptr<WrappedEntry>>& metric_entries =
       FindOrDie(entries_, metric_id);
 
   CHECK(!metric_entries.empty());
-  const PBManifestEntry& first_entry = metric_entries.front().manifest_entry();
+  const PBManifestEntry& first_entry = metric_entries.front()->manifest_entry();
 
   std::stringstream ss;
   ss << std::setw(kLongTextWidth) << std::left
      << GetFieldsString(first_entry.fields()) << std::endl;
 
-  for (const WrappedEntry& wrapped_entry : metric_entries) {
-    size_t count = wrapped_entry.num_entries();
-    const PBManifestEntry& entry = wrapped_entry.manifest_entry();
+  for (const auto& wrapped_entry : metric_entries) {
+    size_t count = wrapped_entry->num_entries();
+    const PBManifestEntry& entry = wrapped_entry->manifest_entry();
     ss << std::setw(kLongTextWidth) << std::left << GetFieldString(entry);
     ss << std::setw(kNumericFieldWidth) << std::left << std::to_string(count)
        << std::endl;
@@ -419,9 +422,10 @@ std::string Manifest::ToString(const std::string& metric_id) const {
 uint64_t Manifest::TotalEntryCount() const {
   uint64_t total = 0;
   for (const auto& id_and_entries : entries_) {
-    const std::vector<WrappedEntry>& entries_for_metric = id_and_entries.second;
-    for (const WrappedEntry& entry : entries_for_metric) {
-      total += entry.num_entries();
+    const std::vector<std::unique_ptr<WrappedEntry>>& entries_for_metric =
+        id_and_entries.second;
+    for (const auto& entry : entries_for_metric) {
+      total += entry->num_entries();
     }
   }
 

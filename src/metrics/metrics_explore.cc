@@ -206,18 +206,9 @@ static void ProcessSingleFile(const std::string& input_file) {
     return;
   }
 
-  std::map<std::pair<std::string, std::string>,
-           std::vector<std::pair<uint64_t, double>>> data =
-      SimpleParseNumericData(input_file, FLAGS_metric, FLAGS_fields, 0,
-                             std::numeric_limits<uint64_t>::max(), 0);
-  for (const auto& ids_and_data : data) {
-    const std::pair<std::string, std::string>& id_and_fields =
-        ids_and_data.first;
-    const std::vector<std::pair<uint64_t, double>>& data = ids_and_data.second;
-
-    std::cout << id_and_fields.first << ":" << id_and_fields.second << " --> "
-              << DataSummaryToString(data) << std::endl;
-  }
+  MetricsParser parser(input_file);
+  Manifest manifest = parser.ParseManifest();
+  std::cout << manifest.FullToString();
 }
 
 int main(int argc, char** argv) {

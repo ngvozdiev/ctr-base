@@ -206,51 +206,42 @@ class WrappedEntry {
       : manifest_index_(manifest_index),
         manifest_entry_(std::move(manifest_entry)),
         num_entries_(0),
-        num_non_zero_entries_(0),
-        sum_(0) {}
-
-  WrappedEntry(WrappedEntry&& other)
-      : manifest_index_(other.manifest_index_),
-        manifest_entry_(std::move(other.manifest_entry_)),
-        num_entries_(other.num_entries_),
-        num_non_zero_entries_(other.num_non_zero_entries_),
-        sum_(other.sum_) {
-    other.num_entries_ = 0;
-    other.num_non_zero_entries_ = 0;
-    other.sum_ = 0;
-  }
+        num_non_zero_entries_(0) {}
 
   uint64_t manifest_index() const { return manifest_index_; }
 
   const PBManifestEntry& manifest_entry() const { return *manifest_entry_; }
 
-  uint64_t num_entries() const { return num_entries_; }
+  const SummaryStats& summary_stats() const { return summary_stats_; }
 
   uint64_t num_non_zero_entries() const { return num_non_zero_entries_; }
 
-  double sum() const { return sum_; }
-
   // Called for each entry that belongs to this manifest entry.
   void ChildEntry(bool numeric, double value);
+
+  uint64_t num_entries() const { return num_entries_; }
 
  private:
   uint64_t manifest_index_;
 
   std::unique_ptr<PBManifestEntry> manifest_entry_;
 
-  // Total number of entries.
+  // Number of entries.
   uint64_t num_entries_;
 
   // Number of non-zero entries. Only meaningful if the metric is numeric.
   uint64_t num_non_zero_entries_;
 
-  // Total sum of entries. Only meaningful if the metric is numeric.
-  double sum_;
+  // Summary stats for the metric. Only meaningful if the metric is numeric.
+  nc::SummaryStats summary_stats_;
+
+  DISALLOW_COPY_AND_ASSIGN(WrappedEntry);
 };
 
 class Manifest {
  public:
-  Manifest(std::map<std::string, std::vector<WrappedEntry>>&& entries)
+  Manifest(std::map<std::string, std::vector<std::unique_ptr<WrappedEntry>>>&&
+               entries)
       : entries_(std::move(entries)) {}
 
   Manifest(Manifest&& other) : entries_(std::move(other.entries_)) {}
@@ -267,7 +258,7 @@ class Manifest {
 
  private:
   // Entries, grouped by metric id.
-  std::map<std::string, std::vector<WrappedEntry>> entries_;
+  std::map<std::string, std::vector<std::unique_ptr<WrappedEntry>>> entries_;
 
   DISALLOW_COPY_AND_ASSIGN(Manifest);
 };
