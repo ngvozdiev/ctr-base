@@ -85,12 +85,17 @@ struct PcapDataTraceBin {
 
 class PcapDataTrace;
 
+// The index of a single slice from a trace.
+struct TraceSliceTag {};
+using TraceSliceIndex = nc::Index<TraceSliceTag, uint32_t>;
+using TraceSliceSet = nc::PerfectHashSet<uint32_t, TraceSliceTag>;
+
 // A bin sequence is a view into a slice of a trace (or multiple).
 class BinSequence {
  public:
   struct TraceAndSlice {
     PcapDataTrace* trace;
-    size_t slice;
+    TraceSliceIndex slice;
     size_t start_bin;
     size_t end_bin;
     double fraction;
@@ -193,20 +198,19 @@ class PcapDataTrace {
 
   // Calls a function with bins between stat_bin (inclusive) and end_bin
   // (exclusive) of a single slice of the trace.
-  void Bins(size_t slice, size_t start_bin, size_t end_bin,
+  void Bins(TraceSliceIndex slice, size_t start_bin, size_t end_bin,
             std::function<void(const PBBin& binned_data)> callback);
 
   // Like Bins, but combines multiple slices into one. Will also pull the
   // results from the bin cache if possible.
   std::pair<std::vector<PcapDataTraceBin>::const_iterator,
             std::vector<PcapDataTraceBin>::const_iterator>
-  BinsCombined(const std::set<size_t>& slices, size_t start_bin,
-               size_t end_bin);
+  BinsCombined(const TraceSliceSet& slices, size_t start_bin, size_t end_bin);
 
-  std::set<size_t> AllSlices() const;
+  TraceSliceSet AllSlices() const;
 
   // Constructs a BinSequence with slices from the trace.
-  BinSequence ToSequence(const std::set<size_t>& slices);
+  BinSequence ToSequence(const TraceSliceSet& slices);
 
   std::vector<std::string> trace_files() const;
   const TraceId& id() const { return id_; }
@@ -232,7 +236,7 @@ class PcapDataTrace {
   };
 
   // Combines all bins for a set of slices and stores them in the cache.
-  const CachedBins* AddToBinCache(const std::set<size_t>& slices, size_t from,
+  const CachedBins* AddToBinCache(const TraceSliceSet& slices, size_t from,
                                   size_t to);
 
   size_t TraceProtobufSize() const;
@@ -250,10 +254,10 @@ class PcapDataTrace {
   // For each slice stores a bin number and an offset---bins with a bin number
   // larger or equal to this number are offset many bytes away from the start of
   // the slice's bins.
-  std::map<size_t, std::map<size_t, size_t>> bin_start_hints_;
+  std::map<TraceSliceIndex, std::map<size_t, size_t>> bin_start_hints_;
 
   // Cached, combined bins for series of slices.
-  std::map<std::set<size_t>, CachedBins> bins_cache_;
+  std::map<TraceSliceSet, CachedBins> bins_cache_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };

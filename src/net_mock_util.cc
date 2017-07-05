@@ -206,6 +206,7 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
+    break;
   }
 
   ctr::PathProvider path_provider(&graph);

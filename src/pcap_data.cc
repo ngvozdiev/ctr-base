@@ -556,7 +556,8 @@ std::pair<size_t, size_t> FindStartBinOffset(
   return *it;
 }
 
-void PcapDataTrace::Bins(size_t slice, size_t start_bin, size_t end_bin,
+void PcapDataTrace::Bins(TraceSliceIndex slice, size_t start_bin,
+                         size_t end_bin,
                          std::function<void(const PBBin& bin)> callback) {
   if (!callback) {
     return;
@@ -595,7 +596,7 @@ static constexpr size_t kCacheSizeMb = 50;
 
 std::pair<std::vector<PcapDataTraceBin>::const_iterator,
           std::vector<PcapDataTraceBin>::const_iterator>
-PcapDataTrace::BinsCombined(const std::set<size_t>& slices, size_t start_bin,
+PcapDataTrace::BinsCombined(const TraceSliceSet& slices, size_t start_bin,
                             size_t end_bin) {
   CHECK(end_bin <= trace_pb_.bin_count());
 
@@ -617,14 +618,14 @@ PcapDataTrace::BinsCombined(const std::set<size_t>& slices, size_t start_bin,
 }
 
 const PcapDataTrace::CachedBins* PcapDataTrace::AddToBinCache(
-    const std::set<size_t>& slices, size_t from, size_t to) {
+    const TraceSliceSet& slices, size_t from, size_t to) {
   CachedBins& out = bins_cache_[slices];
   out.bins.clear();
   out.from = from;
   out.to = to;
 
   out.bins.resize(to - from);
-  for (size_t slice : slices) {
+  for (TraceSliceIndex slice : slices) {
     size_t i = -1;
     Bins(slice, from, to, [&out, &i](const PBBin& bin_pb) {
       out.bins[++i].Combine(PcapDataTraceBin(bin_pb), 1.0);
@@ -632,7 +633,7 @@ const PcapDataTrace::CachedBins* PcapDataTrace::AddToBinCache(
   }
 
   size_t bytes = sizeof(PcapDataTraceBin) * (to - from);
-  LOG(ERROR) << "Added to cache " << slices.size() << " slices from " << from
+  LOG(ERROR) << "Added to cache " << slices.Count() << " slices from " << from
              << " to " << to << " size: " << bytes / 1000.0 / 1000.0 << "MB";
   return &out;
 }
@@ -717,7 +718,7 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() {
   uint64_t packets = 0;
   for (const TraceAndSlice& trace_and_slice : traces_) {
     PcapDataTrace* trace = trace_and_slice.trace;
-    size_t slice = trace_and_slice.slice;
+    TraceSliceIndex slice = trace_and_slice.slice;
     size_t end_bin = trace_and_slice.start_bin + count;
     trace->Bins(slice, trace_and_slice.start_bin, end_bin,
                 [&bytes, &packets, &trace_and_slice](const PBBin& bin_pb) {
@@ -862,16 +863,16 @@ std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     size_t bin_size_multiplier) {
   size_t count = bin_count();
   // Will first group slices by <trace, start_bin, end_bin, fraction>.
-  std::map<std::tuple<PcapDataTrace*, size_t, size_t, double>, std::set<size_t>>
+  std::map<std::tuple<PcapDataTrace*, size_t, size_t, double>, TraceSliceSet>
       slices_grouped;
   for (const TraceAndSlice& trace_and_slice : traces_) {
     PcapDataTrace* trace = trace_and_slice.trace;
-    size_t slice = trace_and_slice.slice;
+    TraceSliceIndex slice = trace_and_slice.slice;
     size_t start_bin = trace_and_slice.start_bin;
     size_t end_bin = trace_and_slice.start_bin + count;
     slices_grouped[std::make_tuple(trace, start_bin, end_bin,
                                    trace_and_slice.fraction)]
-        .insert(slice);
+        .Insert(slice);
   }
 
   std::vector<PcapDataTraceBin> out(count);
@@ -880,14 +881,15 @@ std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     size_t start_bin, end_bin;
     double fraction;
     std::tie(trace, start_bin, end_bin, fraction) = trace_and_slices.first;
-    const std::set<size_t>& slices = trace_and_slices.second;
+    const TraceSliceSet& slices = trace_and_slices.second;
 
-    std::vector<PcapDataTraceBin> bins_combined =
-        trace->BinsCombined(slices, start_bin, end_bin);
-    CHECK(bins_combined.size() == count);
+    std::vector<PcapDataTraceBin>::const_iterator from;
+    std::vector<PcapDataTraceBin>::const_iterator to;
+    std::tie(from, to) = trace->BinsCombined(slices, start_bin, end_bin);
+    CHECK(std::distance(from, to) == static_cast<ssize_t>(count));
 
     for (size_t i = 0; i < count; ++i) {
-      out[i].Combine(bins_combined[i], fraction);
+      out[i].Combine(*std::next(from, i), fraction);
     }
   }
 
@@ -915,18 +917,17 @@ const std::chrono::microseconds PcapDataTrace::base_bin_size() const {
   return std::chrono::microseconds(trace_pb_.bin_size_micros());
 }
 
-std::set<size_t> PcapDataTrace::AllSlices() const {
-  std::set<size_t> out;
+TraceSliceSet PcapDataTrace::AllSlices() const {
+  TraceSliceSet out;
   for (size_t i = 0; i < trace_pb_.split_count(); ++i) {
-    out.emplace(i);
+    out.Insert(TraceSliceIndex(i));
   }
   return out;
 }
 
-BinSequence PcapDataTrace::ToSequence(const std::set<size_t>& slices) {
+BinSequence PcapDataTrace::ToSequence(const TraceSliceSet& slices) {
   std::vector<BinSequence::TraceAndSlice> traces_and_slices;
-  for (size_t slice : slices) {
-    CHECK(slice < trace_pb_.split_count());
+  for (TraceSliceIndex slice : slices) {
     traces_and_slices.push_back({this, slice, 0, trace_pb_.bin_count(), 1.0});
   }
 
