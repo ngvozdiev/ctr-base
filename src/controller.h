@@ -444,11 +444,13 @@ class NetworkContainer {
 
   const nc::net::GraphStorage* graph() { return graph_; }
 
-  std::vector<const nc::htsim::Queue*> queues() const;
+  std::vector<const nc::htsim::Queue*> internal_queues() const;
 
   const std::vector<nc::htsim::TCPSource*>& flow_group_tcp_sources() const {
     return flow_group_tcp_sources_;
   }
+
+  Controller* controller() { return controller_; }
 
  private:
   // Adds a default route from the given device to a dummy handler. Useful if
@@ -504,7 +506,11 @@ class NetworkContainer {
   // some "fake" devices added to originate TCP connections.
   std::map<std::string, std::unique_ptr<nc::htsim::DeviceInterface>> devices_;
   std::vector<std::unique_ptr<nc::htsim::Pipe>> pipes_;
-  std::vector<std::unique_ptr<nc::htsim::Queue>> queues_;
+
+  // Stores queues in the network. They are separated into internal and external
+  // (added to flow groups).
+  std::vector<std::unique_ptr<nc::htsim::Queue>> internal_queues_;
+  std::vector<std::unique_ptr<nc::htsim::Queue>> external_queues_;
 
   // The packet sources.
   std::vector<std::unique_ptr<nc::htsim::BulkPacketGenerator>>

@@ -44,6 +44,8 @@ DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
+DEFINE_bool(quick, false, "Whether to perform packet-level simulation or not");
+DEFINE_uint64(duration_sec, 90, "For how long to run (in simulated time)");
 
 template <typename T>
 static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
@@ -157,6 +159,92 @@ static ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
   return {bins, std::chrono::milliseconds(bin_size_ms), flow_count};
 }
 
+static void HandleDefault(
+    const std::map<ctr::AggregateId, ctr::BinSequence>& initial_sequences,
+    const nc::net::GraphStorage& graph, nc::net::DevicePortNumber enter_port,
+    std::chrono::milliseconds poll_period,
+    std::chrono::milliseconds round_duration, nc::EventQueue* event_queue,
+    ctr::controller::NetworkContainer* network_container) {
+  // Will first add aggregates and populate the device factory.
+  ctr::MockSimDeviceFactory device_factory(enter_port, &event_queue);
+  for (const auto& id_and_bin_sequence : initial_sequences) {
+    const ctr::AggregateId& id = id_and_bin_sequence.first;
+    const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
+    ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
+    ctr::AggregateHistory init_history =
+        from_start.GenerateHistory(poll_period);
+
+    nc::htsim::MatchRuleKey key_for_aggregate =
+        network_container->AddAggregate(id, init_history);
+
+    // Will add the bin sequence to the source device.
+    const std::string& src_device_id = graph.GetNode(id.src())->id();
+    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
+                                  bin_sequence);
+
+    // Will also add the reverse aggregate for ACKs.
+    auto ack_history =
+        GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100), 10);
+    network_container->AddAggregate(id.Reverse(), ack_history);
+  }
+
+  // Now that the device factory is ready, we can initialize the container.
+  network_container->AddElementsFromGraph(&device_factory);
+
+  // With devices and queues in place we can add flow groups to the container.
+  for (const auto& id_and_bin_sequence : initial_sequences) {
+    ctr::controller::TCPFlowGroup flow_group(
+        10, std::chrono::milliseconds(20), std::chrono::milliseconds(50), 10000,
+        std::chrono::milliseconds(100));
+    flow_group.set_mean_object_size_fixed(true);
+    flow_group.set_mean_wait_time_fixed(false);
+    flow_group.AddKeyFrame(std::chrono::milliseconds(0), 10,
+                           nc::net::Bandwidth::FromGBitsPerSecond(10));
+    network_container->AddTCPFlowGroup(id_and_bin_sequence.first, flow_group);
+  }
+  network_container->InitAggregatesInController();
+
+  ctr::NetInstrument net_instrument(network_container->internal_queues(),
+                                    network_container->flow_group_tcp_sources(),
+                                    std::chrono::milliseconds(10), event_queue);
+  device_factory.Init();
+  event_queue->RunAndStopIn(std::chrono::seconds(90));
+}
+
+static void HandleQuick(
+    const std::map<ctr::AggregateId, ctr::BinSequence>& initial_sequences,
+    const nc::net::GraphStorage& graph, nc::net::DevicePortNumber enter_port,
+    std::chrono::milliseconds poll_period,
+    std::chrono::milliseconds round_duration, nc::EventQueue* event_queue,
+    ctr::controller::NetworkContainer* network_container) {
+  // Will first add aggregates and populate the device factory.
+  ctr::MockDeviceFactory device_factory(network_container->controller());
+  for (const auto& id_and_bin_sequence : initial_sequences) {
+    const ctr::AggregateId& id = id_and_bin_sequence.first;
+    const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
+    ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
+    ctr::AggregateHistory init_history =
+        from_start.GenerateHistory(poll_period);
+
+    nc::htsim::MatchRuleKey key_for_aggregate =
+        network_container->AddAggregate(id, init_history);
+
+    // Will add the bin sequence to the source device.
+    const std::string& src_device_id = graph.GetNode(id.src())->id();
+    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
+                                  bin_sequence);
+  }
+
+  // Now that the device factory is ready, we can initialize the container.
+  network_container->AddElementsFromGraph(&device_factory);
+  network_container->InitAggregatesInController();
+
+  ctr::NetInstrument net_instrument(network_container->internal_queues(),
+                                    network_container->flow_group_tcp_sources(),
+                                    std::chrono::milliseconds(10), event_queue);
+  event_queue->RunAndStopIn(std::chrono::seconds(90));
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
@@ -239,8 +327,6 @@ int main(int argc, char** argv) {
 
   ctr::controller::Controller controller(controller_ip, &routing_system,
                                          &event_queue, &graph);
-  ctr::MockSimDeviceFactory device_factory(enter_port, &event_queue);
-
   ctr::controller::NetworkContainerConfig containter_config(
       device_ip_base, tldr_ip_base, flow_group_ip_base, enter_port, exit_port,
       std::chrono::milliseconds(100), false);
@@ -250,51 +336,15 @@ int main(int argc, char** argv) {
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &event_queue);
 
-  // Will first add aggregates and populate the device factory.
-  for (const auto& id_and_bin_sequence : initial_sequences) {
-    const ctr::AggregateId& id = id_and_bin_sequence.first;
-    const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
-    ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
-    ctr::AggregateHistory init_history =
-        from_start.GenerateHistory(poll_period);
-
-    nc::htsim::MatchRuleKey key_for_aggregate =
-        network_container.AddAggregate(id, init_history);
-
-    // Will add the bin sequence to the source device.
-    const std::string& src_device_id = graph.GetNode(id.src())->id();
-    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
-                                  bin_sequence);
-
-    // Will also add the reverse aggregate for ACKs.
-    auto ack_history =
-        GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100), 10);
-    network_container.AddAggregate(id.Reverse(), ack_history);
-  }
-
-  // Now that the device factory is ready, we can initialize the container.
-  network_container.AddElementsFromGraph(&device_factory);
-
-  // With devices and queues in place we can add flow groups to the container.
-  for (const auto& id_and_bin_sequence : initial_sequences) {
-    ctr::controller::TCPFlowGroup flow_group(
-        10, std::chrono::milliseconds(20), std::chrono::milliseconds(50), 10000,
-        std::chrono::milliseconds(100));
-    flow_group.set_mean_object_size_fixed(true);
-    flow_group.set_mean_wait_time_fixed(false);
-    flow_group.AddKeyFrame(std::chrono::milliseconds(0), 10,
-                           nc::net::Bandwidth::FromGBitsPerSecond(10));
-    network_container.AddTCPFlowGroup(id_and_bin_sequence.first, flow_group);
-  }
-  network_container.InitAggregatesInController();
-
-  ctr::NetInstrument net_instrument(
-      network_container.queues(), network_container.flow_group_tcp_sources(),
-      std::chrono::milliseconds(10), &event_queue);
-  device_factory.Init();
-
   ProgressIndicator progress_indicator(std::chrono::milliseconds(100),
                                        &event_queue);
-  event_queue.RunAndStopIn(std::chrono::seconds(90));
+
+  if (FLAGS_quick) {
+    HandleQuick(initial_sequences, graph, enter_port, poll_period,
+                round_duration, &event_queue, &network_container);
+  } else {
+    HandleDefault(initial_sequences, graph, enter_port, poll_period,
+                  round_duration, &event_queue, &network_container);
+  }
   nc::metrics::DefaultMetricManager()->PersistAllMetrics();
 }
