@@ -134,11 +134,7 @@ static void RecordPathSplitsAndTotalDelay(
     const AggregateId& aggregate_id = aggregate_and_routes.first;
     std::string src_id = graph.GetNode(aggregate_id.src())->id();
     std::string dst_id = graph.GetNode(aggregate_id.dst())->id();
-
     nc::net::Delay sp_delay = aggregate_id.GetSPDelay(graph);
-    const DemandAndFlowCount& demand_and_flow_count =
-        nc::FindOrDieNoPrint(routing_config.demands(), aggregate_id);
-    size_t flow_count = demand_and_flow_count.second;
 
     double total_delay = 0;
     double total_delay_rel = 0;
@@ -146,15 +142,15 @@ static void RecordPathSplitsAndTotalDelay(
     for (const auto& route_and_fraction : aggregate_and_routes.second) {
       const nc::net::Walk* path = route_and_fraction.first;
       nc::net::Delay delay = path->delay();
+      double fraction = route_and_fraction.second;
 
-      total_delay += delay.count() * flow_count;
-      total_delay_rel += (delay.count() - sp_delay.count()) * flow_count;
+      total_delay += delay.count() * fraction;
+      total_delay_rel += (delay.count() - sp_delay.count()) * fraction;
       total_delay_rel_change += ((delay.count() - sp_delay.count()) /
                                  static_cast<double>(sp_delay.count())) *
-                                flow_count;
+                                fraction;
 
       std::string path_string = path->ToStringNoPorts(graph);
-      double fraction = route_and_fraction.second;
       auto* handle = path_output_split->GetHandle(path_string);
       handle->AddValue(fraction);
     }

@@ -107,5 +107,8 @@ target_link_libraries(metrics_explore metrics_parser gflags)
 add_executable(tm_gen_util src/tm_gen_util.cc)
 target_link_libraries(tm_gen_util ncode gflags)
 
+add_executable(plot_completion_time_delta src/plot_completion_time_delta.cc)
+target_link_libraries(plot_completion_time_delta metrics_parser gflags)
+
 add_executable(opt_eval src/opt_eval.cc)
 target_link_libraries(opt_eval ctr_base)

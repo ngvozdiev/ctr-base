@@ -166,7 +166,7 @@ static void HandleDefault(
     std::chrono::milliseconds round_duration, nc::EventQueue* event_queue,
     ctr::controller::NetworkContainer* network_container) {
   // Will first add aggregates and populate the device factory.
-  ctr::MockSimDeviceFactory device_factory(enter_port, &event_queue);
+  ctr::MockSimDeviceFactory device_factory(enter_port, event_queue);
   for (const auto& id_and_bin_sequence : initial_sequences) {
     const ctr::AggregateId& id = id_and_bin_sequence.first;
     const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
@@ -208,13 +208,12 @@ static void HandleDefault(
                                     network_container->flow_group_tcp_sources(),
                                     std::chrono::milliseconds(10), event_queue);
   device_factory.Init();
-  event_queue->RunAndStopIn(std::chrono::seconds(90));
+  event_queue->RunAndStopIn(std::chrono::seconds(FLAGS_duration_sec));
 }
 
 static void HandleQuick(
     const std::map<ctr::AggregateId, ctr::BinSequence>& initial_sequences,
-    const nc::net::GraphStorage& graph, nc::net::DevicePortNumber enter_port,
-    std::chrono::milliseconds poll_period,
+    const nc::net::GraphStorage& graph, std::chrono::milliseconds poll_period,
     std::chrono::milliseconds round_duration, nc::EventQueue* event_queue,
     ctr::controller::NetworkContainer* network_container) {
   // Will first add aggregates and populate the device factory.
@@ -242,7 +241,7 @@ static void HandleQuick(
   ctr::NetInstrument net_instrument(network_container->internal_queues(),
                                     network_container->flow_group_tcp_sources(),
                                     std::chrono::milliseconds(10), event_queue);
-  event_queue->RunAndStopIn(std::chrono::seconds(90));
+  event_queue->RunAndStopIn(std::chrono::seconds(FLAGS_duration_sec));
 }
 
 int main(int argc, char** argv) {
@@ -294,6 +293,12 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
+
+    static int i = 0;
+    ++i;
+    if (i == 1) {
+      break;
+    }
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -338,8 +343,8 @@ int main(int argc, char** argv) {
   ProgressIndicator progress_indicator(std::chrono::milliseconds(100),
                                        &event_queue);
   if (FLAGS_quick) {
-    HandleQuick(initial_sequences, graph, enter_port, poll_period,
-                round_duration, &event_queue, &network_container);
+    HandleQuick(initial_sequences, graph, poll_period, round_duration,
+                &event_queue, &network_container);
   } else {
     HandleDefault(initial_sequences, graph, enter_port, poll_period,
                   round_duration, &event_queue, &network_container);
