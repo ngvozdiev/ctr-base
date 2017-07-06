@@ -163,10 +163,14 @@ class MockSimDevice : public nc::htsim::Device {
 
  private:
   struct PathState {
-    PathState() : fraction(0), total_syns(0) {}
+    PathState() : fraction(0), total_syns(0), bins_cached_from(0) {}
 
     double fraction;
     size_t total_syns;
+
+    // This path's bins. Used as a cache by MockSimNetwork.
+    std::vector<PcapDataTraceBin> bins;
+    size_t bins_cached_from;
   };
 
   struct AggregateState {
@@ -207,6 +211,8 @@ class MockSimNetwork : public nc::EventConsumer {
   }
 
  private:
+  static constexpr size_t kPrefetchSize = 100;
+
   void EnqueueNext() {
     std::chrono::microseconds bin_size = GetBinSize();
     nc::EventQueueTime bin_size_simtime = event_queue()->ToTime(bin_size);
@@ -218,6 +224,9 @@ class MockSimNetwork : public nc::EventConsumer {
   void AdvanceTimeToNextBin();
 
   nc::htsim::PacketPtr GetDummyPacket(uint32_t size);
+
+  void PrefetchBins(MockSimDevice::AggregateState* aggregate_state,
+                    MockSimDevice::PathState* path_state);
 
   std::vector<MockSimDevice*> devices_;
 

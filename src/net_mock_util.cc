@@ -206,7 +206,6 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
-    break;
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -295,6 +294,6 @@ int main(int argc, char** argv) {
 
   ProgressIndicator progress_indicator(std::chrono::milliseconds(100),
                                        &event_queue);
-  event_queue.RunAndStopIn(std::chrono::seconds(90));
+  event_queue.RunAndStopIn(std::chrono::seconds(1300));
   nc::metrics::DefaultMetricManager()->PersistAllMetrics();
 }

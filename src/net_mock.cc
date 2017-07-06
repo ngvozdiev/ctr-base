@@ -222,6 +222,7 @@ void MockSimDevice::HandleStateUpdate(
     double fraction = action->weight() / total_weight;
     PathState& path_state = state->paths[tag];
     path_state.fraction = fraction;
+    path_state.bins.clear();
   }
 
   // There should be no paths removed.
@@ -285,28 +286,41 @@ std::chrono::microseconds MockSimNetwork::GetBinSize() {
   return aggregate_state.bin_sequence.bin_size();
 }
 
+void MockSimNetwork::PrefetchBins(
+    MockSimDevice::AggregateState* aggregate_state,
+    MockSimDevice::PathState* path_state) {
+  BinSequence& bin_sequence = aggregate_state->bin_sequence;
+  BinSequence to_end =
+      bin_sequence.CutFromStart(last_bin_count_ + kPrefetchSize);
+  BinSequence period_sequence = to_end.Offset(last_bin_count_);
+  BinSequence split_sequence =
+      period_sequence.PreciseSplitOrDie({path_state->fraction})[0];
+  std::vector<PcapDataTraceBin> bins =
+      split_sequence.AccumulateBins(GetBinSize());
+  CHECK(bins.size() == kPrefetchSize);
+
+  path_state->bins = std::move(bins);
+  path_state->bins_cached_from = last_bin_count_;
+}
+
 void MockSimNetwork::AdvanceTimeToNextBin() {
   using namespace std::chrono;
-  microseconds bin_size = GetBinSize();
 
   for (MockSimDevice* device : devices_) {
     for (auto& key_and_state : device->states_) {
       MockSimDevice::AggregateState& aggregate_state = key_and_state.second;
-      BinSequence& bin_sequence = aggregate_state.bin_sequence;
-
-      BinSequence to_end = bin_sequence.CutFromStart(last_bin_count_ + 1);
-      BinSequence period_sequence = to_end.Offset(last_bin_count_);
 
       size_t i = -1;
       for (auto& tag_and_path_state : aggregate_state.paths) {
         MockSimDevice::PathState& path_state = tag_and_path_state.second;
-        BinSequence split_sequence =
-            period_sequence.PreciseSplitOrDie({path_state.fraction})[0];
-
-        std::vector<PcapDataTraceBin> bins =
-            split_sequence.AccumulateBins(bin_size);
-        CHECK(bins.size() == 1);
-        const PcapDataTraceBin& bin = bins[0];
+        const std::vector<PcapDataTraceBin>& bins = path_state.bins;
+        size_t bin_index = last_bin_count_ + 1 - path_state.bins_cached_from;
+        if (bin_index >= bins.size()) {
+          PrefetchBins(&aggregate_state, &path_state);
+          bin_index = last_bin_count_ + 1 - path_state.bins_cached_from;
+          CHECK(bin_index < bins.size());
+        }
+        const PcapDataTraceBin& bin = bins[bin_index];
         if (bin.bytes == 0) {
           continue;
         }
