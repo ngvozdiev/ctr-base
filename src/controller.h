@@ -110,7 +110,7 @@ class Controller : public ::nc::htsim::PacketHandler {
 
  private:
   struct MessageAndNode {
-    std::unique_ptr<nc::htsim::SSCPAddOrUpdate> message;
+    nc::FreeList<nc::htsim::SSCPAddOrUpdate>::Pointer message;
     const TLDRNode* node;
   };
 

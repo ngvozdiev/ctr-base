@@ -36,7 +36,7 @@ void Controller::InitAggregatesAndNodes(
 
 Controller::MessageAndNode Controller::GetUpdate(
     std::unique_ptr<nc::htsim::MatchRule> rule, const TLDRNode* node) {
-  auto route_update = nc::make_unique<nc::htsim::SSCPAddOrUpdate>(
+  auto route_update = nc::GetFreeList<nc::htsim::SSCPAddOrUpdate>().New(
       controller_ip_, node->tldr_address, event_queue_->CurrentTime(),
       std::move(rule));
 
@@ -307,7 +307,7 @@ void Controller::HandlePacket(::nc::htsim::PacketPtr pkt) {
     } else if (type == TLDRTriggerReoptimize::kTLDRTriggerReoptimizeType) {
       for (const auto& src_and_tldr : tldrs_) {
         const TLDRNode* node = &src_and_tldr.second;
-        auto message_to_send = ::nc::make_unique<TLDRForceRequest>(
+        auto message_to_send = nc::GetFreeList<TLDRForceRequest>().New(
             node->tldr_address, controller_ip_, event_queue_->CurrentTime());
         node->to_tldr->HandlePacket(std::move(message_to_send));
       }
@@ -353,9 +353,9 @@ void Controller::CommitPendingOutput(RoundState* round_state) {
     const std::map<AggregateId, AggregateUpdateState>& update_map =
         tldr_node_ptr_and_update_map.second;
 
-    auto message_to_send =
-        ::nc::make_unique<TLDRUpdate>(node->tldr_address, controller_ip_,
-                                      event_queue_->CurrentTime(), update_map);
+    auto message_to_send = nc::GetFreeList<TLDRUpdate>().New(
+        node->tldr_address, controller_ip_, event_queue_->CurrentTime(),
+        update_map);
     node->to_tldr->HandlePacket(std::move(message_to_send));
   }
 }
@@ -581,9 +581,9 @@ static void AddSrcOrDstBasedRoute(nc::htsim::DeviceInterface* device,
   auto rule = nc::make_unique<MatchRule>(key);
   rule->AddAction(std::move(action));
 
-  auto message =
-      nc::make_unique<SSCPAddOrUpdate>(kWildIPAddress, device->ip_address(),
-                                       nc::EventQueueTime(0), std::move(rule));
+  auto message = nc::GetFreeList<SSCPAddOrUpdate>().New(
+      kWildIPAddress, device->ip_address(), nc::EventQueueTime(0),
+      std::move(rule));
   device->HandlePacket(std::move(message));
 }
 

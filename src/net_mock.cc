@@ -177,7 +177,7 @@ void MockDevice::HandlePacket(nc::htsim::PacketPtr pkt) {
     HandleStateUpdate(*add_or_update_message);
     if (add_or_update_message->tx_id() != SSCPMessage::kNoTxId &&
         replies_handler_ != nullptr) {
-      auto reply = nc::make_unique<SSCPAck>(
+      auto reply = nc::GetFreeList<SSCPAck>().New(
           ip_address_, pkt->five_tuple().ip_src(), event_queue_->CurrentTime(),
           add_or_update_message->tx_id());
 
@@ -188,7 +188,7 @@ void MockDevice::HandlePacket(nc::htsim::PacketPtr pkt) {
     SSCPStatsRequest* stats_request_message =
         static_cast<SSCPStatsRequest*>(pkt.get());
 
-    auto reply = nc::make_unique<SSCPStatsReply>(
+    auto reply = nc::GetFreeList<SSCPStatsReply>().New(
         ip_address_, pkt->five_tuple().ip_src(), event_queue_->CurrentTime());
     ReplyToRequest(*stats_request_message, reply.get());
 
@@ -329,8 +329,8 @@ nc::htsim::PacketPtr MockSimNetwork::GetDummyPacket(uint32_t size) {
   nc::net::FiveTuple five_tuple(
       nc::net::IPAddress(9919), nc::net::IPAddress(9929), nc::net::kProtoUDP,
       nc::net::AccessLayerPort(9919), nc::net::AccessLayerPort(9929));
-  return nc::make_unique<nc::htsim::UDPPacket>(five_tuple, size,
-                                               event_queue_->CurrentTime());
+  return nc::GetFreeList<nc::htsim::UDPPacket>().New(
+      five_tuple, size, event_queue_->CurrentTime());
 }
 
 }  // namespace ctr
