@@ -22,10 +22,6 @@ namespace nc {
 namespace metrics {
 namespace parser {
 
-constexpr size_t kNumericFieldWidth = 10;
-constexpr size_t kLongTextWidth = 100;
-constexpr size_t kShortTextWidth = 40;
-
 static std::string SingleFieldToString(const PBMetricField& field) {
   switch (field.type()) {
     case PBMetricField::BOOL:
@@ -338,20 +334,106 @@ static constexpr char kTypeColumnName[] = "Type";
 static constexpr char kFieldsColumnName[] = "Fields";
 static constexpr char kSetsCountColumnName[] = "Sets";
 static constexpr char kValuesCountColumnName[] = "Values";
+static constexpr char kMinTimeColumnName[] = "Min time";
+static constexpr char kMaxTimeColumnName[] = "Max time";
+static constexpr char kPercentilesColumnName[] = "Percentiles";
 static constexpr char kNoFields[] = "NO FIELDS";
 
+class AsciiTable {
+ public:
+  AsciiTable(const std::vector<std::string>& headers) : headers_(headers) {}
+
+  void AddRow(const std::vector<std::string>& row) {
+    CHECK(row.size() == headers_.size());
+    rows_.emplace_back(row);
+  }
+
+  std::string ToString() {
+    std::stringstream ss;
+    std::vector<size_t> col_widths = GetColWidths();
+    for (size_t i = 0; i < headers_.size(); ++i) {
+      ss << std::setw(col_widths[i]) << std::left << headers_[i];
+    }
+    ss << std::endl;
+
+    for (const auto& row : rows_) {
+      for (size_t i = 0; i < headers_.size(); ++i) {
+        ss << std::setw(col_widths[i]) << std::left << row[i];
+      }
+      ss << std::endl;
+    }
+
+    return ss.str();
+  }
+
+ private:
+  static constexpr size_t kExtraSpaces = 2;
+
+  std::vector<size_t> GetColWidths() const {
+    std::vector<size_t> out(headers_.size());
+    for (size_t i = 0; i < headers_.size(); ++i) {
+      size_t max_width = headers_[i].size();
+      for (const auto& row : rows_) {
+        max_width = std::max(max_width, row[i].size());
+      }
+      out[i] = max_width + kExtraSpaces;
+    }
+
+    return out;
+  }
+
+  std::vector<std::string> headers_;
+  std::vector<std::vector<std::string>> rows_;
+};
+
+std::string DataSummaryToString(
+    const std::map<std::pair<std::string, std::string>,
+                   std::vector<std::pair<uint64_t, double>>>& id_to_data) {
+  AsciiTable table({kMetricIdColumnName, kFieldsColumnName,
+                    kValuesCountColumnName, kMinTimeColumnName,
+                    kMaxTimeColumnName, kPercentilesColumnName});
+
+  for (const auto& id_and_data : id_to_data) {
+    const std::string& metric_id = id_and_data.first.first;
+    const std::string& fields_id = id_and_data.first.second;
+
+    const auto& data = id_and_data.second;
+    std::vector<double> all_data;
+    all_data.reserve(data.size());
+
+    uint64_t start_timestamp = std::numeric_limits<uint64_t>::max();
+    uint64_t end_timestamp = 0;
+
+    for (const auto& timestamp_and_data : data) {
+      uint64_t timestamp = timestamp_and_data.first;
+      double data = timestamp_and_data.second;
+
+      start_timestamp = std::min(start_timestamp, timestamp);
+      end_timestamp = std::max(end_timestamp, timestamp);
+      all_data.emplace_back(data);
+    }
+
+    std::vector<double> percentiles = Percentiles(&all_data, 10);
+    std::vector<std::string> row = {
+        metric_id, fields_id, std::to_string(data.size()),
+        std::to_string(start_timestamp), std::to_string(end_timestamp),
+        Join(percentiles, ",",
+             [](double v) { return nc::ToStringMaxDecimals(v, 3); })};
+    table.AddRow(row);
+  }
+
+  return table.ToString();
+}
+
 std::string Manifest::FullToString() const {
-  std::stringstream ss;
-  ss << std::setw(kShortTextWidth) << std::left << kMetricIdColumnName
-     << std::setw(kShortTextWidth) << std::left << kTypeColumnName
-     << std::setw(kLongTextWidth) << std::left << kFieldsColumnName
-     << std::setw(kNumericFieldWidth) << std::left << kSetsCountColumnName
-     << std::setw(kNumericFieldWidth) << std::left << kValuesCountColumnName
-     << std::endl;
+  AsciiTable table({kMetricIdColumnName, kTypeColumnName, kFieldsColumnName,
+                    kSetsCountColumnName, kValuesCountColumnName});
+
   for (const auto& id_and_manifest_entries : entries_) {
     const std::string& id = id_and_manifest_entries.first;
     const std::vector<std::unique_ptr<WrappedEntry>>& entries =
         id_and_manifest_entries.second;
+    std::vector<std::string> row;
 
     size_t total_values = 0;
     for (const auto& entry : entries) {
@@ -361,9 +443,11 @@ std::string Manifest::FullToString() const {
     // Entries with the same id will have the same fields. The values of those
     // fields will be different.
     const WrappedEntry* first_entry = entries.front().get();
-    ss << std::setw(kShortTextWidth) << std::left << id;
-    ss << std::setw(kShortTextWidth) << std::left
-       << PBManifestEntry_Type_Name(first_entry->manifest_entry().type());
+    row.emplace_back(id);
+
+    std::string type =
+        PBManifestEntry_Type_Name(first_entry->manifest_entry().type());
+    row.emplace_back(type);
 
     std::vector<std::string> fields_strings;
     for (const PBMetricField& field : first_entry->manifest_entry().fields()) {
@@ -374,14 +458,12 @@ std::string Manifest::FullToString() const {
       fields_strings.emplace_back(kNoFields);
     }
 
-    ss << std::setw(kLongTextWidth) << std::left << Join(fields_strings, ",");
-    ss << std::setw(kNumericFieldWidth) << std::left
-       << std::to_string(entries.size());
-    ss << std::setw(kNumericFieldWidth) << std::left
-       << std::to_string(total_values);
-    ss << std::endl;
+    row.emplace_back(Join(fields_strings, ","));
+    row.emplace_back(std::to_string(entries.size()));
+    row.emplace_back(std::to_string(total_values));
+    table.AddRow(row);
   }
-  return ss.str();
+  return table.ToString();
 }
 
 static std::string GetFieldsString(
@@ -395,28 +477,6 @@ static std::string GetFieldsString(
   }
 
   return Join(fields_strings, ",");
-}
-
-std::string Manifest::ToString(const std::string& metric_id) const {
-  const std::vector<std::unique_ptr<WrappedEntry>>& metric_entries =
-      FindOrDie(entries_, metric_id);
-
-  CHECK(!metric_entries.empty());
-  const PBManifestEntry& first_entry = metric_entries.front()->manifest_entry();
-
-  std::stringstream ss;
-  ss << std::setw(kLongTextWidth) << std::left
-     << GetFieldsString(first_entry.fields()) << std::endl;
-
-  for (const auto& wrapped_entry : metric_entries) {
-    size_t count = wrapped_entry->num_entries();
-    const PBManifestEntry& entry = wrapped_entry->manifest_entry();
-    ss << std::setw(kLongTextWidth) << std::left << GetFieldString(entry);
-    ss << std::setw(kNumericFieldWidth) << std::left << std::to_string(count)
-       << std::endl;
-  }
-
-  return ss.str();
 }
 
 uint64_t Manifest::TotalEntryCount() const {
@@ -697,12 +757,6 @@ static char* StringToCString(const std::string& str) {
 char* MetricsParserManifestSummary(const char* metrics_file) {
   MetricsParser parser(metrics_file);
   return StringToCString(parser.ParseManifest().FullToString());
-}
-
-char* MetricsParserManifestMetricSummary(const char* metrics_file,
-                                         const char* metric_id) {
-  MetricsParser parser(metrics_file);
-  return StringToCString(parser.ParseManifest().ToString(metric_id));
 }
 
 char* MetricsParserResultHandleFieldString(NumericMetricsResultHandle* handle) {

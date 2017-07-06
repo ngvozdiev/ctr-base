@@ -249,10 +249,6 @@ class Manifest {
   // Returns a string summary of all metrics in the manifest.
   std::string FullToString() const;
 
-  // Returns a string summary of the fields of the metric whose id exactly
-  // matches the argument.
-  std::string ToString(const std::string& metric_id) const;
-
   // The total number of entries across all child entries.
   uint64_t TotalEntryCount() const;
 
@@ -456,10 +452,6 @@ extern "C" {
 // Returns a string summary of the manifest.
 char* MetricsParserManifestSummary(const char* metrics_file);
 
-// Returns a string summary of the values for a single metric id.
-char* MetricsParserManifestMetricSummary(const char* metrics_file,
-                                         const char* metric_id);
-
 // Parses the given metrics file, looking for sets of fields that match
 // 'fields_to_match' and belong to the metric(s) identified by 'metric_regex'.
 // Returns a handle that can be used to read the results. The handle must be
@@ -584,6 +576,10 @@ SimpleParseCustomType(const std::string& metrics_file,
 
   return out;
 }
+
+std::string DataSummaryToString(
+    const std::map<std::pair<std::string, std::string>,
+                   std::vector<std::pair<uint64_t, double>>>& id_to_data);
 
 }  // namespace parser
 }  // namsepace metrics

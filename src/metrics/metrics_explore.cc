@@ -42,31 +42,6 @@ DEFINE_uint64(plot_timestamp_max, std::numeric_limits<uint64_t>::max(),
 using namespace nc;
 using namespace nc::metrics::parser;
 
-static std::string DataSummaryToString(
-    const std::vector<std::pair<uint64_t, double>>& data) {
-  std::vector<double> all_data;
-  all_data.reserve(data.size());
-
-  uint64_t start_timestamp = std::numeric_limits<uint64_t>::max();
-  uint64_t end_timestamp = 0;
-
-  for (const auto& timestamp_and_data : data) {
-    uint64_t timestamp = timestamp_and_data.first;
-    double data = timestamp_and_data.second;
-
-    start_timestamp = std::min(start_timestamp, timestamp);
-    end_timestamp = std::max(end_timestamp, timestamp);
-    all_data.emplace_back(data);
-  }
-
-  std::vector<double> percentiles = Percentiles(&all_data, 10);
-  return Substitute("$0 values, min/max timestamps: $1/$2, percentiles: [$3]",
-                    data.size(), start_timestamp, end_timestamp,
-                    Join(percentiles, ",", [](double v) {
-                      return nc::ToStringMaxDecimals(v, 3);
-                    }));
-}
-
 // For a series (t1, v1), (t2, v2), (t3, v3) ... returns (t2, v2 - v1), (t3, v3
 // - v2), ...
 static std::vector<std::pair<uint64_t, double>> TakeDeltas(
@@ -193,16 +168,11 @@ static void ProcessSingleFile(const std::string& input_file) {
       return;
     }
 
-    MetricsParser parser(FLAGS_input);
-    LOG(INFO) << "Reading manifest from " << FLAGS_input;
-    Manifest manifest = parser.ParseManifest();
-
-    if (FLAGS_metric.empty()) {
-      std::cout << manifest.FullToString();
-      return;
-    }
-
-    std::cout << manifest.ToString(FLAGS_metric);
+    std::map<std::pair<std::string, std::string>,
+             std::vector<std::pair<uint64_t, double>>> data =
+        SimpleParseNumericData(input_file, FLAGS_metric, FLAGS_fields, 0,
+                               std::numeric_limits<uint64_t>::max(), 0);
+    std::cout << DataSummaryToString(data);
     return;
   }
 

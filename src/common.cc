@@ -685,9 +685,9 @@ std::string TLDRRequest::ToString() const {
 }
 
 nc::htsim::PacketPtr TLDRRequest::Duplicate() const {
-  return nc::make_unique<TLDRRequest>(five_tuple_.ip_src(),
-                                      five_tuple_.ip_dst(), time_sent(),
-                                      round_id_, quick_, aggregates_);
+  return nc::GetFreeList<TLDRRequest>().New(five_tuple_.ip_src(),
+                                            five_tuple_.ip_dst(), time_sent(),
+                                            round_id_, quick_, aggregates_);
 }
 
 TLDRForceRequest::TLDRForceRequest(nc::net::IPAddress ip_src,
@@ -702,8 +702,8 @@ std::string TLDRForceRequest::ToString() const {
 }
 
 nc::htsim::PacketPtr TLDRForceRequest::Duplicate() const {
-  return nc::make_unique<TLDRForceRequest>(five_tuple_.ip_src(),
-                                           five_tuple_.ip_dst(), time_sent());
+  return nc::GetFreeList<TLDRForceRequest>().New(
+      five_tuple_.ip_src(), five_tuple_.ip_dst(), time_sent());
 }
 
 TLDRTriggerReoptimize::TLDRTriggerReoptimize(nc::net::IPAddress ip_src,
@@ -719,7 +719,7 @@ std::string TLDRTriggerReoptimize::ToString() const {
 }
 
 nc::htsim::PacketPtr TLDRTriggerReoptimize::Duplicate() const {
-  return nc::make_unique<TLDRTriggerReoptimize>(
+  return nc::GetFreeList<TLDRTriggerReoptimize>().New(
       five_tuple_.ip_src(), five_tuple_.ip_dst(), time_sent());
 }
 
@@ -741,8 +741,8 @@ nc::htsim::PacketPtr TLDRUpdate::Duplicate() const {
     id_to_aggregate.emplace(aggregate.aggregate_id, aggregate);
   }
 
-  return nc::make_unique<TLDRUpdate>(five_tuple_.ip_src(), five_tuple_.ip_dst(),
-                                     time_sent(), id_to_aggregate);
+  return nc::GetFreeList<TLDRUpdate>().New(
+      five_tuple_.ip_src(), five_tuple_.ip_dst(), time_sent(), id_to_aggregate);
 }
 
 std::string TLDRUpdate::ToString() const {

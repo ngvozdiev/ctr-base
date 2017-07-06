@@ -36,7 +36,7 @@ void Controller::InitAggregatesAndNodes(
 
 Controller::MessageAndNode Controller::GetUpdate(
     std::unique_ptr<nc::htsim::MatchRule> rule, const TLDRNode* node) {
-  auto route_update = nc::make_unique<nc::htsim::SSCPAddOrUpdate>(
+  auto route_update = nc::GetFreeList<nc::htsim::SSCPAddOrUpdate>().New(
       controller_ip_, node->tldr_address, event_queue_->CurrentTime(),
       std::move(rule));
 
@@ -307,7 +307,7 @@ void Controller::HandlePacket(::nc::htsim::PacketPtr pkt) {
     } else if (type == TLDRTriggerReoptimize::kTLDRTriggerReoptimizeType) {
       for (const auto& src_and_tldr : tldrs_) {
         const TLDRNode* node = &src_and_tldr.second;
-        auto message_to_send = ::nc::make_unique<TLDRForceRequest>(
+        auto message_to_send = nc::GetFreeList<TLDRForceRequest>().New(
             node->tldr_address, controller_ip_, event_queue_->CurrentTime());
         node->to_tldr->HandlePacket(std::move(message_to_send));
       }
@@ -353,9 +353,9 @@ void Controller::CommitPendingOutput(RoundState* round_state) {
     const std::map<AggregateId, AggregateUpdateState>& update_map =
         tldr_node_ptr_and_update_map.second;
 
-    auto message_to_send =
-        ::nc::make_unique<TLDRUpdate>(node->tldr_address, controller_ip_,
-                                      event_queue_->CurrentTime(), update_map);
+    auto message_to_send = nc::GetFreeList<TLDRUpdate>().New(
+        node->tldr_address, controller_ip_, event_queue_->CurrentTime(),
+        update_map);
     node->to_tldr->HandlePacket(std::move(message_to_send));
   }
 }
@@ -383,9 +383,9 @@ NetworkContainer::NetworkContainer(const NetworkContainerConfig& config,
   CHECK(config_.min_delay_tldr_device <= config.max_delay_tldr_device);
 }
 
-std::vector<const nc::htsim::Queue*> NetworkContainer::queues() const {
+std::vector<const nc::htsim::Queue*> NetworkContainer::internal_queues() const {
   std::vector<const nc::htsim::Queue*> queues_raw;
-  for (const auto& queue_ptr : queues_) {
+  for (const auto& queue_ptr : internal_queues_) {
     queues_raw.emplace_back(queue_ptr.get());
   }
 
@@ -581,9 +581,9 @@ static void AddSrcOrDstBasedRoute(nc::htsim::DeviceInterface* device,
   auto rule = nc::make_unique<MatchRule>(key);
   rule->AddAction(std::move(action));
 
-  auto message =
-      nc::make_unique<SSCPAddOrUpdate>(kWildIPAddress, device->ip_address(),
-                                       nc::EventQueueTime(0), std::move(rule));
+  auto message = nc::GetFreeList<SSCPAddOrUpdate>().New(
+      kWildIPAddress, device->ip_address(), nc::EventQueueTime(0),
+      std::move(rule));
   device->HandlePacket(std::move(message));
 }
 
@@ -677,7 +677,7 @@ NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
   nc::htsim::Queue* forward_queue_raw_ptr = forward_queue.get();
 
   devices_.emplace(id, std::move(new_device));
-  queues_.emplace_back(std::move(forward_queue));
+  external_queues_.emplace_back(std::move(forward_queue));
   pipes_.emplace_back(std::move(forward_pipe));
   return {new_connection, forward_queue_raw_ptr};
 }
@@ -813,7 +813,7 @@ void NetworkContainer::AddElementsFromGraph(DeviceFactory* device_factory) {
     network_.AddLink(new_queue.get(), new_pipe.get(), link_ptr->src_id(),
                      link_ptr->dst_id(), link_ptr->src_port(),
                      link_ptr->dst_port(), true);
-    queues_.emplace_back(std::move(new_queue));
+    internal_queues_.emplace_back(std::move(new_queue));
     pipes_.emplace_back(std::move(new_pipe));
   }
 

@@ -168,7 +168,7 @@ void TLDR::HandleStatsReplyNoFlowCounts(
   if (delta > event_queue()->ToTime(std::chrono::milliseconds(100)) &&
       need_update) {
     LOG(ERROR) << "Will trigger update at " << id();
-    auto msg = nc::make_unique<TLDRTriggerReoptimize>(
+    auto msg = nc::GetFreeList<TLDRTriggerReoptimize>().New(
         tldr_config_.ip_src, tldr_config_.ip_controller_dst,
         event_queue()->CurrentTime());
     to_controller_->HandlePacket(std::move(msg));
@@ -227,14 +227,14 @@ void TLDR::HandlePacket(::nc::htsim::PacketPtr pkt) {
     // controller.
     SSCPAddOrUpdate* original_update = static_cast<SSCPAddOrUpdate*>(pkt.get());
 
-    auto update = nc::make_unique<SSCPAddOrUpdate>(
+    auto update = nc::GetFreeList<SSCPAddOrUpdate>().New(
         tldr_config_.ip_src, tldr_config_.ip_switch_dst, pkt->time_sent(),
         original_update->TakeRule());
     update->set_tx_id(original_update->tx_id());
     to_switch_->HandlePacket(std::move(update));
   } else if (type == SSCPAck::kSSCPAckType) {
     SSCPAck* original_ack = static_cast<SSCPAck*>(pkt.get());
-    auto ack = nc::make_unique<SSCPAck>(
+    auto ack = nc::GetFreeList<SSCPAck>().New(
         tldr_config_.ip_src, tldr_config_.ip_controller_dst, pkt->time_sent(),
         original_ack->tx_id());
     to_controller_->HandlePacket(std::move(ack));
@@ -293,7 +293,7 @@ void TLDR::SendRequestToController(bool quick) {
   }
 
   if (!aggregate_to_history.empty()) {
-    auto request = nc::make_unique<TLDRRequest>(
+    auto request = nc::GetFreeList<TLDRRequest>().New(
         tldr_config_.ip_src, tldr_config_.ip_controller_dst,
         event_queue()->CurrentTime(), ++round_id_gen_, quick,
         aggregate_to_history);
@@ -303,7 +303,7 @@ void TLDR::SendRequestToController(bool quick) {
 
 void TLDR::HandleEvent() {
   bool include_flow_counts = ++device_poll_count_ % device_polls_in_round_ == 0;
-  auto request = nc::make_unique<nc::htsim::SSCPStatsRequest>(
+  auto request = nc::GetFreeList<nc::htsim::SSCPStatsRequest>().New(
       tldr_config_.ip_src, tldr_config_.ip_switch_dst,
       event_queue()->CurrentTime(), include_flow_counts);
   to_switch_->HandlePacket(std::move(request));
@@ -413,7 +413,7 @@ void TLDR::RepackPaths(const AggregateUpdateState& aggregate) {
                          match_rule.get());
   }
 
-  auto route_update = nc::make_unique<nc::htsim::SSCPAddOrUpdate>(
+  auto route_update = nc::GetFreeList<nc::htsim::SSCPAddOrUpdate>().New(
       tldr_config_.ip_src, tldr_config_.ip_switch_dst,
       event_queue()->CurrentTime(), std::move(match_rule));
   to_switch_->HandlePacket(std::move(route_update));
