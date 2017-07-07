@@ -671,8 +671,8 @@ NetworkContainer::AddTCPSource(nc::net::IPAddress ip_source,
                    nc::htsim::kDefaultTag);
 
   nc::htsim::TCPSource* new_connection = new_device->AddTCPGenerator(
-      GetSinkDevice()->ip_address(), nc::net::AccessLayerPort(1), kDefaultMSS,
-      kDefaultMaxCWND);
+      config_.tcp_config, GetSinkDevice()->ip_address(),
+      nc::net::AccessLayerPort(1));
   flow_group_tcp_sources_.emplace_back(new_connection);
   nc::htsim::Queue* forward_queue_raw_ptr = forward_queue.get();
 

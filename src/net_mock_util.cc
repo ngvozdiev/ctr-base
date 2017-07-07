@@ -47,6 +47,10 @@ DEFINE_string(opt, "CTR", "The optimizer to use");
 DEFINE_bool(quick, false, "Whether to perform packet-level simulation or not");
 DEFINE_bool(disable_rto, false, "If true will disable TCP's rto mechanism");
 DEFINE_uint64(duration_sec, 90, "For how long to run (in simulated time)");
+DEFINE_uint64(
+    tcp_initial_cwnd_pkts, 4,
+    "How many packets should there be in the inital congestion window");
+DEFINE_uint64(object_size_bytes, 10000, "How many byte each object should be");
 
 template <typename T>
 static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
@@ -195,8 +199,8 @@ static void HandleDefault(
   // With devices and queues in place we can add flow groups to the container.
   for (const auto& id_and_bin_sequence : initial_sequences) {
     ctr::controller::TCPFlowGroup flow_group(
-        10, std::chrono::milliseconds(20), std::chrono::milliseconds(50), 10000,
-        std::chrono::milliseconds(100));
+        10, std::chrono::milliseconds(20), std::chrono::milliseconds(50),
+        FLAGS_object_size_bytes, std::chrono::milliseconds(100));
     flow_group.set_mean_object_size_fixed(true);
     flow_group.set_mean_wait_time_fixed(false);
     flow_group.AddKeyFrame(std::chrono::milliseconds(0), 10,
@@ -340,6 +344,8 @@ int main(int argc, char** argv) {
   ctr::controller::NetworkContainerConfig containter_config(
       device_ip_base, tldr_ip_base, flow_group_ip_base, enter_port, exit_port,
       std::chrono::milliseconds(100), tcp_rto_timer_period, false);
+  containter_config.tcp_config.inital_cwnd_size = FLAGS_tcp_initial_cwnd_pkts;
+
   ctr::TLDRConfig tldr_config({}, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,
                               round_duration, poll_period, 100);

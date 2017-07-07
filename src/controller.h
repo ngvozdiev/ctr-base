@@ -265,7 +265,11 @@ struct NetworkContainerConfig {
   // If true will use RED for all queues.
   bool random_queues;
 
+  // How often to run the RTO timer. Set to a very high value to switch off.
   std::chrono::milliseconds tcp_rto_timer_period;
+
+  // Config shared by all TCP sources.
+  nc::htsim::TCPSourceConfig tcp_config;
 };
 
 class DeviceFactory {
@@ -405,8 +409,6 @@ class TCPFlowGroup {
 // controller. Aggregates and packet generators can be added to the network.
 class NetworkContainer {
  public:
-  static constexpr size_t kDefaultMSS = 1500;
-  static constexpr size_t kDefaultMaxCWND = 2000000;
   static constexpr nc::net::IPAddress kSinkDeviceAddress =
       nc::net::IPAddress(1);
   static constexpr nc::net::DevicePortNumber kDeviceToSinkPort =
