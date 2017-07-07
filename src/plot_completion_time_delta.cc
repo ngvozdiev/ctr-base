@@ -16,11 +16,10 @@
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(sp_input, "", "The sp metrics file.");
-DEFINE_string(minmax_input, "", "The minmax metrics file.");
+DEFINE_string(minmax_input, "", "The MinMax metrics file.");
+DEFINE_string(ctr_input, "", "The CTR metrics file.");
 DEFINE_string(metric, "tcp_source_completion_times",
               "The completion times metric.");
-DEFINE_string(count_metric, "tcp_source_close_count",
-              "The metric that identifies objects.");
 
 using namespace nc;
 using namespace nc::metrics::parser;
@@ -28,19 +27,15 @@ using namespace nc::metrics::parser;
 using DataVector = std::vector<std::pair<uint64_t, double>>;
 
 static std::vector<std::chrono::milliseconds> GetDeltas(
-    const DataVector& sp_data, const DataVector& other_data,
-    const DataVector& sp_count_data, const DataVector& other_count_data) {
+    const DataVector& sp_data, const DataVector& other_data) {
   size_t min_data_size = std::min(sp_data.size(), other_data.size());
   std::vector<std::chrono::milliseconds> out;
   for (size_t i = 0; i < min_data_size; ++i) {
-    const auto& d1 = sp_data[i];
-    const auto& d2 = other_data[i];
-
     if (other_data[i].second < sp_data[i].second) {
       LOG(ERROR) << other_data[i].first << " vs " << sp_data[i].first << " "
                  << (i + 1) << "/" << min_data_size << " SP completion time "
-                 << sp_count_data[i].second << " other completion time "
-                 << other_count_data[i].second;
+                 << sp_data[i].second << " other completion time "
+                 << other_data[i].second;
       continue;
     }
     uint64_t delta = other_data[i].second - sp_data[i].second;
@@ -50,20 +45,30 @@ static std::vector<std::chrono::milliseconds> GetDeltas(
   return out;
 }
 
-static void PlotCompletionTimes(
-    const std::vector<std::chrono::milliseconds>& minmax_data) {
-  std::vector<double> data_ms;
-  for (auto v : minmax_data) {
-    data_ms.emplace_back(v.count());
+static nc::viz::DataSeries1D GetDeltasFromSP(
+    const std::map<std::pair<std::string, std::string>, DataVector>& sp_data,
+    const std::string& file, const std::string& label) {
+  nc::viz::DataSeries1D data_series;
+  data_series.label = label;
+
+  std::map<std::pair<std::string, std::string>, DataVector> other_data =
+      SimpleParseNumericData(file, FLAGS_metric, ".*", 0,
+                             std::numeric_limits<uint64_t>::max(), 0);
+  CHECK(sp_data.size() == other_data.size());
+  for (const auto& id_and_data : sp_data) {
+    const std::pair<std::string, std::string>& id = id_and_data.first;
+    const DataVector& data = id_and_data.second;
+    const DataVector& other_data_inner = nc::FindOrDieNoPrint(other_data, id);
+    CHECK(id.first == FLAGS_metric);
+
+    std::vector<std::chrono::milliseconds> values =
+        GetDeltas(data, other_data_inner);
+    for (const auto& value : values) {
+      data_series.data.emplace_back(value.count());
+    }
   }
 
-  nc::viz::DataSeries1D data_series;
-  data_series.data = std::move(data_ms);
-  data_series.label = "MinMax";
-
-  nc::viz::PythonGrapher grapher("ct_plot_out");
-  grapher.PlotCDF({}, {data_series});
-  LOG(INFO) << "Plotted " << data_ms.size() << " values";
+  return data_series;
 }
 
 int main(int argc, char** argv) {
@@ -75,34 +80,12 @@ int main(int argc, char** argv) {
       SimpleParseNumericData(FLAGS_sp_input, FLAGS_metric, ".*", 0,
                              std::numeric_limits<uint64_t>::max(), 0);
 
-  std::map<std::pair<std::string, std::string>, DataVector> minmax_data =
-      SimpleParseNumericData(FLAGS_minmax_input, FLAGS_metric, ".*", 0,
-                             std::numeric_limits<uint64_t>::max(), 0);
-  CHECK(sp_data.size() == minmax_data.size());
+  nc::viz::DataSeries1D min_max_data_series =
+      GetDeltasFromSP(sp_data, FLAGS_minmax_input, "MinMax");
+  nc::viz::DataSeries1D ctr_data_series =
+      GetDeltasFromSP(sp_data, FLAGS_ctr_input, "CTR");
 
-  std::map<std::pair<std::string, std::string>, DataVector> sp_count_data =
-      SimpleParseNumericData(FLAGS_sp_input, "tcp_source_close_count", ".*", 0,
-                             std::numeric_limits<uint64_t>::max(), 0);
-
-  std::map<std::pair<std::string, std::string>, DataVector> minmax_count_data =
-      SimpleParseNumericData(FLAGS_minmax_input, "tcp_source_close_count", ".*",
-                             0, std::numeric_limits<uint64_t>::max(), 0);
-
-  std::vector<std::chrono::milliseconds> all_values;
-  for (auto& id_and_data : sp_data) {
-    const std::pair<std::string, std::string>& id = id_and_data.first;
-    DataVector& data = id_and_data.second;
-    DataVector& other_data = nc::FindOrDieNoPrint(minmax_data, id);
-    DataVector& count_data =
-        nc::FindOrDieNoPrint(sp_count_data, {FLAGS_count_metric, id.second});
-    DataVector& other_count_data = nc::FindOrDieNoPrint(
-        minmax_count_data, {FLAGS_count_metric, id.second});
-    CHECK(id.first == FLAGS_metric);
-
-    std::vector<std::chrono::milliseconds> values =
-        GetDeltas(data, other_data, count_data, other_count_data);
-    all_values.insert(all_values.end(), values.begin(), values.end());
-  }
-
-  PlotCompletionTimes(all_values);
+  nc::viz::PythonGrapher grapher("ct_plot_out");
+  grapher.PlotCDF({}, {min_max_data_series, ctr_data_series});
+  LOG(INFO) << "Plotted " << ctr_data_series.data.size() << " values";
 }
