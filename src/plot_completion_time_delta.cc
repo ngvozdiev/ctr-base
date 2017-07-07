@@ -21,24 +21,28 @@ using namespace nc::metrics::parser;
 
 using DataVector = std::vector<std::pair<uint64_t, double>>;
 
-void DumpDataVector(const DataVector& data_vector) {
-  std::vector<std::string> out;
-  for (const auto& ts_and_value : data_vector) {
-    out.emplace_back(
-        nc::StrCat("(", ts_and_value.first, ", ", ts_and_value.second, ")"));
-  }
-
-  out.resize(std::min(out.size(), 20ul));
-  LOG(ERROR) << nc::Join(out, ",");
-}
+//void DumpDataVector(const DataVector& data_vector) {
+//  std::vector<std::string> out;
+//  for (const auto& ts_and_value : data_vector) {
+//    out.emplace_back(
+//        nc::StrCat("(", ts_and_value.first, ", ", ts_and_value.second, ")"));
+//  }
+//
+//  out.resize(std::min(out.size(), 20ul));
+//  LOG(ERROR) << nc::Join(out, ",");
+//}
 
 static std::vector<std::chrono::milliseconds> GetDeltas(
-    const DataVector& sp_data, const DataVector& minmax_data) {
-  DumpDataVector(sp_data);
-  DumpDataVector(minmax_data);
-  CHECK(sp_data.size() == minmax_data.size()) << sp_data.size() << " vs "
-                                              << minmax_data.size();
-  return {};
+    const DataVector& sp_data, const DataVector& other_data) {
+  size_t min_data_size = std::min(sp_data.size(), other_data.size());
+  std::vector<std::chrono::milliseconds> out(min_data_size);
+  for (size_t i = 0; i < min_data_size; ++i) {
+    uint64_t delta = other_data[i].second - sp_data[i].second;
+    CHECK(delta >= 0);
+    out[i] = std::chrono::milliseconds(delta);
+  }
+
+  return out;
 }
 
 int main(int argc, char** argv) {
