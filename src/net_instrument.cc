@@ -73,6 +73,14 @@ static auto* tcp_source_completion_times =
             "IP source", "IP destination", "TCP source port",
             "TCP destination port");
 
+static auto* tcp_source_close_count =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+            "tcp_source_close_count",
+            "Number of times the TCP connection has gone through slow-start",
+            "IP source", "IP destination", "TCP source port",
+            "TCP destination port");
+
 static std::chrono::milliseconds GetQueueSizeMs(
     const nc::htsim::QueueStats& stats, nc::net::Bandwidth rate) {
   double bytes_per_sec = rate.bps() / 8;
@@ -109,16 +117,21 @@ NetInstrument::NetInstrument(
       period_(record_period),
       queues_(queues) {
   for (nc::htsim::TCPSource* tcp_source : tcp_sources) {
-    tcp_source->set_complection_times_callback(
-        [tcp_source, event_queue](nc::EventQueueTime duration) {
-          const nc::net::FiveTuple& five_tuple = tcp_source->five_tuple();
-          auto* handle = tcp_source_completion_times->GetHandle(
-              five_tuple.ip_src().Raw(), five_tuple.ip_dst().Raw(),
-              five_tuple.src_port().Raw(), five_tuple.dst_port().Raw());
+    tcp_source->set_complection_times_callback([tcp_source, event_queue](
+        nc::EventQueueTime duration, uint64_t close_count) {
+      const nc::net::FiveTuple& five_tuple = tcp_source->five_tuple();
+      auto* ct_handle = tcp_source_completion_times->GetHandle(
+          five_tuple.ip_src().Raw(), five_tuple.ip_dst().Raw(),
+          five_tuple.src_port().Raw(), five_tuple.dst_port().Raw());
 
-          size_t time_ms = event_queue->TimeToRawMillis(duration);
-          handle->AddValue(time_ms);
-        });
+      size_t time_ms = event_queue->TimeToRawMillis(duration);
+      ct_handle->AddValue(time_ms);
+
+      auto* cc_handle = tcp_source_close_count->GetHandle(
+          five_tuple.ip_src().Raw(), five_tuple.ip_dst().Raw(),
+          five_tuple.src_port().Raw(), five_tuple.dst_port().Raw());
+      cc_handle->AddValue(close_count);
+    });
 
     tcp_source->set_fast_retx_callback([tcp_source](uint64_t seq_num) {
       const nc::net::FiveTuple& five_tuple = tcp_source->five_tuple();
