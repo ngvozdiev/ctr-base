@@ -45,6 +45,7 @@ DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
 DEFINE_bool(quick, false, "Whether to perform packet-level simulation or not");
+DEFINE_bool(disable_rto, false, "If true will disable TCP's rto mechanism");
 DEFINE_uint64(duration_sec, 90, "For how long to run (in simulated time)");
 
 template <typename T>
@@ -326,6 +327,11 @@ int main(int argc, char** argv) {
   nc::net::DevicePortNumber enter_port(4000);
   nc::net::DevicePortNumber exit_port(5000);
 
+  std::chrono::milliseconds tcp_rto_timer_period(10);
+  if (FLAGS_disable_rto) {
+    tcp_rto_timer_period = std::chrono::hours(9999);
+  }
+
   std::chrono::milliseconds round_duration(FLAGS_period_duration_ms);
   std::chrono::milliseconds poll_period(FLAGS_history_bin_size_ms);
 
@@ -333,7 +339,7 @@ int main(int argc, char** argv) {
                                          &event_queue, &graph);
   ctr::controller::NetworkContainerConfig containter_config(
       device_ip_base, tldr_ip_base, flow_group_ip_base, enter_port, exit_port,
-      std::chrono::milliseconds(100), false);
+      std::chrono::milliseconds(100), tcp_rto_timer_period, false);
   ctr::TLDRConfig tldr_config({}, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,
                               round_duration, poll_period, 100);

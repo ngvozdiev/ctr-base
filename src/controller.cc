@@ -370,7 +370,7 @@ NetworkContainer::NetworkContainer(const NetworkContainerConfig& config,
       event_queue_(event_queue),
       graph_(graph),
       controller_(controller),
-      network_(event_queue->ToTime(std::chrono::milliseconds(10)), event_queue),
+      network_(event_queue->ToTime(config.tcp_rto_timer_period), event_queue),
       animation_container_("AnimationContainer", std::chrono::milliseconds(10),
                            event_queue),
       seed_gen_(1.0) {

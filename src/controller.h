@@ -214,6 +214,7 @@ struct NetworkContainerConfig {
                          nc::net::DevicePortNumber default_enter_port,
                          nc::net::DevicePortNumber default_tldr_input_port,
                          std::chrono::milliseconds max_queue_depth,
+                         std::chrono::milliseconds tcp_rto_timer_period,
                          bool random_queues)
       : device_ip_address_base(device_ip_address_base),
         tldr_ip_address_base(tldr_ip_address_base),
@@ -226,7 +227,8 @@ struct NetworkContainerConfig {
         max_delay_controller_tldr(0),
         max_queue_depth(max_queue_depth),
         seed(0),
-        random_queues(random_queues) {}
+        random_queues(random_queues),
+        tcp_rto_timer_period(tcp_rto_timer_period) {}
 
   // Devices in the network will have addresses assigned starting with this
   // address.
@@ -262,6 +264,8 @@ struct NetworkContainerConfig {
 
   // If true will use RED for all queues.
   bool random_queues;
+
+  std::chrono::milliseconds tcp_rto_timer_period;
 };
 
 class DeviceFactory {
