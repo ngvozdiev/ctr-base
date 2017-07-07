@@ -294,11 +294,11 @@ int main(int argc, char** argv) {
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
 
-    static int i = 0;
-    ++i;
-    if (i == 1) {
-      break;
-    }
+    // static int i = 0;
+    // ++i;
+    // if (i == 2) {
+    //   break;
+    // }
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -320,9 +320,9 @@ int main(int argc, char** argv) {
   ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
 
   nc::net::IPAddress controller_ip(100);
-  nc::net::IPAddress device_ip_base(2000);
-  nc::net::IPAddress tldr_ip_base(3000);
-  nc::net::IPAddress flow_group_ip_base(4000);
+  nc::net::IPAddress device_ip_base(20000);
+  nc::net::IPAddress tldr_ip_base(30000);
+  nc::net::IPAddress flow_group_ip_base(40000);
   nc::net::DevicePortNumber enter_port(4000);
   nc::net::DevicePortNumber exit_port(5000);
 
