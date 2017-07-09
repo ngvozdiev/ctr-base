@@ -51,6 +51,8 @@ DEFINE_uint64(
     tcp_initial_cwnd_pkts, 4,
     "How many packets should there be in the inital congestion window");
 DEFINE_uint64(object_size_bytes, 10000, "How many byte each object should be");
+DEFINE_bool(simulate_initial_handshake, true,
+            "Whether or not to simulate an initial handshake");
 
 template <typename T>
 static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
@@ -304,6 +306,7 @@ int main(int argc, char** argv) {
     // if (i == 2) {
     //   break;
     // }
+    break;
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -345,6 +348,8 @@ int main(int argc, char** argv) {
       device_ip_base, tldr_ip_base, flow_group_ip_base, enter_port, exit_port,
       std::chrono::milliseconds(100), tcp_rto_timer_period, false);
   containter_config.tcp_config.inital_cwnd_size = FLAGS_tcp_initial_cwnd_pkts;
+  containter_config.tcp_config.simulate_initial_handshake =
+      FLAGS_simulate_initial_handshake;
 
   ctr::TLDRConfig tldr_config({}, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,

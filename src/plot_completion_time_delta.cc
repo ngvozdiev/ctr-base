@@ -15,9 +15,12 @@
 #include "ncode_common/src/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
-DEFINE_string(sp_input, "", "The sp metrics file.");
-DEFINE_string(minmax_input, "", "The MinMax metrics file.");
-DEFINE_string(ctr_input, "", "The CTR metrics file.");
+DEFINE_string(sp_input, "", "The shortest path metrics file.");
+DEFINE_string(other_inputs, "",
+              "A comma-separated list of other metric files to examine.");
+DEFINE_string(labels, "",
+              "A comma-separated list of labels. "
+              "One per metric file in other_inputs");
 DEFINE_string(metric, "tcp_source_completion_times",
               "The completion times metric.");
 
@@ -71,21 +74,40 @@ static nc::viz::DataSeries1D GetDeltasFromSP(
   return data_series;
 }
 
+static std::vector<std::string> GetInputFiles() {
+  std::vector<std::string> split = nc::Split(FLAGS_other_inputs, ",");
+  std::vector<std::string> out;
+  for (const std::string& v : split) {
+    std::vector<std::string> globbed = nc::Glob(v);
+    out.insert(out.end(), globbed.begin(), globbed.end());
+  }
+  return out;
+}
+
+static std::vector<std::string> GetLabels() {
+  return nc::Split(FLAGS_labels, ",");
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   CHECK(!FLAGS_sp_input.empty()) << "need --sp_input";
-  CHECK(!FLAGS_minmax_input.empty()) << "need --sp_input";
 
   std::map<std::pair<std::string, std::string>, DataVector> sp_data =
       SimpleParseNumericData(FLAGS_sp_input, FLAGS_metric, ".*", 0,
                              std::numeric_limits<uint64_t>::max(), 0);
 
-  nc::viz::DataSeries1D min_max_data_series =
-      GetDeltasFromSP(sp_data, FLAGS_minmax_input, "MinMax");
-  nc::viz::DataSeries1D ctr_data_series =
-      GetDeltasFromSP(sp_data, FLAGS_ctr_input, "CTR");
+  std::vector<std::string> input_files = GetInputFiles();
+  CHECK(!input_files.empty()) << "need at least one file in --other_inputs";
+  std::vector<std::string> labels = GetLabels();
+  CHECK(labels.size() == input_files.size());
+
+  std::vector<nc::viz::DataSeries1D> to_plot;
+  for (size_t i = 0; i < input_files.size(); ++i) {
+    nc::viz::DataSeries1D data_series =
+        GetDeltasFromSP(sp_data, input_files[i], labels[i]);
+    to_plot.emplace_back(data_series);
+  }
 
   nc::viz::PythonGrapher grapher("ct_plot_out");
-  grapher.PlotCDF({}, {min_max_data_series, ctr_data_series});
-  LOG(INFO) << "Plotted " << ctr_data_series.data.size() << " values";
+  grapher.PlotCDF({}, to_plot);
 }
