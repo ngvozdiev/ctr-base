@@ -532,7 +532,7 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
   }
 
   nc::net::Delay total_delay = TotalPerFlowDelay();
-  nc::net::Delay total_delay_other = TotalPerFlowDelay();
+  nc::net::Delay total_delay_other = other.TotalPerFlowDelay();
   out.total_per_flow_delay_delta_absolute = total_delay_other - total_delay;
   out.total_per_flow_delay_delta = (total_delay_other - total_delay).count() /
                                    static_cast<double>(total_delay.count());

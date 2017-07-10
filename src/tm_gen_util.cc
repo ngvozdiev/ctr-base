@@ -1,6 +1,8 @@
 #include <gflags/gflags.h>
+#include <algorithm>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -8,8 +10,13 @@
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
+#include "ncode_common/src/lp/mc_flow.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
+#include "common.h"
+#include "opt/ctr.h"
+#include "opt/opt.h"
+#include "opt/path_provider.h"
 
 DEFINE_string(topology, "", "A file with a topology");
 DEFINE_string(output, "tm.demands",
@@ -27,6 +34,35 @@ DEFINE_double(max_global_utilization, std::numeric_limits<double>::max(),
               "Max global utilization for the generated matrix.");
 DEFINE_double(link_capacity_scale, 1.0,
               "By how much to scale all links' capacity");
+
+// Returns the cost of a matrix. The cost is tied to the improvement expected
+// from using CTR vs MinMax.
+static double Cost(const nc::lp::DemandMatrix& matrix) {
+  nc::net::Bandwidth max_element = nc::net::Bandwidth::Zero();
+  for (const auto& element : matrix.elements()) {
+    max_element = std::max(element.demand, max_element);
+  }
+
+  std::map<nc::lp::SrcAndDst, size_t> flow_counts;
+  for (const auto& element : matrix.elements()) {
+    double f = element.demand.Mbps() / max_element.Mbps();
+    size_t flow_count = f * 1000;
+    flow_counts[{element.src, element.dst}] = std::max(1ul, flow_count);
+  }
+
+  ctr::TrafficMatrix tm(matrix, flow_counts);
+  ctr::PathProvider path_provider(tm.graph());
+  ctr::CTROptimizer ctr_optimizer(&path_provider);
+  std::unique_ptr<ctr::RoutingConfiguration> ctr_out =
+      ctr_optimizer.Optimize(tm);
+
+  ctr::MinMaxOptimizer minmax_optimizer(&path_provider);
+  std::unique_ptr<ctr::RoutingConfiguration> minmax_out =
+      minmax_optimizer.Optimize(tm);
+
+  ctr::RoutingConfigurationDelta delta = ctr_out->GetDifference(*minmax_out);
+  return delta.total_per_flow_delay_delta;
+}
 
 static std::unique_ptr<nc::lp::DemandMatrix> GetMatrix(
     nc::net::GraphStorage* graph) {
@@ -115,8 +151,9 @@ static std::unique_ptr<nc::lp::DemandMatrix> GetMatrix(
 
   generator.SetMinScaleFactor(FLAGS_min_scale_factor);
   generator.SetMinOverloadedLinkCount(2);
-  std::unique_ptr<nc::lp::DemandMatrix> matrix =
-      generator.GenerateMatrix(FLAGS_max_try_count, FLAGS_scale);
+  std::unique_ptr<nc::lp::DemandMatrix> matrix = generator.GenerateMatrix(
+      FLAGS_max_try_count, FLAGS_scale,
+      [](const nc::lp::DemandMatrix& matrix) { return Cost(matrix); });
   CHECK(matrix) << "Unable to find matrix";
   return matrix;
 }
@@ -133,7 +170,6 @@ int main(int argc, char** argv) {
   nc::net::GraphStorage graph(builder);
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix = GetMatrix(&graph);
 
-  std::cout << demand_matrix->ToString();
   nc::File::WriteStringToFileOrDie(demand_matrix->ToRepetita(node_order),
                                    FLAGS_output);
   LOG(INFO) << "Written TM to " << FLAGS_output;
