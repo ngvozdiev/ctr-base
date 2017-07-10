@@ -23,6 +23,9 @@ DEFINE_string(labels, "",
               "One per metric file in other_inputs");
 DEFINE_string(metric, "tcp_source_completion_times",
               "The completion times metric.");
+DEFINE_bool(absolute, false,
+            "If true will plot CDFs of absolute completion times, if false "
+            "will plot CDFs of CTs relative to those of the shortest path");
 
 using namespace nc;
 using namespace nc::metrics::parser;
@@ -88,6 +91,37 @@ static std::vector<std::string> GetLabels() {
   return nc::Split(FLAGS_labels, ",");
 }
 
+nc::viz::DataSeries1D GetAbsoluteDataFromFile(const std::string& file,
+                                              const std::string& label) {
+  nc::viz::DataSeries1D data_series;
+  data_series.label = label;
+
+  std::map<std::pair<std::string, std::string>, DataVector> data =
+      SimpleParseNumericData(file, FLAGS_metric, ".*", 0,
+                             std::numeric_limits<uint64_t>::max(), 0);
+  for (const auto& id_and_data : data) {
+    const DataVector& data_vector = id_and_data.second;
+    for (const auto& value : data_vector) {
+      data_series.data.emplace_back(value.second);
+    }
+  }
+  return data_series;
+}
+
+static void HandleAbsolute(const std::vector<std::string>& input_files,
+                           const std::vector<std::string>& labels) {
+  std::vector<nc::viz::DataSeries1D> to_plot = {
+      GetAbsoluteDataFromFile(FLAGS_sp_input, "SP")};
+  for (size_t i = 0; i < input_files.size(); ++i) {
+    nc::viz::DataSeries1D data_series =
+        GetAbsoluteDataFromFile(input_files[i], labels[i]);
+    to_plot.emplace_back(data_series);
+  }
+
+  nc::viz::PythonGrapher grapher("ct_plot_out");
+  grapher.PlotCDF({}, to_plot);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   CHECK(!FLAGS_sp_input.empty()) << "need --sp_input";
@@ -100,6 +134,10 @@ int main(int argc, char** argv) {
   CHECK(!input_files.empty()) << "need at least one file in --other_inputs";
   std::vector<std::string> labels = GetLabels();
   CHECK(labels.size() == input_files.size());
+  if (FLAGS_absolute) {
+    HandleAbsolute(input_files, labels);
+    return 0;
+  }
 
   std::vector<nc::viz::DataSeries1D> to_plot;
   for (size_t i = 0; i < input_files.size(); ++i) {
@@ -110,4 +148,6 @@ int main(int argc, char** argv) {
 
   nc::viz::PythonGrapher grapher("ct_plot_out");
   grapher.PlotCDF({}, to_plot);
+
+  return 0;
 }
