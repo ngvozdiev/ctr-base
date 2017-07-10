@@ -13,16 +13,25 @@
 
 namespace ctr {
 
+struct RoutingSystemConfig {
+  // Enables scaling of aggregates based on a probability model. If disabled
+  // all aggregates' levels will be their mean levels.
+  bool enable_prob_model = true;
+
+  // If true will store information about the routing system to metrics.
+  bool store_to_metrics = true;
+
+  ProbModelConfig prob_model_config;
+};
+
 class RoutingSystem {
  public:
-  RoutingSystem(const ProbModelConfig& prob_model_config, Optimizer* optimizer,
-                PerAggregateMeanEstimatorFactory* mean_estimator_factory,
-                bool store_to_metrics = true)
-      : prob_model_config_(prob_model_config),
+  RoutingSystem(const RoutingSystemConfig& config, Optimizer* optimizer,
+                PerAggregateMeanEstimatorFactory* mean_estimator_factory)
+      : config_(config),
         optimizer_(optimizer),
         estimator_(mean_estimator_factory),
-        graph_(optimizer_->graph()),
-        store_to_metrics_(store_to_metrics) {}
+        graph_(optimizer_->graph()) {}
 
   virtual ~RoutingSystem() {}
 
@@ -52,7 +61,7 @@ class RoutingSystem {
   std::map<AggregateId, DemandAndFlowCount> GetInitialInput(
       const std::map<AggregateId, AggregateHistory>& histories);
 
-  ProbModelConfig prob_model_config_;
+  RoutingSystemConfig config_;
 
   // Computes a new optimal solution.
   Optimizer* optimizer_;
@@ -61,9 +70,6 @@ class RoutingSystem {
   MeanEstimator estimator_;
 
   const nc::net::GraphStorage* graph_;
-
-  // If true will record to metrics.
-  bool store_to_metrics_;
 };
 
 }  // namespace ctr

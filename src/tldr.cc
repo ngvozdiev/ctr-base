@@ -129,6 +129,10 @@ void TLDR::HandleStatsReplyNoFlowCounts(
         nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate_id);
     aggregate_state.binner->AddBin(bytes_matched);
 
+    if (tldr_config_.disable_fast_optimization_requests) {
+      continue;
+    }
+
     // Now that we have updated the aggregate's rates we can check to see if
     // we need to send a message to he controller to force a new
     // optimization pass.

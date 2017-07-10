@@ -53,6 +53,15 @@ DEFINE_uint64(
 DEFINE_uint64(object_size_bytes, 10000, "How many byte each object should be");
 DEFINE_bool(simulate_initial_handshake, true,
             "Whether or not to simulate an initial handshake");
+DEFINE_uint64(tcp_tracer_flow_max_count, 50,
+              "How many tracer TCP flows to add to the largest-volume "
+              "aggregate. Other aggregates' flow count is proportional.");
+DEFINE_bool(
+    disable_fast_optimization_requests, false,
+    "If true will disable fast optimization requests to the controller.");
+DEFINE_bool(disable_probability_model, false,
+            "If true will disable the controller's probability model-based "
+            "scaling of aggregates before optimization.");
 
 template <typename T>
 static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
@@ -166,8 +175,28 @@ static ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
   return {bins, std::chrono::milliseconds(bin_size_ms), flow_count};
 }
 
+static std::map<ctr::AggregateId, size_t> GetTCPTracerFlowCounts(
+    const nc::lp::DemandMatrix& demand_matrix) {
+  nc::net::Bandwidth max_demand = nc::net::Bandwidth::Zero();
+  for (const auto& element : demand_matrix.elements()) {
+    max_demand = std::max(max_demand, element.demand);
+  }
+  CHECK(max_demand != nc::net::Bandwidth::Zero());
+
+  std::map<ctr::AggregateId, size_t> out;
+  for (const auto& element : demand_matrix.elements()) {
+    double f = element.demand.Mbps() / max_demand.Mbps();
+    size_t tcp_flow_count = f * FLAGS_tcp_tracer_flow_max_count;
+    tcp_flow_count = std::max(1ul, tcp_flow_count);
+    out[{element.src, element.dst}] = tcp_flow_count;
+  }
+
+  return out;
+}
+
 static void HandleDefault(
     const std::map<ctr::AggregateId, ctr::BinSequence>& initial_sequences,
+    const std::map<ctr::AggregateId, size_t>& tracer_flow_counts,
     const nc::net::GraphStorage& graph, nc::net::DevicePortNumber enter_port,
     std::chrono::milliseconds poll_period,
     std::chrono::milliseconds round_duration, nc::EventQueue* event_queue,
@@ -200,14 +229,17 @@ static void HandleDefault(
 
   // With devices and queues in place we can add flow groups to the container.
   for (const auto& id_and_bin_sequence : initial_sequences) {
+    const ctr::AggregateId& id = id_and_bin_sequence.first;
+    size_t count = nc::FindOrDieNoPrint(tracer_flow_counts, id);
+
     ctr::controller::TCPFlowGroup flow_group(
-        10, std::chrono::milliseconds(20), std::chrono::milliseconds(50),
-        FLAGS_object_size_bytes, std::chrono::milliseconds(100));
+        count, std::chrono::milliseconds(10), std::chrono::milliseconds(20),
+        FLAGS_object_size_bytes, std::chrono::milliseconds(200));
     flow_group.set_mean_object_size_fixed(true);
     flow_group.set_mean_wait_time_fixed(false);
     flow_group.AddKeyFrame(std::chrono::milliseconds(0), 10,
                            nc::net::Bandwidth::FromGBitsPerSecond(10));
-    network_container->AddTCPFlowGroup(id_and_bin_sequence.first, flow_group);
+    network_container->AddTCPFlowGroup(id, flow_group);
   }
   network_container->InitAggregatesInController();
 
@@ -300,13 +332,6 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
-
-    // static int i = 0;
-    // ++i;
-    // if (i == 2) {
-    //   break;
-    // }
-    break;
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -325,6 +350,8 @@ int main(int argc, char** argv) {
 
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
+  ctr::RoutingSystemConfig routing_system_config;
+  routing_system_config.enable_prob_model = !FLAGS_disable_probability_model;
   ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
 
   nc::net::IPAddress controller_ip(100);
@@ -353,7 +380,8 @@ int main(int argc, char** argv) {
 
   ctr::TLDRConfig tldr_config({}, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,
-                              round_duration, poll_period, 100);
+                              round_duration, poll_period, 100,
+                              FLAGS_disable_fast_optimization_requests);
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &event_queue);
 
@@ -363,8 +391,9 @@ int main(int argc, char** argv) {
     HandleQuick(initial_sequences, graph, poll_period, round_duration,
                 &event_queue, &network_container);
   } else {
-    HandleDefault(initial_sequences, graph, enter_port, poll_period,
-                  round_duration, &event_queue, &network_container);
+    HandleDefault(initial_sequences, GetTCPTracerFlowCounts(*demand_matrix),
+                  graph, enter_port, poll_period, round_duration, &event_queue,
+                  &network_container);
   }
   nc::metrics::DefaultMetricManager()->PersistAllMetrics();
 }

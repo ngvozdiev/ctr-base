@@ -188,7 +188,7 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   }
 
   size_t i_count = 0;
-  while (true) {
+  while (config_.enable_prob_model) {
     TrafficMatrix tm(graph_, input);
     output = optimizer_->Optimize(tm);
     ++i_count;
@@ -211,7 +211,7 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   }
 
   CHECK(output);
-  if (store_to_metrics_) {
+  if (config_.store_to_metrics) {
     // Will first record the raw input.
     ADD_AGGREGATE_MAP_TO_METRIC(history, per_aggregate_mean_input,
                                 map_value.mean_rate().Mbps());
@@ -285,7 +285,7 @@ std::set<AggregateId> RoutingSystem::CheckWithProbModel(
     query.aggregates = aggregates_and_fractions;
   }
 
-  ProbModel prob_model(prob_model_config_);
+  ProbModel prob_model(config_.prob_model_config);
   for (const auto& aggregate_and_history : histories) {
     const AggregateId& aggregate = aggregate_and_history.first;
     const AggregateHistory& history = aggregate_and_history.second;

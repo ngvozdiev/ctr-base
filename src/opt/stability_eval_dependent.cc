@@ -290,7 +290,10 @@ static void RunWithSimpleTopologyTwoAggregates() {
 
   MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
-  RoutingSystem routing_system({}, opt.get(), &estimator_factory, false);
+  RoutingSystemConfig routing_system_config;
+  routing_system_config.store_to_metrics = false;
+  RoutingSystem routing_system(routing_system_config, opt.get(),
+                               &estimator_factory);
   StabilityEvalHarness harness(&initial_tm, &routing_system, FLAGS_steps);
   harness.DumpAggregateVolumes();
   harness.DumpLinkFractions();

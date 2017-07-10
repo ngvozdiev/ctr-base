@@ -26,14 +26,17 @@ struct TLDRConfig {
              nc::net::IPAddress ip_controller_dst,
              std::chrono::milliseconds round_len,
              std::chrono::milliseconds switch_poll_period,
-             size_t flow_count_sample_n)
+             size_t flow_count_sample_n,
+             bool disable_fast_optimization_requests)
       : ip_src(ip_src),
         ip_switch_dst(ip_switch_dst),
         ip_controller_dst(ip_controller_dst),
         round_len(round_len),
         threshold_enforcer_policy(threshold_enforcer_policy),
         switch_poll_period(switch_poll_period),
-        flow_count_sample_n(flow_count_sample_n) {}
+        flow_count_sample_n(flow_count_sample_n),
+        disable_fast_optimization_requests(disable_fast_optimization_requests) {
+  }
 
   // All messages will have this address as source.
   nc::net::IPAddress ip_src;
@@ -55,6 +58,9 @@ struct TLDRConfig {
 
   // One in N packets will be sampled to estimate flow counts at the switch.
   size_t flow_count_sample_n;
+
+  // If true will disable optimization requests within the period.
+  bool disable_fast_optimization_requests;
 };
 
 // Bins data to later be fed to the LDR estimator.
