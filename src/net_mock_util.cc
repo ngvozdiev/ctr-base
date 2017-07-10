@@ -352,7 +352,8 @@ int main(int argc, char** argv) {
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.enable_prob_model = !FLAGS_disable_probability_model;
-  ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
+  ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
+                                    &estimator_factory);
 
   nc::net::IPAddress controller_ip(100);
   nc::net::IPAddress device_ip_base(20000);

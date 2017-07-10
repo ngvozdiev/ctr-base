@@ -188,10 +188,14 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
   }
 
   size_t i_count = 0;
-  while (config_.enable_prob_model) {
+  while (true) {
     TrafficMatrix tm(graph_, input);
     output = optimizer_->Optimize(tm);
     ++i_count;
+
+    if (!config_.enable_prob_model) {
+      break;
+    }
 
     // After optimizing we should check to see which aggregates go over links
     // that do not fit.

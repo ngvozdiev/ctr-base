@@ -332,7 +332,8 @@ Manifest MetricsParser::ParseManifest() const {
 static constexpr char kMetricIdColumnName[] = "Metric Id";
 static constexpr char kTypeColumnName[] = "Type";
 static constexpr char kFieldsColumnName[] = "Fields";
-static constexpr char kSetsCountColumnName[] = "Sets";
+static constexpr char kSetsCountColumnName[] = "Sets of fields";
+static constexpr char kEmptySetsCountColumnName[] = "Empty sets";
 static constexpr char kValuesCountColumnName[] = "Values";
 static constexpr char kMinTimeColumnName[] = "Min time";
 static constexpr char kMaxTimeColumnName[] = "Max time";
@@ -427,7 +428,8 @@ std::string DataSummaryToString(
 
 std::string Manifest::FullToString() const {
   AsciiTable table({kMetricIdColumnName, kTypeColumnName, kFieldsColumnName,
-                    kSetsCountColumnName, kValuesCountColumnName});
+                    kSetsCountColumnName, kEmptySetsCountColumnName,
+                    kValuesCountColumnName});
 
   for (const auto& id_and_manifest_entries : entries_) {
     const std::string& id = id_and_manifest_entries.first;
@@ -436,8 +438,12 @@ std::string Manifest::FullToString() const {
     std::vector<std::string> row;
 
     size_t total_values = 0;
+    size_t total_zero = 0;
     for (const auto& entry : entries) {
       total_values += entry->num_entries();
+      if (entry->num_entries() == 0) {
+        ++total_zero;
+      }
     }
 
     // Entries with the same id will have the same fields. The values of those
@@ -460,23 +466,11 @@ std::string Manifest::FullToString() const {
 
     row.emplace_back(Join(fields_strings, ","));
     row.emplace_back(std::to_string(entries.size()));
+    row.emplace_back(std::to_string(total_zero));
     row.emplace_back(std::to_string(total_values));
     table.AddRow(row);
   }
   return table.ToString();
-}
-
-static std::string GetFieldsString(
-    const google::protobuf::RepeatedPtrField<PBMetricField>& fields) {
-  std::vector<std::string> fields_strings;
-  for (const PBMetricField& field : fields) {
-    fields_strings.emplace_back(field.description());
-  }
-  if (fields_strings.empty()) {
-    fields_strings.emplace_back(kNoFields);
-  }
-
-  return Join(fields_strings, ",");
 }
 
 uint64_t Manifest::TotalEntryCount() const {
@@ -552,6 +546,9 @@ SimpleParseNumericData(const std::string& metrics_file,
   while (result_handle->Advance()) {
     std::string metric_id = result_handle->MetricString();
     std::string fields = result_handle->FieldString();
+    std::pair<std::string, std::string> key = {metric_id, fields};
+    CHECK(!nc::ContainsKey(out, key))
+        << "Duplicate id/fields string: " << metric_id << "/" << fields;
     std::vector<std::pair<uint64_t, double>>& vector = out[{metric_id, fields}];
     vector = std::move(result_handle->MutableValues());
   }
