@@ -14,9 +14,11 @@
 namespace ctr {
 
 struct RoutingSystemConfig {
-  // Enables scaling of aggregates based on a probability model. If disabled
-  // all aggregates' levels will be their mean levels.
-  bool enable_prob_model = true;
+  // Enables pinning aggregates' levels to either their mean or max value.
+  // Enabling one of those disables scaling of aggregates based on a probability
+  // model. Cannot both be true.
+  bool pin_max = false;
+  bool pin_mean = false;
 
   // If true will store information about the routing system to metrics.
   bool store_to_metrics = true;
