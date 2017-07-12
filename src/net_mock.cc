@@ -353,7 +353,7 @@ uint64_t GetFlowCountFromSyns(const std::vector<uint64_t>& syns) {
     return 1ul;
   }
 
-  return std::max(1ul, total / syns.size());
+  return std::max(static_cast<uint64_t>(1), total / syns.size());
 }
 
 }  // namespace ctr

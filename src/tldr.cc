@@ -134,7 +134,7 @@ void TLDR::HandleStatsReplyNoFlowCounts(
     }
 
     // Now that we have updated the aggregate's rates we can check to see if
-    // we need to send a message to he controller to force a new
+    // we need to send a message to the controller to force a new
     // optimization pass.
     AggregateHistory history = GetHistoryForAggregate(aggregate_state);
     if (history.bins().empty()) {
@@ -142,26 +142,25 @@ void TLDR::HandleStatsReplyNoFlowCounts(
     }
 
     if (aggregate_state.watermark > nc::net::Bandwidth::Zero()) {
-      if (history.max_rate() < aggregate_state.watermark) {
+      if (history.mean_rate() < aggregate_state.watermark) {
         continue;
       }
 
-      double delta_f = (history.max_rate() - aggregate_state.watermark) /
+      double delta_f = (history.mean_rate() - aggregate_state.watermark) /
                        aggregate_state.watermark;
       if (delta_f < 0.05) {
         continue;
       }
     }
-    aggregate_state.watermark = history.max_rate();
+    aggregate_state.watermark = history.mean_rate();
 
     CHECK(aggregate_state.most_recent_update);
     nc::net::Bandwidth rate_limit = aggregate_state.most_recent_update->limit;
-
-    std::chrono::milliseconds max_queue = history.MaxQueueAtRate(rate_limit);
-    if (max_queue > std::chrono::milliseconds(10)) {
+    if (history.mean_rate() > rate_limit) {
       LOG(ERROR) << "Need update at " << id() << " aggregate id "
-                 << aggregate_id.ToString(*graph_) << " max queue is "
-                 << max_queue.count() << "ms rate limit is " << rate_limit;
+                 << aggregate_id.ToString(*graph_) << " mean rate is "
+                 << history.mean_rate().Mbps() << "Mbps rate limit is "
+                 << rate_limit.Mbps() << "Mbps";
       need_update = true;
     }
   }

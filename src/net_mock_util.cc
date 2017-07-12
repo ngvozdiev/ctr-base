@@ -59,9 +59,14 @@ DEFINE_uint64(tcp_tracer_flow_max_count, 50,
 DEFINE_bool(
     disable_fast_optimization_requests, false,
     "If true will disable fast optimization requests to the controller.");
-DEFINE_bool(disable_probability_model, false,
+DEFINE_bool(pin_mean, false,
             "If true will disable the controller's probability model-based "
-            "scaling of aggregates before optimization.");
+            "scaling of aggregates before optimization. All aggregates will "
+            "take their mean level.");
+DEFINE_bool(pin_max, false,
+            "If true will disable the controller's probability model-based "
+            "scaling of aggregates before optimization. All aggregates will "
+            "take their max level.");
 
 template <typename T>
 static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
@@ -366,7 +371,8 @@ int main(int argc, char** argv) {
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
-  routing_system_config.enable_prob_model = !FLAGS_disable_probability_model;
+  routing_system_config.pin_max = FLAGS_pin_max;
+  routing_system_config.pin_mean = FLAGS_pin_mean;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 

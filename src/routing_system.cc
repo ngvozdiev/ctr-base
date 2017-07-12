@@ -78,6 +78,13 @@ static auto* per_aggregate_scale_fraction =
             "By how much an aggregate had to be scaled", "Aggregate source",
             "Aggregate destination");
 
+static auto* per_link_load =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
+        "link_load_in_output",
+        "What the output of the optimizer says each link should be loaded (in "
+        "Mbps)",
+        "Link");
+
 static auto* scale_loop_iteration_count =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
         "scale_up_iteration_count",
@@ -130,6 +137,11 @@ static void UpdateCommodityScaleMetric(
 static void RecordPathSplitsAndTotalDelay(
     const RoutingConfiguration& routing_config,
     const nc::net::GraphStorage& graph) {
+  nc::net::GraphLinkMap<nc::net::Bandwidth> link_to_load;
+  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
+    link_to_load[link] = nc::net::Bandwidth::Zero();
+  }
+
   for (const auto& aggregate_and_routes : routing_config.routes()) {
     const AggregateId& aggregate_id = aggregate_and_routes.first;
     std::string src_id = graph.GetNode(aggregate_id.src())->id();
@@ -153,6 +165,14 @@ static void RecordPathSplitsAndTotalDelay(
       std::string path_string = path->ToStringNoPorts(graph);
       auto* handle = path_output_split->GetHandle(path_string);
       handle->AddValue(fraction);
+
+      const DemandAndFlowCount& initial_demand =
+          nc::FindOrDieNoPrint(routing_config.demands(), aggregate_id);
+      nc::net::Bandwidth load_on_path = initial_demand.first * fraction;
+
+      for (nc::net::GraphLinkIndex link : path->links()) {
+        link_to_load[link] += load_on_path;
+      }
     }
 
     using namespace std::chrono;
@@ -167,6 +187,14 @@ static void RecordPathSplitsAndTotalDelay(
         ->AddValue(total_delay_rel_micros.count());
     per_aggregate_output_total_delay_rel_change->GetHandle(src_id, dst_id)
         ->AddValue(total_delay_rel_change);
+  }
+
+  for (const auto& link_and_load : link_to_load) {
+    nc::net::GraphLinkIndex link = link_and_load.first;
+    nc::net::Bandwidth load = *link_and_load.second;
+
+    std::string link_id = graph.GetLink(link)->ToStringNoPorts();
+    per_link_load->GetHandle(link_id)->AddValue(load.Mbps());
   }
 }
 
@@ -193,7 +221,7 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     output = optimizer_->Optimize(tm);
     ++i_count;
 
-    if (!config_.enable_prob_model) {
+    if (config_.pin_mean || config_.pin_max) {
       break;
     }
 
@@ -373,7 +401,9 @@ std::map<AggregateId, DemandAndFlowCount> RoutingSystem::GetInitialInput(
     const AggregateId& aggregate_id = aggregate_and_history.first;
     const AggregateHistory& history = aggregate_and_history.second;
 
-    out[aggregate_id] = {history.mean_rate(), history.flow_count()};
+    nc::net::Bandwidth init_rate =
+        config_.pin_max ? history.max_rate() : history.mean_rate();
+    out[aggregate_id] = {init_rate, history.flow_count()};
   }
 
   return out;
