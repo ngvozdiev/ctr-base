@@ -60,7 +60,8 @@ static nc::viz::DataSeries1D GetDeltasFromSP(
   std::map<std::pair<std::string, std::string>, DataVector> other_data =
       SimpleParseNumericData(file, FLAGS_metric, ".*", 0,
                              std::numeric_limits<uint64_t>::max(), 0);
-  CHECK(sp_data.size() == other_data.size());
+  CHECK(sp_data.size() == other_data.size()) << sp_data.size() << " vs "
+                                             << other_data.size();
   for (const auto& id_and_data : sp_data) {
     const std::pair<std::string, std::string>& id = id_and_data.first;
     const DataVector& data = id_and_data.second;

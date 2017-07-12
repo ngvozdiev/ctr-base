@@ -194,6 +194,17 @@ static std::map<ctr::AggregateId, size_t> GetTCPTracerFlowCounts(
   return out;
 }
 
+static uint64_t FlowCountFromBinsSequence(ctr::BinSequence* bin_sequence) {
+  std::vector<uint64_t> syns;
+
+  for (const auto& bin :
+       bin_sequence->AccumulateBins(bin_sequence->bin_size())) {
+    syns.emplace_back(bin.flows_enter);
+  }
+
+  return ctr::GetFlowCountFromSyns(syns);
+}
+
 static void HandleDefault(
     const std::map<ctr::AggregateId, ctr::BinSequence>& initial_sequences,
     const std::map<ctr::AggregateId, size_t>& tracer_flow_counts,
@@ -207,8 +218,10 @@ static void HandleDefault(
     const ctr::AggregateId& id = id_and_bin_sequence.first;
     const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
     ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
+
+    uint64_t flow_count = FlowCountFromBinsSequence(&from_start);
     ctr::AggregateHistory init_history =
-        from_start.GenerateHistory(poll_period);
+        from_start.GenerateHistory(poll_period, flow_count);
 
     nc::htsim::MatchRuleKey key_for_aggregate =
         network_container->AddAggregate(id, init_history);
@@ -261,8 +274,10 @@ static void HandleQuick(
     const ctr::AggregateId& id = id_and_bin_sequence.first;
     const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
     ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
+
+    uint64_t flow_count = FlowCountFromBinsSequence(&from_start);
     ctr::AggregateHistory init_history =
-        from_start.GenerateHistory(poll_period);
+        from_start.GenerateHistory(poll_period, flow_count);
 
     nc::htsim::MatchRuleKey key_for_aggregate =
         network_container->AddAggregate(id, init_history);
@@ -337,7 +352,7 @@ int main(int argc, char** argv) {
   ctr::PathProvider path_provider(&graph);
   std::unique_ptr<ctr::Optimizer> opt;
   if (FLAGS_opt == "CTR") {
-    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider, false);
+    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider);
   } else if (FLAGS_opt == "B4") {
     opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false);
   } else if (FLAGS_opt == "B4(P)") {
@@ -352,7 +367,8 @@ int main(int argc, char** argv) {
       {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.enable_prob_model = !FLAGS_disable_probability_model;
-  ctr::RoutingSystem routing_system({}, opt.get(), &estimator_factory);
+  ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
+                                    &estimator_factory);
 
   nc::net::IPAddress controller_ip(100);
   nc::net::IPAddress device_ip_base(20000);
