@@ -751,7 +751,7 @@ std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate) {
 }
 
 AggregateHistory BinSequence::GenerateHistory(
-    std::chrono::milliseconds history_bin_size) {
+    std::chrono::milliseconds history_bin_size, uint64_t flow_count) {
   using namespace std::chrono;
   std::vector<PcapDataTraceBin> bins_combined =
       AccumulateBins(history_bin_size);
@@ -763,8 +763,7 @@ AggregateHistory BinSequence::GenerateHistory(
     total_flows += bin_combined.flows_enter;
   }
 
-  return {bins_for_history, history_bin_size,
-          std::max(1ul, total_flows / bins_combined.size())};
+  return {bins_for_history, history_bin_size, flow_count};
 }
 
 std::vector<BinSequence> BinSequence::SplitOrDie(

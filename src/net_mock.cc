@@ -256,8 +256,8 @@ void MockSimDevice::PostProcessStats(const nc::htsim::SSCPStatsRequest& request,
       if (request.include_flow_counts()) {
         nc::htsim::ActionStats* action_stats =
             FindStatsForTagOrDie(&stats_in_reply, tag_and_path.first);
-        action_stats->flow_count = path_state.total_syns;
-        path_state.total_syns = 0;
+        action_stats->flow_count =
+            GetFlowCountFromSyns(path_state.syns.GetValues());
       }
     }
   }
@@ -325,7 +325,7 @@ void MockSimNetwork::AdvanceTimeToNextBin() {
           continue;
         }
 
-        path_state.total_syns += bin.flows_enter;
+        path_state.syns.AddValue(bin.flows_enter);
         nc::htsim::PacketPtr pkt = GetDummyPacket(bin.bytes);
         const nc::htsim::MatchRuleAction* action =
             aggregate_state.rule->ExplicitChooseOrDie(*pkt, ++i);
@@ -345,6 +345,15 @@ nc::htsim::PacketPtr MockSimNetwork::GetDummyPacket(uint32_t size) {
       nc::net::AccessLayerPort(9919), nc::net::AccessLayerPort(9929));
   return nc::GetFreeList<nc::htsim::UDPPacket>().New(
       five_tuple, size, event_queue_->CurrentTime());
+}
+
+uint64_t GetFlowCountFromSyns(const std::vector<uint64_t>& syns) {
+  uint64_t total = std::accumulate(syns.begin(), syns.end(), 0ul);
+  if (total == 0) {
+    return 1ul;
+  }
+
+  return std::max(1ul, total / syns.size());
 }
 
 }  // namespace ctr

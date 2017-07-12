@@ -31,7 +31,7 @@ else()
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CTR_BASE_BASE_FLAGS}")
-set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} ${CTR_BASE_BASE_LD_FLAGS} -static-libstdc++ -static-libgcc")
+set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} ${CTR_BASE_BASE_LD_FLAGS}")
 
 if (NOT CTR_BASE_DISABLE_TESTS)
    include(CTest)
@@ -105,7 +105,7 @@ add_executable(metrics_explore src/metrics/metrics_explore.cc)
 target_link_libraries(metrics_explore metrics_parser gflags)
 
 add_executable(tm_gen_util src/tm_gen_util.cc)
-target_link_libraries(tm_gen_util ncode gflags)
+target_link_libraries(tm_gen_util ctr_base gflags)
 
 add_executable(plot_completion_time_delta src/plot_completion_time_delta.cc)
 target_link_libraries(plot_completion_time_delta metrics_parser gflags)

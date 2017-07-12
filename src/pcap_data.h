@@ -145,7 +145,8 @@ class BinSequence {
   // Generates an AggregateHistory from the entire range of this BinSequence.
   // Each of the history's bins will combine 'history_bin_size' bins from this
   // BinSequence.
-  AggregateHistory GenerateHistory(std::chrono::milliseconds history_bin_size);
+  AggregateHistory GenerateHistory(std::chrono::milliseconds history_bin_size,
+                                   uint64_t flow_count);
 
   // Returns another BinSequence with the same traces, but only contains the
   // first 'offset_from_start' bins.

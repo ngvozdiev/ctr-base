@@ -2,10 +2,16 @@
 #define CTR_NET_MOCK_H
 
 #include <stddef.h>
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "ncode_common/src/circular_array.h"
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/event_queue.h"
 #include "ncode_common/src/htsim/match.h"
@@ -14,12 +20,6 @@
 #include "ncode_common/src/net/net_common.h"
 #include "controller.h"
 #include "pcap_data.h"
-
-namespace ctr {
-namespace controller {
-class Controller;
-} /* namespace controller */
-} /* namespace ctr */
 
 namespace ctr {
 
@@ -163,10 +163,10 @@ class MockSimDevice : public nc::htsim::Device {
 
  private:
   struct PathState {
-    PathState() : fraction(0), total_syns(0), bins_cached_from(0) {}
+    PathState() : fraction(0), bins_cached_from(0) {}
 
     double fraction;
-    size_t total_syns;
+    nc::CircularArray<uint64_t, 1 << 10> syns;
 
     // This path's bins. Used as a cache by MockSimNetwork.
     std::vector<PcapDataTraceBin> bins;
@@ -285,6 +285,9 @@ class DefaultDeviceFactory : public controller::DeviceFactory {
     return std::move(new_device);
   }
 };
+
+// Gets a flow count from a series of syns.
+uint64_t GetFlowCountFromSyns(const std::vector<uint64_t>& syns);
 
 }  // namespace ctr
 
