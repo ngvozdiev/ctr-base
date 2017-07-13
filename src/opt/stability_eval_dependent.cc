@@ -279,7 +279,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
   PathProvider path_provider(&graph);
   std::unique_ptr<Optimizer> opt;
   if (FLAGS_opt == "CTR") {
-    opt = nc::make_unique<CTROptimizer>(&path_provider, true);
+    opt = nc::make_unique<CTROptimizer>(&path_provider, 1.0, true);
   } else if (FLAGS_opt == "B4") {
     opt = nc::make_unique<B4Optimizer>(&path_provider, false);
   } else if (FLAGS_opt == "B4(P)") {

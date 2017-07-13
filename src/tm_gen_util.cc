@@ -52,7 +52,7 @@ static double Cost(const nc::lp::DemandMatrix& matrix) {
 
   ctr::TrafficMatrix tm(matrix, flow_counts);
   ctr::PathProvider path_provider(tm.graph());
-  ctr::CTROptimizer ctr_optimizer(&path_provider);
+  ctr::CTROptimizer ctr_optimizer(&path_provider, 1.0, false);
   std::unique_ptr<ctr::RoutingConfiguration> ctr_out =
       ctr_optimizer.Optimize(tm);
 

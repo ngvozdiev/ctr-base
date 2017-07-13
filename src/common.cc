@@ -230,6 +230,10 @@ void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
       AggregateId, std::vector<std::pair<const nc::net::Walk*, size_t>>>>
       per_link_state;
 
+  for (nc::net::GraphLinkIndex link_index : graph_->AllLinks()) {
+    per_link_state[link_index] = {};
+  }
+
   std::vector<nc::viz::PathData> paths;
   for (const auto& aggregate_and_routes : configuration_) {
     const AggregateId& aggregate_id = aggregate_and_routes.first;

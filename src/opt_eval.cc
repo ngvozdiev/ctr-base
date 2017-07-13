@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
   demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
   ctr::PathProvider path_provider(&graph);
-  ctr::CTROptimizer ctr_optimizer(&path_provider);
+  ctr::CTROptimizer ctr_optimizer(&path_provider, 1.0, true);
   ctr::B4Optimizer b4_optimizer(&path_provider, false);
   ctr::MinMaxOptimizer minmax_optimizer(&path_provider);
 

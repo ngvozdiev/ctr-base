@@ -32,8 +32,8 @@ struct RunOutput {
 // A single pass of the optimizer.
 class CTROptimizerPass {
  public:
-  CTROptimizerPass(const TrafficMatrix* input, const CTRPathMap* paths,
-                   const nc::net::GraphStorage* graph,
+  CTROptimizerPass(double link_capacity_multiplier, const TrafficMatrix* input,
+                   const CTRPathMap* paths, const nc::net::GraphStorage* graph,
                    const RoutingConfiguration* base_solution);
 
   const nc::net::GraphLinkSet& links_with_no_capacity() const {
@@ -100,63 +100,18 @@ class CTROptimizerPass {
   // this solution, if present. The exception is the aggregate's longest path in
   // base_solution_. Paths that are not in base_solution_ are not limited.
   const RoutingConfiguration* base_solution_;
-};
 
-// A heuristic that tries to generate a new solution from a previous one with as
-// little change as possible.
-class CTRQuickOptimizer {
- public:
-  CTRQuickOptimizer(PathProvider* path_provider,
-                    const RoutingConfiguration* previous)
-      : path_provider_(path_provider),
-        graph_(previous->graph()),
-        previous_(previous),
-        model_(*previous_) {}
-
-  std::unique_ptr<RoutingConfiguration> Optimize(const TrafficMatrix& tm);
-
- private:
-  using PathAndLoad = std::pair<const nc::net::Walk*, nc::net::Bandwidth>;
-
-  nc::net::Bandwidth MinFreeCapacity(
-      const nc::net::Links& links,
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const;
-
-  // Tries to fit 'bw' into a series of paths. Will update both 'paths' with the
-  // extra bandwidth per path and 'bw' to reflect how much of it managed to fit.
-  void FindRoom(
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities,
-      nc::net::GraphLinkMap<nc::net::Bandwidth>* extra_capacities,
-      std::vector<PathAndLoad>* paths, nc::net::Bandwidth* bw) const;
-
-  // Returns the set of links that have no capacity left.
-  nc::net::GraphLinkSet LinksWithNoCapacity(
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const;
-
-  // Returns the free capacity on a link.
-  nc::net::Bandwidth FreeCapacityOnLink(
-      nc::net::GraphLinkIndex link,
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
-      const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const;
-
-  // Provides paths.
-  PathProvider* path_provider_;
-
-  // The graph.
-  const nc::net::GraphStorage* graph_;
-
-  const RoutingConfiguration* previous_;
-
-  // Helps to figure out how much free capacity there is along paths.
-  OverSubModel model_;
+  // Can scale all links' capacities by that fraction.
+  double link_capacity_multiplier_;
 };
 
 class CTROptimizer : public Optimizer {
  public:
-  explicit CTROptimizer(PathProvider* path_provider, bool add_limits = true)
-      : Optimizer(path_provider), add_limits_(add_limits) {}
+  explicit CTROptimizer(PathProvider* path_provider,
+                        double link_capacity_multiplier, bool add_limits)
+      : Optimizer(path_provider),
+        add_limits_(add_limits),
+        link_capacity_multiplier_(link_capacity_multiplier) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -219,6 +174,9 @@ class CTROptimizer : public Optimizer {
   // If true will run two different optimizations, one with limits to avoid
   // reordering and another one without.
   bool add_limits_;
+
+  // All links' capacities will be multiplied by this number.
+  double link_capacity_multiplier_;
 };
 
 }  // namespace ctr

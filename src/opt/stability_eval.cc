@@ -132,7 +132,7 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm, size_t seed,
   const ctr::TrafficMatrix* tm_after = b4_before_and_after.second.get();
 
   // Need to also generate before/after for CTR using the same TMs as B4.
-  ctr::CTROptimizer ctr_optimizer(path_provider);
+  ctr::CTROptimizer ctr_optimizer(path_provider, 1.0, true);
   auto ctr_before = ctr_optimizer.Optimize(*tm_before);
 
   // Will also run with a heuristic.

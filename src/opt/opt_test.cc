@@ -224,7 +224,7 @@ class CTRTest : public TestBase {
 };
 
 TEST_F(CTRTest, SingleAggregateFit) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
   AddAggregate("A", "C", kDefaultLinkspeed);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -232,7 +232,7 @@ TEST_F(CTRTest, SingleAggregateFit) {
 }
 
 TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
   AddAggregate("A", "C", kDefaultLinkspeed * 2);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -244,7 +244,7 @@ TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
 // be loaded up to kDefaultLinkspeed * 0.9 and the rest of the aggregate to end
 // up on the second best path. There should be no oversubscription.
 TEST_F(CTRTest, SingleAggregateTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
   AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -253,7 +253,7 @@ TEST_F(CTRTest, SingleAggregateTwoPaths) {
 }
 
 TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
   AddAggregate("A", "C", kDefaultLinkspeed * 3);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -262,7 +262,7 @@ TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
 }
 
 TEST_F(CTRTest, FourAggregates) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
   AddAggregate("A", "B", nc::net::Bandwidth::FromKBitsPerSecond(1500));
   AddAggregate("B", "A", nc::net::Bandwidth::FromKBitsPerSecond(200));
   AddAggregate("C", "D", nc::net::Bandwidth::FromKBitsPerSecond(1500));
@@ -278,83 +278,6 @@ TEST_F(CTRTest, FourAggregates) {
 
   auto routing_two = ctr_optimizer.Optimize(tm_);
   ASSERT_TRUE(HasPath(*routing_two, "[A->B]", 0.666));
-}
-
-class CTRQuickTest : public TestBase {
- protected:
-  CTRQuickTest() : tm_one_(&graph_), tm_two_(&graph_) {}
-
-  TrafficMatrix tm_one_;
-  TrafficMatrix tm_two_;
-};
-
-TEST_F(CTRQuickTest, SingleAggregateFit) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
-  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
-  AddAggregate("A", "C", 1, kDefaultLinkspeed, &tm_two_);
-  auto routing = ctr_optimizer.Optimize(tm_one_);
-
-  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
-  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
-  ASSERT_TRUE(HasPath(*routing_two, "[A->B, B->C]", 1.0));
-}
-
-TEST_F(CTRQuickTest, SingleAggregateTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
-  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
-  AddAggregate("A", "C", 1, kDefaultLinkspeed * 1.5, &tm_two_);
-  auto routing = ctr_optimizer.Optimize(tm_one_);
-
-  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
-  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
-  ASSERT_TRUE(HasPath(*routing_two, "[A->B, B->C]", 0.66));
-  ASSERT_TRUE(HasPath(*routing_two, "[A->D, D->C]", 0.33));
-}
-
-TEST_F(CTRQuickTest, SingleAggregateTwoPathsNoFit) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
-  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
-  AddAggregate("A", "C", 1, kDefaultLinkspeed * 2.5, &tm_two_);
-  auto routing = ctr_optimizer.Optimize(tm_one_);
-
-  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
-  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
-  ASSERT_FALSE(routing_two);
-}
-
-TEST_F(CTRQuickTest, TwoAggregatesTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
-  AddAggregate("A", "B", 1, kDefaultLinkspeed * 0.5, &tm_one_);
-  AddAggregate("D", "C", 1, kDefaultLinkspeed * 0.5, &tm_one_);
-
-  AddAggregate("A", "B", 1, kDefaultLinkspeed * 0.5, &tm_two_);
-  AddAggregate("D", "C", 1, kDefaultLinkspeed * 1.5, &tm_two_);
-  auto routing = ctr_optimizer.Optimize(tm_one_);
-
-  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
-  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
-
-  ASSERT_TRUE(HasPath(*routing_two, "[A->B]", 1));
-  ASSERT_TRUE(HasPath(*routing_two, "[D->C]", 0.66));
-  ASSERT_TRUE(HasPath(*routing_two, "[D->A, A->B, B->C]", 0.33));
-}
-
-TEST_F(CTRQuickTest, TwoAggregatesReclaim) {
-  CTROptimizer ctr_optimizer(path_provider_.get());
-  AddAggregate("A", "C", 1, kDefaultLinkspeed, &tm_one_);
-  AddAggregate("D", "C", 1, kDefaultLinkspeed, &tm_one_);
-
-  AddAggregate("A", "C", 1, kDefaultLinkspeed * 0.5, &tm_two_);
-  AddAggregate("D", "C", 1, kDefaultLinkspeed * 1.5, &tm_two_);
-  auto routing = ctr_optimizer.Optimize(tm_one_);
-
-  CTRQuickOptimizer ctr_quick_optimizer(path_provider_.get(), routing.get());
-  auto routing_two = ctr_quick_optimizer.Optimize(tm_two_);
-  CHECK(routing_two);
-
-  ASSERT_TRUE(HasPath(*routing_two, "[A->B, B->C]", 1));
-  ASSERT_TRUE(HasPath(*routing_two, "[D->C]", 0.66));
-  ASSERT_TRUE(HasPath(*routing_two, "[D->A, A->B, B->C]", 0.33));
 }
 
 }  // namespace ctr

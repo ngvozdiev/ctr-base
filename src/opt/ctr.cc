@@ -270,9 +270,9 @@ double CTROptimizer::OptimizePrivate(
       break;
     }
 
-    CTROptimizerPass pass(&input, &path_map_, graph_, use_previous && previous_
-                                                          ? previous_.get()
-                                                          : nullptr);
+    CTROptimizerPass pass(
+        link_capacity_multiplier_, &input, &path_map_, graph_,
+        use_previous && previous_ ? previous_.get() : nullptr);
     RunOutput& run_output = pass.run_output();
     double obj_value = run_output.obj_value;
     CHECK(obj_value != std::numeric_limits<double>::max());
@@ -454,7 +454,8 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
                                 oversubscription_var, 1);
     problem_matrix.emplace_back(oversubscription_var_constraint,
                                 max_oversubscription_var, -1);
-    double link_capacity_mbps = link->bandwidth().Mbps();
+    double link_capacity_mbps =
+        link->bandwidth().Mbps() * link_capacity_multiplier_;
 
     // If there is frozen capacity along the link will deduct it now.
     if (frozen_capacity_.HasValue(link_index)) {
@@ -546,7 +547,8 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       }
     }
 
-    double load_fraction = total_load / link->bandwidth();
+    double load_fraction =
+        total_load / (link->bandwidth() * link_capacity_multiplier_);
     if (oversubscription > 1.0 || load_fraction >= kLinkFullThreshold) {
       links_with_no_capacity_.Insert(link_index);
       if (FLAGS_debug_ctr) {
@@ -678,7 +680,8 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   return solution->ObjectiveValue() - link_to_paths.Count();
 }
 
-CTROptimizerPass::CTROptimizerPass(const TrafficMatrix* input,
+CTROptimizerPass::CTROptimizerPass(double link_capacity_multiplier,
+                                   const TrafficMatrix* input,
                                    const CTRPathMap* paths,
                                    const nc::net::GraphStorage* graph,
                                    const RoutingConfiguration* base_solution)
@@ -686,7 +689,8 @@ CTROptimizerPass::CTROptimizerPass(const TrafficMatrix* input,
       paths_(paths),
       graph_(graph),
       latest_run_max_oversubscription_(0),
-      base_solution_(base_solution) {
+      base_solution_(base_solution),
+      link_capacity_multiplier_(link_capacity_multiplier) {
   initial_obj_ = 0;
   initial_oversubscription_ = 0;
 
@@ -785,7 +789,7 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
     double frozen_capacity = *link_index_and_frozen_capacity.second;
     const nc::net::GraphLink* link = graph_->GetLink(link_index);
 
-    double raw_capacity = link->bandwidth().bps();
+    double raw_capacity = link->bandwidth().bps() * link_capacity_multiplier_;
     double load_fraction = frozen_capacity / raw_capacity;
     max_oversub = std::max(max_oversub, load_fraction);
 
@@ -805,195 +809,6 @@ void CTROptimizerPass::FreezeSinglePathAggregates() {
               << " aggregates with 1 path, initial oversubscription "
               << initial_oversubscription_ << " initial obj " << initial_obj_;
   }
-}
-
-nc::net::Bandwidth CTRQuickOptimizer::MinFreeCapacity(
-    const nc::net::Links& links,
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const {
-  CHECK(!links.empty());
-  nc::net::Bandwidth min_free = nc::net::Bandwidth::Max();
-  for (const nc::net::GraphLinkIndex link : links) {
-    nc::net::Bandwidth free =
-        FreeCapacityOnLink(link, extra_capacities, slack_capacities);
-    min_free = std::min(min_free, free);
-  }
-
-  return min_free;
-}
-
-nc::net::Bandwidth CTRQuickOptimizer::FreeCapacityOnLink(
-    nc::net::GraphLinkIndex link,
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const {
-  const nc::net::GraphLinkMap<double>& link_to_load = model_.link_to_load();
-  double load = link_to_load.GetValueOrDie(link);
-  CHECK(load <= 1 && load >= 0);
-  nc::net::Bandwidth full_capacity = graph_->GetLink(link)->bandwidth();
-
-  nc::net::Bandwidth total_load = full_capacity * load;
-  if (extra_capacities.HasValue(link)) {
-    total_load += extra_capacities.GetValueOrDie(link);
-  }
-
-  if (slack_capacities.HasValue(link)) {
-    total_load -= slack_capacities.GetValueOrDie(link);
-  }
-
-  CHECK(total_load <= full_capacity);
-  nc::net::Bandwidth free = full_capacity - total_load;
-  return free;
-}
-
-void CTRQuickOptimizer::FindRoom(
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities,
-    nc::net::GraphLinkMap<nc::net::Bandwidth>* extra_capacities,
-    std::vector<PathAndLoad>* paths, nc::net::Bandwidth* bw) const {
-  for (PathAndLoad& path_and_load : *paths) {
-    const nc::net::Walk* path = path_and_load.first;
-    nc::net::Bandwidth free_along_path =
-        MinFreeCapacity(path->links(), *extra_capacities, slack_capacities);
-    if (free_along_path < nc::net::Bandwidth::FromBitsPerSecond(1)) {
-      continue;
-    }
-
-    nc::net::Bandwidth to_take = std::min(*bw, free_along_path);
-    for (nc::net::GraphLinkIndex link : path->links()) {
-      (*extra_capacities)[link] += to_take;
-    }
-
-    path_and_load.second += to_take;
-    *bw -= to_take;
-    if (*bw == nc::net::Bandwidth::Zero()) {
-      break;
-    }
-  }
-}
-
-nc::net::GraphLinkSet CTRQuickOptimizer::LinksWithNoCapacity(
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& extra_capacities,
-    const nc::net::GraphLinkMap<nc::net::Bandwidth>& slack_capacities) const {
-  nc::net::GraphLinkSet out;
-  for (const nc::net::GraphLinkIndex link : graph_->AllLinks()) {
-    nc::net::Bandwidth free =
-        FreeCapacityOnLink(link, extra_capacities, slack_capacities);
-    if (free < nc::net::Bandwidth::FromBitsPerSecond(1)) {
-      out.Insert(link);
-    }
-  }
-
-  return out;
-}
-
-std::unique_ptr<RoutingConfiguration> CTRQuickOptimizer::Optimize(
-    const TrafficMatrix& tm) {
-  CHECK(tm.demands().size() == previous_->demands().size());
-
-  // The model reflects the current state, will use it to get the available
-  // capacity at path.
-  OverSubModel model(*previous_);
-
-  // As we add traffic to paths links will get more loaded. This extra load is
-  // stored here. The opposite is true for offloading traffic---the newly freed
-  // capacity is stored in 'slack_capacities'.
-  nc::net::GraphLinkMap<nc::net::Bandwidth> extra_capacities;
-  nc::net::GraphLinkMap<nc::net::Bandwidth> slack_capacities;
-
-  // The output. Will update it as we go.
-  auto out = nc::make_unique<RoutingConfiguration>(tm);
-
-  // Will do this in a two-stage process. Will first free up capacity.
-  for (const auto& aggregate_and_new_demands : tm.demands()) {
-    const AggregateId& aggregate = aggregate_and_new_demands.first;
-    nc::net::Bandwidth new_demand = aggregate_and_new_demands.second.first;
-    nc::net::Bandwidth previous_demand =
-        nc::FindOrDieNoPrint(previous_->demands(), aggregate).first;
-    const std::vector<RouteAndFraction>& previous_routes =
-        nc::FindOrDieNoPrint(previous_->routes(), aggregate);
-    if (new_demand > previous_demand) {
-      continue;
-    }
-
-    // The aggregate has either shrunk or remained the same. Will not do
-    // anything---will simply copy over its routes to the new configuration.
-    out->AddRouteAndFraction(aggregate, previous_routes);
-
-    // Need to free up capacity for each of its paths proportional to how much
-    // traffic was lost.
-    for (const auto& route_and_fraciton : previous_routes) {
-      double fraction = route_and_fraciton.second;
-      nc::net::Bandwidth previous_path_load = previous_demand * fraction;
-      nc::net::Bandwidth new_path_load = new_demand * fraction;
-      for (nc::net::GraphLinkIndex link : route_and_fraciton.first->links()) {
-        slack_capacities[link] += (previous_path_load - new_path_load);
-      }
-    }
-  }
-
-  for (const auto& aggregate_and_new_demands : tm.demands()) {
-    const AggregateId& aggregate = aggregate_and_new_demands.first;
-    nc::net::Bandwidth new_demand = aggregate_and_new_demands.second.first;
-    nc::net::Bandwidth previous_demand =
-        nc::FindOrDieNoPrint(previous_->demands(), aggregate).first;
-    const std::vector<RouteAndFraction>& previous_routes =
-        nc::FindOrDieNoPrint(previous_->routes(), aggregate);
-    if (new_demand <= previous_demand) {
-      // Handled in the loop above.
-      continue;
-    }
-
-    // Need to find place for the new demand. Initially the new paths will be
-    // the same as the old ones. Will convert from fraction to absolute demand
-    // so that we can re-compute the fractions later.
-    std::vector<PathAndLoad> new_routes;
-    for (const auto& route_and_fraction : previous_routes) {
-      new_routes.emplace_back(route_and_fraction.first,
-                              previous_demand * route_and_fraction.second);
-    }
-
-    nc::net::Bandwidth delta = new_demand - previous_demand;
-    FindRoom(slack_capacities, &extra_capacities, &new_routes, &delta);
-    while (delta != nc::net::Bandwidth::Zero()) {
-      // Traffic did not fit on the current paths. Will have to add extra paths.
-      const nc::net::Walk* new_path = path_provider_->AvoidingPathOrNull(
-          aggregate, LinksWithNoCapacity(extra_capacities, slack_capacities));
-      if (new_path == nullptr) {
-        // No path that avoids congestion exists.
-        return {};
-      }
-
-      std::vector<PathAndLoad> extra_load = {
-          {new_path, nc::net::Bandwidth::Zero()}};
-      FindRoom(slack_capacities, &extra_capacities, &extra_load, &delta);
-
-      // FindRoom should have managed to put some load on the path, since we
-      // specifically chose it to avoid congestion.
-      CHECK(extra_load[0].second != nc::net::Bandwidth::Zero());
-      new_routes.emplace_back(extra_load[0]);
-    }
-
-    // Now new_routes contains the new paths. Will compute fractions.
-    nc::net::Bandwidth total;
-    for (const auto& path_and_load : new_routes) {
-      total += path_and_load.second;
-    }
-    // Sanity-check that we managed to fit all demand.
-    CHECK(std::abs(total.Mbps() - new_demand.Mbps()) < 0.001);
-
-    std::vector<RouteAndFraction> to_update;
-    for (const auto& path_and_load : new_routes) {
-      double fraction = path_and_load.second / total;
-      if (fraction == 0) {
-        LOG(INFO) << "Ignoring zero fraction path " << path_and_load.second;
-        continue;
-      }
-
-      to_update.emplace_back(path_and_load.first, fraction);
-    }
-    out->AddRouteAndFraction(aggregate, to_update);
-  }
-
-  return out;
 }
 
 }  // namespace nc

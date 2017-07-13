@@ -4,16 +4,17 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <iostream>
-#include <limits>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/map_util.h"
 #include "ncode_common/src/net/net_common.h"
+#include "ncode_common/src/viz/web_page.h"
 #include "metrics/metrics.h"
 
 namespace ctr {
@@ -278,6 +279,10 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     ADD_AGGREGATE_MAP_TO_METRIC(input, per_aggregate_predicted_input,
                                 map_value.first.Mbps());
   }
+
+  nc::viz::HtmlPage page;
+  output->ToHTML(&page);
+  nc::File::WriteStringToFile(page.Construct(), "out.html");
 
   return output;
 }

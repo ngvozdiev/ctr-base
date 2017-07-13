@@ -357,7 +357,7 @@ int main(int argc, char** argv) {
   ctr::PathProvider path_provider(&graph);
   std::unique_ptr<ctr::Optimizer> opt;
   if (FLAGS_opt == "CTR") {
-    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider);
+    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider, 0.95, true);
   } else if (FLAGS_opt == "B4") {
     opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false);
   } else if (FLAGS_opt == "B4(P)") {
@@ -369,7 +369,7 @@ int main(int argc, char** argv) {
   }
 
   ctr::MeanScaleEstimatorFactory estimator_factory(
-      {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
+      {1.05, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.pin_max = FLAGS_pin_max;
   routing_system_config.pin_mean = FLAGS_pin_mean;
@@ -400,7 +400,8 @@ int main(int argc, char** argv) {
   containter_config.tcp_config.simulate_initial_handshake =
       FLAGS_simulate_initial_handshake;
 
-  ctr::TLDRConfig tldr_config({}, nc::htsim::kWildIPAddress,
+  nc::ThresholdEnforcerPolicy te_policy;
+  ctr::TLDRConfig tldr_config(te_policy, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,
                               round_duration, poll_period, 100,
                               FLAGS_disable_fast_optimization_requests);
