@@ -41,7 +41,9 @@ DEFINE_string(pcap_trace_store, "trace_store.pb",
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_uint64(history_bin_size_ms, 100, "How big each history bin is");
 DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
-DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
+DEFINE_double(link_capacity_scale, 1.0,
+              "By how much to scale all links' bandwidth");
+DEFINE_double(link_delay_scale, 1.3, "By how much to scale all links' delay");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
 DEFINE_bool(quick, false, "Whether to perform packet-level simulation or not");
@@ -325,6 +327,7 @@ int main(int argc, char** argv) {
       nc::File::ReadFileToStringOrDie(FLAGS_topology), &node_order);
   builder.RemoveMultipleLinks();
   builder.ScaleCapacity(FLAGS_link_capacity_scale);
+  builder.ScaleDelay(FLAGS_link_delay_scale);
   nc::net::GraphStorage graph(builder);
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);

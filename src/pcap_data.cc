@@ -37,6 +37,13 @@ void PcapDataTraceBin::Combine(const PcapDataTraceBin& other, double fraction) {
   flows_exit += other.flows_exit * fraction;
 }
 
+void PcapDataTraceBin::Combine(const PcapDataTraceBin& other) {
+  bytes += other.bytes;
+  packets += other.packets;
+  flows_enter += other.flows_enter;
+  flows_exit += other.flows_exit;
+}
+
 struct TCPFlowRecord {
   TCPFlowRecord(size_t bytes, uint8_t ttl, bool forward)
       : forward(forward),
@@ -628,7 +635,7 @@ const PcapDataTrace::CachedBins* PcapDataTrace::AddToBinCache(
   for (TraceSliceIndex slice : slices) {
     size_t i = -1;
     Bins(slice, from, to, [&out, &i](const PBBin& bin_pb) {
-      out.bins[++i].Combine(PcapDataTraceBin(bin_pb), 1.0);
+      out.bins[++i].Combine(PcapDataTraceBin(bin_pb));
     });
   }
 

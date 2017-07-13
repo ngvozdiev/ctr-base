@@ -77,6 +77,9 @@ struct PcapDataTraceBin {
   // Combines this bin with a fraction of another.
   void Combine(const PcapDataTraceBin& other, double fraction);
 
+  // Like above, but does not take a fraction.
+  void Combine(const PcapDataTraceBin& other);
+
   uint32_t bytes;
   uint32_t packets;
   uint32_t flows_enter;
