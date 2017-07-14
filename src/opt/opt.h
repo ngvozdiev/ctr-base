@@ -52,27 +52,35 @@ class ShortestPathOptimizer : public Optimizer {
 // a given traffic matrix.
 class MinMaxOptimizer : public Optimizer {
  public:
-  explicit MinMaxOptimizer(PathProvider* path_provider)
-      : Optimizer(path_provider) {}
+  MinMaxOptimizer(PathProvider* path_provider, double capacity_multiplier)
+      : Optimizer(path_provider),
+        link_capacity_multiplier_(capacity_multiplier) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
+
+  // All links' capacity is multiplied by this number.
+  double link_capacity_multiplier_;
 };
 
 // Runs a heuristic similar to that of B4. Each aggregate's "fair share" will be
 // set to its flow count from the TM.
 class B4Optimizer : public Optimizer {
  public:
-  explicit B4Optimizer(PathProvider* path_provider,
-                       bool flow_count_as_fair_share)
+  B4Optimizer(PathProvider* path_provider, bool flow_count_as_fair_share,
+              double capacity_multiplier)
       : Optimizer(path_provider),
-        flow_count_as_fair_share_(flow_count_as_fair_share) {}
+        flow_count_as_fair_share_(flow_count_as_fair_share),
+        link_capacity_multiplier_(capacity_multiplier) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
 
  private:
   bool flow_count_as_fair_share_;
+
+  // All links' capacity is multiplied by this number.
+  double link_capacity_multiplier_;
 };
 
 }  // namespace ctr

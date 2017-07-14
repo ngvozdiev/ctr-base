@@ -362,11 +362,11 @@ int main(int argc, char** argv) {
   if (FLAGS_opt == "CTR") {
     opt = nc::make_unique<ctr::CTROptimizer>(&path_provider, 0.95, true);
   } else if (FLAGS_opt == "B4") {
-    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false);
+    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false, 0.95);
   } else if (FLAGS_opt == "B4(P)") {
-    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true);
+    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true, 0.95);
   } else if (FLAGS_opt == "MinMax") {
-    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider);
+    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.9);
   } else if (FLAGS_opt == "SP") {
     opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
   }

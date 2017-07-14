@@ -30,18 +30,19 @@ namespace ctr {
 
 constexpr size_t PcapDataTrace::kCacheSize;
 
-void PcapDataTraceBin::Combine(const PcapDataTraceBin& other, double fraction) {
+void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other,
+                                      double fraction) {
   bytes += other.bytes * fraction;
-  packets += other.packets * fraction;
+  uint16_t prev = flows_enter;
   flows_enter += other.flows_enter * fraction;
-  flows_exit += other.flows_exit * fraction;
+  CHECK(flows_enter >= prev);
 }
 
-void PcapDataTraceBin::Combine(const PcapDataTraceBin& other) {
+void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
   bytes += other.bytes;
-  packets += other.packets;
+  uint16_t prev = flows_enter;
   flows_enter += other.flows_enter;
-  flows_exit += other.flows_exit;
+  CHECK(flows_enter >= prev);
 }
 
 struct TCPFlowRecord {
@@ -599,17 +600,18 @@ void PcapDataTrace::Bins(TraceSliceIndex slice, size_t start_bin,
   }
 }
 
-static constexpr size_t kCacheSizeMb = 50;
+static constexpr size_t kCacheSizeMb = 10;
 
-std::pair<std::vector<PcapDataTraceBin>::const_iterator,
-          std::vector<PcapDataTraceBin>::const_iterator>
+std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
+          std::vector<TrimmedPcapDataTraceBin>::const_iterator>
 PcapDataTrace::BinsCombined(const TraceSliceSet& slices, size_t start_bin,
                             size_t end_bin) {
   CHECK(end_bin <= trace_pb_.bin_count());
 
   const CachedBins* cached = nc::FindOrNull(bins_cache_, slices);
   if (cached == nullptr || (cached->from > start_bin || cached->to < end_bin)) {
-    size_t element_count = kCacheSizeMb * 1000000 / sizeof(PcapDataTraceBin);
+    size_t element_count =
+        kCacheSizeMb * 1000000 / sizeof(TrimmedPcapDataTraceBin);
     uint64_t offset = std::max(element_count / 2, end_bin - start_bin);
 
     size_t cache_end = std::min(static_cast<uint64_t>(trace_pb_.bin_count()),
@@ -619,7 +621,7 @@ PcapDataTrace::BinsCombined(const TraceSliceSet& slices, size_t start_bin,
   }
 
   CHECK(cached->from <= start_bin && cached->to >= end_bin);
-  const std::vector<PcapDataTraceBin>& cached_bins = cached->bins;
+  const std::vector<TrimmedPcapDataTraceBin>& cached_bins = cached->bins;
   return {cached_bins.begin() + (start_bin - cached->from),
           cached_bins.begin() + (end_bin - cached->from)};
 }
@@ -635,11 +637,12 @@ const PcapDataTrace::CachedBins* PcapDataTrace::AddToBinCache(
   for (TraceSliceIndex slice : slices) {
     size_t i = -1;
     Bins(slice, from, to, [&out, &i](const PBBin& bin_pb) {
-      out.bins[++i].Combine(PcapDataTraceBin(bin_pb));
+      out.bins[++i].Combine(TrimmedPcapDataTraceBin(bin_pb));
     });
   }
+  out.bins.shrink_to_fit();
 
-  size_t bytes = sizeof(PcapDataTraceBin) * (to - from);
+  size_t bytes = sizeof(TrimmedPcapDataTraceBin) * out.bins.capacity();
   LOG(ERROR) << "Added to cache " << slices.Count() << " slices from " << from
              << " to " << to << " size: " << bytes / 1000.0 / 1000.0 << "MB";
   return &out;
@@ -748,7 +751,7 @@ std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate) {
       1.0 / std::chrono::duration<double>(bin_size()).count();
   double bytes_per_bin = rate_Bps / bins_in_second;
 
-  std::vector<PcapDataTraceBin> bins = AccumulateBinsPrivate(1);
+  std::vector<TrimmedPcapDataTraceBin> bins = AccumulateBinsPrivate(1);
   std::vector<double> out(bins.size());
   for (size_t i = 0; i < bins.size(); ++i) {
     out[i] = (bins[i].bytes - bytes_per_bin) / bytes_per_bin;
@@ -760,14 +763,12 @@ std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate) {
 AggregateHistory BinSequence::GenerateHistory(
     std::chrono::milliseconds history_bin_size, uint64_t flow_count) {
   using namespace std::chrono;
-  std::vector<PcapDataTraceBin> bins_combined =
+  std::vector<TrimmedPcapDataTraceBin> bins_combined =
       AccumulateBins(history_bin_size);
 
-  size_t total_flows = 0;
   std::vector<uint64_t> bins_for_history;
   for (const auto& bin_combined : bins_combined) {
     bins_for_history.emplace_back(bin_combined.bytes);
-    total_flows += bin_combined.flows_enter;
   }
 
   return {bins_for_history, history_bin_size, flow_count};
@@ -843,7 +844,7 @@ BinSequence BinSequence::Offset(size_t offset) const {
   return {new_traces};
 }
 
-std::vector<PcapDataTraceBin> BinSequence::AccumulateBins(
+std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBins(
     std::chrono::microseconds new_bin_size) {
   std::chrono::microseconds base_bin_size = bin_size();
 
@@ -865,7 +866,7 @@ nc::net::Bandwidth BinSequence::MeanRate() {
   return nc::net::Bandwidth::FromBitsPerSecond(rate_bps);
 }
 
-std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
+std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     size_t bin_size_multiplier) {
   size_t count = bin_count();
   // Will first group slices by <trace, start_bin, end_bin, fraction>.
@@ -881,7 +882,7 @@ std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
         .Insert(slice);
   }
 
-  std::vector<PcapDataTraceBin> out(count);
+  std::vector<TrimmedPcapDataTraceBin> out(count);
   for (const auto& trace_and_slices : slices_grouped) {
     PcapDataTrace* trace;
     size_t start_bin, end_bin;
@@ -889,8 +890,8 @@ std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     std::tie(trace, start_bin, end_bin, fraction) = trace_and_slices.first;
     const TraceSliceSet& slices = trace_and_slices.second;
 
-    std::vector<PcapDataTraceBin>::const_iterator from;
-    std::vector<PcapDataTraceBin>::const_iterator to;
+    std::vector<TrimmedPcapDataTraceBin>::const_iterator from;
+    std::vector<TrimmedPcapDataTraceBin>::const_iterator to;
     std::tie(from, to) = trace->BinsCombined(slices, start_bin, end_bin);
     CHECK(std::distance(from, to) == static_cast<ssize_t>(count));
 
@@ -904,16 +905,13 @@ std::vector<PcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
   }
 
   // If the multiplier is >1 will have to combine bins.
-  std::vector<PcapDataTraceBin> out_combined;
+  std::vector<TrimmedPcapDataTraceBin> out_combined;
   for (size_t i = 0; i < out.size(); ++i) {
     size_t combined_bin_index = i / bin_size_multiplier;
     out_combined.resize(combined_bin_index + 1);
 
-    PcapDataTraceBin& combined_bin = out_combined[combined_bin_index];
-    combined_bin.bytes += out[i].bytes;
-    combined_bin.packets += out[i].packets;
-    combined_bin.flows_enter += out[i].flows_enter;
-    combined_bin.flows_exit += out[i].flows_exit;
+    TrimmedPcapDataTraceBin& combined_bin = out_combined[combined_bin_index];
+    combined_bin.Combine(out[i]);
   }
 
   return out_combined;

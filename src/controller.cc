@@ -149,9 +149,10 @@ void Controller::HandleRequest(
     nc::InsertOrDieNoPrint(&histories, id, request);
   }
 
-  LOG(INFO) << nc::Substitute(
-      "Collected requests from $0 / $1 aggregates round $2", histories.size(),
-      id_to_aggregate_state_.size(), round_id);
+  //  LOG(INFO) << nc::Substitute(
+  //      "Collected requests from $0 / $1 aggregates round $2",
+  //      histories.size(),
+  //      id_to_aggregate_state_.size(), round_id);
 
   if (histories.size() == id_to_aggregate_state_.size()) {
     // We heard from all aggregates. Time to re-optimize.
@@ -303,11 +304,9 @@ void Controller::HandlePacket(::nc::htsim::PacketPtr pkt) {
 
     if (type == SSCPAck::kSSCPAckType) {
       SSCPAck* ack_message = static_cast<SSCPAck*>(pkt.get());
-      LOG(INFO) << "Rx " << ack_message->ToString();
       HandleAck(ack_message->tx_id());
     } else if (type == TLDRRequest::kTLDRRequestType) {
       TLDRRequest* request_message = static_cast<TLDRRequest*>(pkt.get());
-      LOG(INFO) << "Rx " << request_message->ToString();
       HandleRequest(request_message->aggregates(), request_message->round_id(),
                     request_message->quick());
     } else if (type == TLDRTriggerReoptimize::kTLDRTriggerReoptimizeType) {

@@ -74,16 +74,30 @@ struct PcapDataTraceBin {
         flows_enter(flows_enter),
         flows_exit(flows_exit) {}
 
-  // Combines this bin with a fraction of another.
-  void Combine(const PcapDataTraceBin& other, double fraction);
-
-  // Like above, but does not take a fraction.
-  void Combine(const PcapDataTraceBin& other);
-
   uint32_t bytes;
   uint32_t packets;
   uint32_t flows_enter;
   uint32_t flows_exit;
+};
+
+// A variant of the struct above that only keeps track of bytes and flows
+// entered.
+struct __attribute__((packed)) TrimmedPcapDataTraceBin {
+  TrimmedPcapDataTraceBin() : bytes(0), flows_enter(0) {}
+
+  TrimmedPcapDataTraceBin(const PBBin& bin_pb)
+      : bytes(bin_pb.byte_count()), flows_enter(bin_pb.enter_flow_count()) {
+    CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint16_t>::max());
+  }
+
+  // Combines this bin with a fraction of another.
+  void Combine(const TrimmedPcapDataTraceBin& other, double fraction);
+
+  // Like above, but does not take a fraction.
+  void Combine(const TrimmedPcapDataTraceBin& other);
+
+  uint32_t bytes;
+  uint16_t flows_enter;
 };
 
 class PcapDataTrace;
@@ -165,7 +179,7 @@ class BinSequence {
   // Optionally rebins the trace and returns the bins. If 'bin_size' is equal to
   // this trace's base bin size (returned by bin_size()) no rebinning will
   // happen. If it is a multiple of the base bin size will combine every N bins.
-  std::vector<PcapDataTraceBin> AccumulateBins(
+  std::vector<TrimmedPcapDataTraceBin> AccumulateBins(
       std::chrono::microseconds bin_size);
 
   // Sum of all bytes (in bits) divided by bin_size * bin_count in seconds.
@@ -174,7 +188,7 @@ class BinSequence {
  private:
   // Combines every 'bin_size_multiplier' bins into a PcapDataTraceBin and
   // returns the sequence.
-  std::vector<PcapDataTraceBin> AccumulateBinsPrivate(
+  std::vector<TrimmedPcapDataTraceBin> AccumulateBinsPrivate(
       size_t bin_size_multiplier);
 
   std::vector<TraceAndSlice> traces_;
@@ -207,8 +221,8 @@ class PcapDataTrace {
 
   // Like Bins, but combines multiple slices into one. Will also pull the
   // results from the bin cache if possible.
-  std::pair<std::vector<PcapDataTraceBin>::const_iterator,
-            std::vector<PcapDataTraceBin>::const_iterator>
+  std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
+            std::vector<TrimmedPcapDataTraceBin>::const_iterator>
   BinsCombined(const TraceSliceSet& slices, size_t start_bin, size_t end_bin);
 
   TraceSliceSet AllSlices() const;
@@ -236,7 +250,7 @@ class PcapDataTrace {
   struct CachedBins {
     size_t from;
     size_t to;
-    std::vector<PcapDataTraceBin> bins;
+    std::vector<TrimmedPcapDataTraceBin> bins;
   };
 
   // Combines all bins for a set of slices and stores them in the cache.

@@ -42,6 +42,7 @@ static std::vector<std::chrono::milliseconds> GetDeltas(
                  << (i + 1) << "/" << min_data_size << " SP completion time "
                  << sp_data[i].second << " other completion time "
                  << other_data[i].second;
+      out.emplace_back(std::chrono::milliseconds(0));
       continue;
     }
     uint64_t delta = other_data[i].second - sp_data[i].second;

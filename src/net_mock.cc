@@ -114,11 +114,10 @@ void MockNetwork::AdvanceTime() {
           }
         }
 
-        std::vector<PcapDataTraceBin> bins =
+        std::vector<TrimmedPcapDataTraceBin> bins =
             split_sequence.AccumulateBins(bin_size);
         for (const auto& bin : bins) {
           path_state.stats.total_bytes_matched += bin.bytes;
-          path_state.stats.total_pkts_matched += bin.packets;
           path_state.total_syns += bin.flows_enter;
         }
       }
@@ -295,7 +294,7 @@ void MockSimNetwork::PrefetchBins(
   BinSequence period_sequence = to_end.Offset(last_bin_count_);
   BinSequence split_sequence =
       period_sequence.PreciseSplitOrDie({path_state->fraction})[0];
-  std::vector<PcapDataTraceBin> bins =
+  std::vector<TrimmedPcapDataTraceBin> bins =
       split_sequence.AccumulateBins(GetBinSize());
   CHECK(bins.size() == kPrefetchSize);
 
@@ -313,14 +312,14 @@ void MockSimNetwork::AdvanceTimeToNextBin() {
       size_t i = -1;
       for (auto& tag_and_path_state : aggregate_state.paths) {
         MockSimDevice::PathState& path_state = tag_and_path_state.second;
-        const std::vector<PcapDataTraceBin>& bins = path_state.bins;
+        const std::vector<TrimmedPcapDataTraceBin>& bins = path_state.bins;
         size_t bin_index = last_bin_count_ + 1 - path_state.bins_cached_from;
         if (bin_index >= bins.size()) {
           PrefetchBins(&aggregate_state, &path_state);
           bin_index = last_bin_count_ + 1 - path_state.bins_cached_from;
           CHECK(bin_index < bins.size());
         }
-        const PcapDataTraceBin& bin = bins[bin_index];
+        const TrimmedPcapDataTraceBin& bin = bins[bin_index];
         if (bin.bytes == 0) {
           continue;
         }

@@ -64,7 +64,7 @@ static std::pair<std::unique_ptr<ctr::RoutingConfiguration>,
                  std::unique_ptr<ctr::RoutingConfiguration>>
 RunB4(const ctr::TrafficMatrix& tm, ctr::PathProvider* path_provider,
       std::mt19937* rnd, double* scale_factor) {
-  ctr::B4Optimizer b4_optimizer(path_provider, false);
+  ctr::B4Optimizer b4_optimizer(path_provider, false, 1.0);
   double scale = 1.01;
   while (scale > 0) {
     // Will scale it down by 1%.

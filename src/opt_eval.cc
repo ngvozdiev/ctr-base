@@ -66,8 +66,8 @@ int main(int argc, char** argv) {
 
   ctr::PathProvider path_provider(&graph);
   ctr::CTROptimizer ctr_optimizer(&path_provider, 1.0, true);
-  ctr::B4Optimizer b4_optimizer(&path_provider, false);
-  ctr::MinMaxOptimizer minmax_optimizer(&path_provider);
+  ctr::B4Optimizer b4_optimizer(&path_provider, false, 1.0);
+  ctr::MinMaxOptimizer minmax_optimizer(&path_provider, 1.0);
 
   ctr::RoutingConfigInfo ctr_info;
   ctr::RoutingConfigInfo b4_info;
