@@ -169,7 +169,7 @@ class MockSimDevice : public nc::htsim::Device {
     nc::CircularArray<uint64_t, 1 << 10> syns;
 
     // This path's bins. Used as a cache by MockSimNetwork.
-    std::vector<PcapDataTraceBin> bins;
+    std::vector<TrimmedPcapDataTraceBin> bins;
     size_t bins_cached_from;
   };
 

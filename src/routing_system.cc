@@ -280,10 +280,6 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
                                 map_value.first.Mbps());
   }
 
-  nc::viz::HtmlPage page;
-  output->ToHTML(&page);
-  nc::File::WriteStringToFile(page.Construct(), "out.html");
-
   return output;
 }
 

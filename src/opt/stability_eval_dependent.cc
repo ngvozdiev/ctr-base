@@ -281,11 +281,11 @@ static void RunWithSimpleTopologyTwoAggregates() {
   if (FLAGS_opt == "CTR") {
     opt = nc::make_unique<CTROptimizer>(&path_provider, 1.0, true);
   } else if (FLAGS_opt == "B4") {
-    opt = nc::make_unique<B4Optimizer>(&path_provider, false);
+    opt = nc::make_unique<B4Optimizer>(&path_provider, false, 1.0);
   } else if (FLAGS_opt == "B4(P)") {
-    opt = nc::make_unique<B4Optimizer>(&path_provider, true);
+    opt = nc::make_unique<B4Optimizer>(&path_provider, true, 1.0);
   } else if (FLAGS_opt == "MinMax") {
-    opt = nc::make_unique<MinMaxOptimizer>(&path_provider);
+    opt = nc::make_unique<MinMaxOptimizer>(&path_provider, 1.0);
   }
 
   MeanScaleEstimatorFactory estimator_factory(

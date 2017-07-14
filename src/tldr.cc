@@ -314,7 +314,6 @@ void TLDR::HandleEvent() {
 }
 
 void TLDR::HandleUpdate(const TLDRUpdate& update) {
-  LOG(INFO) << "Rx " << update.ToString();
   UpdateAggregateState(update.aggregates());
   UpdateTagToAggregateId(update.aggregates());
   RepackPaths(update.aggregates());
@@ -354,7 +353,6 @@ void TLDR::UpdateRateLimitMetrics(
       double fraction = path.route_and_fraction.second;
 
       std::string path_str = graph_path->ToStringNoPorts(*graph_);
-      LOG(INFO) << path_str << " fraction " << fraction;
       kPathFractionMetric->GetHandle(path_str)->AddValue(fraction);
     }
   }
