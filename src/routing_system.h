@@ -37,8 +37,9 @@ class RoutingSystem {
 
   virtual ~RoutingSystem() {}
 
-  std::unique_ptr<RoutingConfiguration> Update(
-      const std::map<AggregateId, AggregateHistory>& history);
+  std::pair<std::unique_ptr<RoutingConfiguration>,
+            std::unique_ptr<CompetingAggregates>>
+  Update(const std::map<AggregateId, AggregateHistory>& history);
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 
@@ -48,9 +49,9 @@ class RoutingSystem {
 
   // Checks if all aggregates fit. Returns the set of aggregates that do not
   // fit.
-  std::set<AggregateId> CheckWithProbModel(
-      const RoutingConfiguration& routing,
-      const std::map<AggregateId, AggregateHistory>& histories);
+  std::pair<std::set<AggregateId>, std::unique_ptr<CompetingAggregates>>
+  CheckWithProbModel(const RoutingConfiguration& routing,
+                     const std::map<AggregateId, AggregateHistory>& histories);
 
   bool ScaleUpAggregates(
       const std::set<AggregateId>& aggregates,

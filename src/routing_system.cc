@@ -199,8 +199,9 @@ static void RecordPathSplitsAndTotalDelay(
   }
 }
 
-std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
-    const std::map<AggregateId, AggregateHistory>& history) {
+std::pair<std::unique_ptr<RoutingConfiguration>,
+          std::unique_ptr<CompetingAggregates>>
+RoutingSystem::Update(const std::map<AggregateId, AggregateHistory>& history) {
   // First we will predict what the history is expected to be on the next
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
@@ -216,6 +217,10 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
     scale_fractions[aggregate_and_rest.first] = 0.0;
   }
 
+  // This will be updated every time the model runs. If the max/mean level are
+  // pinned will be empty.
+  std::unique_ptr<CompetingAggregates> competing_aggregates;
+
   size_t i_count = 0;
   while (true) {
     TrafficMatrix tm(graph_, input);
@@ -228,7 +233,8 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
 
     // After optimizing we should check to see which aggregates go over links
     // that do not fit.
-    std::set<AggregateId> aggregates_no_fit =
+    std::set<AggregateId> aggregates_no_fit;
+    std::tie(aggregates_no_fit, competing_aggregates) =
         CheckWithProbModel(*output, next_history);
     if (aggregates_no_fit.empty()) {
       break;
@@ -280,14 +286,11 @@ std::unique_ptr<RoutingConfiguration> RoutingSystem::Update(
                                 map_value.first.Mbps());
   }
 
-  nc::viz::HtmlPage page;
-  output->ToHTML(&page);
-  nc::File::WriteStringToFile(page.Construct(), "out.html");
-
-  return output;
+  return {std::move(output), std::move(competing_aggregates)};
 }
 
-std::set<AggregateId> RoutingSystem::CheckWithProbModel(
+std::pair<std::set<AggregateId>, std::unique_ptr<CompetingAggregates>>
+RoutingSystem::CheckWithProbModel(
     const RoutingConfiguration& routing,
     const std::map<AggregateId, AggregateHistory>& histories) {
   CHECK(histories.size() == routing.routes().size());
@@ -308,12 +311,12 @@ std::set<AggregateId> RoutingSystem::CheckWithProbModel(
   }
 
   std::vector<ProbModelQuery> queries;
-  std::vector<const std::vector<std::pair<AggregateId, double>>*> map_values;
+  std::vector<nc::net::GraphLinkIndex> links_in_order;
   for (const auto& link_and_aggregates : per_link_aggregates) {
     nc::net::GraphLinkIndex link = link_and_aggregates.first;
     const std::vector<std::pair<AggregateId, double>>&
         aggregates_and_fractions = *link_and_aggregates.second;
-    map_values.emplace_back(&aggregates_and_fractions);
+    links_in_order.emplace_back(link);
 
     queries.emplace_back();
     ProbModelQuery& query = queries.back();
@@ -330,19 +333,98 @@ std::set<AggregateId> RoutingSystem::CheckWithProbModel(
   }
   std::vector<ProbModelReply> replies = prob_model.Query(queries);
 
-  std::set<AggregateId> out;
+  // Will need the replies indexed by link, so that we can later figure out
+  // which link along a path is most likely to congest.
+  nc::net::GraphLinkMap<ProbModelReply> replies_by_link;
+
+  std::set<AggregateId> aggregates_no_fit;
   for (size_t i = 0; i < replies.size(); ++i) {
+    nc::net::GraphLinkIndex link = links_in_order[i];
     const ProbModelReply& reply = replies[i];
+    replies_by_link[link] = reply;
     if (reply.fit) {
       continue;
     }
 
-    for (const auto& aggregate_and_fraction : *(map_values[i])) {
-      out.insert(aggregate_and_fraction.first);
+    const std::vector<std::pair<AggregateId, double>>&
+        aggregates_and_fractions = per_link_aggregates.GetValueOrDie(link);
+    for (const auto& aggregate_and_fraction : aggregates_and_fractions) {
+      aggregates_no_fit.insert(aggregate_and_fraction.first);
     }
   }
 
-  return out;
+  auto competing_aggregates = nc::make_unique<CompetingAggregates>();
+  for (const auto& aggregate_and_routes : routing.routes()) {
+    const AggregateId& aggregate = aggregate_and_routes.first;
+
+    // We only care about aggregates that can fit the demand. If there are one
+    // or many links along any of the aggregate's paths that cannot fit the
+    // demand, we will add no state for the aggregate.
+    bool aggregate_fits = true;
+
+    // State to add to competing_aggregates for this aggregate.
+    std::vector<AggregatesAndCapacity> to_add;
+
+    const std::vector<RouteAndFraction>& routes = aggregate_and_routes.second;
+    for (const auto& route_and_fraction : routes) {
+      const nc::net::Walk* walk = route_and_fraction.first;
+
+      double max_capacity_fraction = std::numeric_limits<double>::min();
+      nc::net::GraphLinkIndex link_most_likely_to_congest;
+
+      // Need to find the most likely to congest link along the path, and
+      // add the aggregates that cross it as competing aggregates to the current
+      // aggregate.
+      for (nc::net::GraphLinkIndex link : walk->links()) {
+        const ProbModelReply& reply = replies_by_link.GetValueOrDie(link);
+        if (!reply.fit) {
+          aggregate_fits = false;
+          break;
+        }
+
+        double fraction;
+        if (reply.optimal_rate == nc::net::Bandwidth::Zero()) {
+          // The path fits the traffic trivially.
+          fraction = 0;
+        } else {
+          nc::net::Bandwidth link_capacity = graph_->GetLink(link)->bandwidth();
+          fraction = reply.optimal_rate / link_capacity;
+        }
+
+        if (fraction > max_capacity_fraction) {
+          link_most_likely_to_congest = link;
+          max_capacity_fraction = fraction;
+        }
+      }
+      CHECK(max_capacity_fraction != std::numeric_limits<double>::min());
+      if (!aggregate_fits) {
+        break;
+      }
+
+      to_add.emplace_back();
+      AggregatesAndCapacity& aggregates_and_capacity = to_add.back();
+      aggregates_and_capacity.capacity =
+          graph_->GetLink(link_most_likely_to_congest)->bandwidth();
+      for (const auto& aggregate_and_fraction :
+           per_link_aggregates.GetValueOrDie(link_most_likely_to_congest)) {
+        // In competing_states we do not want to add aggregates that compete
+        // with themselves.
+        if (aggregate_and_fraction.first == aggregate) {
+          continue;
+        }
+
+        aggregates_and_capacity.aggregates.emplace_back(aggregate_and_fraction);
+      }
+    }
+
+    if (!aggregate_fits) {
+      continue;
+    }
+
+    competing_aggregates->AddAggregatesAndCapacity(aggregate, to_add);
+  }
+
+  return {aggregates_no_fit, std::move(competing_aggregates)};
 }
 
 bool RoutingSystem::ScaleUpAggregates(

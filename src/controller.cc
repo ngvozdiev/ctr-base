@@ -160,16 +160,14 @@ void Controller::HandleRequest(
 }
 
 std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
-    const RoutingConfiguration& routing_config) {
+    const RoutingConfiguration& routing_config,
+    const CompetingAggregates& competing_aggregates) {
   std::map<AggregateId, AggregateUpdateState> out;
   for (const auto& id_and_routes : routing_config.routes()) {
     const AggregateId& id = id_and_routes.first;
     const std::vector<RouteAndFraction>& routes = id_and_routes.second;
     const AggregateState& aggregate_state =
         nc::FindOrDieNoPrint(id_to_aggregate_state_, id);
-    const DemandAndFlowCount& demand_and_flow_count =
-        nc::FindOrDieNoPrint(routing_config.demands(), id);
-    nc::net::Bandwidth demand = demand_and_flow_count.first;
 
     AggregateUpdateState update_state(id, aggregate_state.key());
     for (const auto& route_and_fraction : routes) {
@@ -186,9 +184,14 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
       update_state.paths.emplace_back(path_update_state);
     }
 
-    // TODO: This should be higher (if there is slack capacity) or lower (if
-    // traffic does not fit).
-    update_state.limit = demand;
+    const std::vector<AggregatesAndCapacity>* aggregates_and_capacity =
+        nc::FindOrNull(competing_aggregates.aggregates(), id);
+    if (aggregates_and_capacity == nullptr) {
+      continue;
+    }
+
+    CHECK(aggregates_and_capacity->size() == routes.size());
+    update_state.competing_aggregates = *aggregates_and_capacity;
 
     out.emplace(id, update_state);
   }
@@ -225,8 +228,11 @@ void Controller::ReOptimize(RoundState* round) {
   }
 
   LOG(INFO) << "Will re-optimize the network";
+  auto config_and_competing_aggregates =
+      routing_system_->Update(round->histories);
   pending_output =
-      RoutingToUpdateState(*routing_system_->Update(round->histories));
+      RoutingToUpdateState(*config_and_competing_aggregates.first,
+                           *config_and_competing_aggregates.second);
   LOG(INFO) << "Done optimizing";
 
   last_optimize_time_ = event_queue_->CurrentTime();
@@ -330,6 +336,34 @@ const nc::net::Walk* Controller::PathForTagOrDie(uint32_t tag) const {
   return nullptr;
 }
 
+// Returns a map populated with the histories of all aggregates that compete
+// with aggregates in 'update_state'.
+static std::map<AggregateId, AggregateHistory> GetHistoryMapForUpdate(
+    const std::map<AggregateId, AggregateHistory>& all_histories,
+    const std::map<AggregateId, AggregateUpdateState>& update_states) {
+  std::map<AggregateId, AggregateHistory> out;
+  for (const auto& aggregate_and_update_state : update_states) {
+    const AggregateUpdateState& update_state =
+        aggregate_and_update_state.second;
+
+    for (const auto& aggregates_and_capacity :
+         update_state.competing_aggregates) {
+      for (const auto& aggregate_and_fraction :
+           aggregates_and_capacity.aggregates) {
+        const AggregateId& competing_aggregate = aggregate_and_fraction.first;
+        if (nc::ContainsKey(out, competing_aggregate)) {
+          continue;
+        }
+
+        out.emplace(competing_aggregate,
+                    nc::FindOrDieNoPrint(all_histories, competing_aggregate));
+      }
+    }
+  }
+
+  return out;
+}
+
 void Controller::CommitPendingOutput(RoundState* round_state) {
   std::map<AggregateId, AggregateUpdateState>& pending_output =
       round_state->pending_output;
@@ -355,7 +389,7 @@ void Controller::CommitPendingOutput(RoundState* round_state) {
 
     auto message_to_send = nc::GetFreeList<TLDRUpdate>().New(
         node->tldr_address, controller_ip_, event_queue_->CurrentTime(),
-        update_map);
+        update_map, GetHistoryMapForUpdate(round_state->histories, update_map));
     node->to_tldr->HandlePacket(std::move(message_to_send));
   }
 }

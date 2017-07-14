@@ -17,11 +17,13 @@
 #include "ncode_common/src/htsim/packet.h"
 #include "ncode_common/src/net/net_common.h"
 #include "common.h"
+#include "prob_model/dist_model.h"
 
 namespace ctr {
 
 struct TLDRConfig {
   TLDRConfig(const nc::ThresholdEnforcerPolicy& threshold_enforcer_policy,
+             const ProbModelConfig& prob_model_config,
              nc::net::IPAddress ip_src, nc::net::IPAddress ip_switch_dst,
              nc::net::IPAddress ip_controller_dst,
              std::chrono::milliseconds round_len,
@@ -35,8 +37,8 @@ struct TLDRConfig {
         threshold_enforcer_policy(threshold_enforcer_policy),
         switch_poll_period(switch_poll_period),
         flow_count_sample_n(flow_count_sample_n),
-        disable_fast_optimization_requests(disable_fast_optimization_requests) {
-  }
+        disable_fast_optimization_requests(disable_fast_optimization_requests),
+        prob_model_config(prob_model_config) {}
 
   // All messages will have this address as source.
   nc::net::IPAddress ip_src;
@@ -61,6 +63,8 @@ struct TLDRConfig {
 
   // If true will disable optimization requests within the period.
   bool disable_fast_optimization_requests;
+
+  ProbModelConfig prob_model_config;
 };
 
 // Bins data to later be fed to the LDR estimator.
@@ -137,10 +141,6 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
     // needed the cached value is used.
     uint64_t cached_flow_count;
 
-    // Triggered optimization requests are allowed only if the max rate is above
-    // this watermark value.
-    nc::net::Bandwidth watermark;
-
     // The most recent update sent from the central controller. This contains
     // per-path limits.
     std::unique_ptr<AggregateUpdateState> most_recent_update;
@@ -162,19 +162,22 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
 
   // Updates the per-path bps limit metrics.
   void UpdateRateLimitMetrics(
-      const std::vector<AggregateUpdateState>& aggregates);
+      const std::map<AggregateId, AggregateUpdateState>& aggregates);
 
   void HandleUpdate(const TLDRUpdate& update);
 
   void UpdateTagToAggregateId(
-      const std::vector<AggregateUpdateState>& aggregates);
+      const std::map<AggregateId, AggregateUpdateState>& aggregates);
 
   void RepackPaths(const AggregateUpdateState& aggregate_update_state);
 
-  void RepackPaths(const std::vector<AggregateUpdateState>& aggregates);
+  void RepackPaths(
+      const std::map<AggregateId, AggregateUpdateState>& aggregates);
 
   void UpdateAggregateState(
-      const std::vector<AggregateUpdateState>& aggregates);
+      const std::map<AggregateId, AggregateUpdateState>& aggregates,
+      const std::map<AggregateId, AggregateHistory>&
+          competing_aggregate_histories);
 
   // Returns the fractional change (in range 0-1) of a path's fraction from the
   // currently assigned fraction.
@@ -187,6 +190,14 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
   void HandleStatsReplyNoFlowCounts(const nc::htsim::SSCPStatsReply& reply);
 
   void HandleStatsReplyFlowCounts(const nc::htsim::SSCPStatsReply& reply);
+
+  // Checks against competing aggregates whether the most recent history, when
+  // combined with the histories of competing aggregates is likely to cause
+  // congestion.
+  bool LikelyToGoOverCapacity(
+      const AggregateId& aggregate_id,
+      const AggregateHistory& most_recent_history,
+      const AggregateUpdateState& most_recent_update_state);
 
   // A copy of the initial config.
   const TLDRConfig tldr_config_;
@@ -203,6 +214,10 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
 
   // Internal per-aggregate state, indexed by aggregate id.
   std::map<AggregateId, TLDRAggregateState> id_to_aggregate_state_;
+
+  // The histories of competing aggregates are stored here.
+  std::map<AggregateId, AggregateHistory>
+      most_recent_competing_aggregate_histories_;
 
   // The graph.
   const nc::net::GraphStorage* graph_;

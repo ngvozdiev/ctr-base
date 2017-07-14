@@ -207,6 +207,31 @@ class RoutingConfiguration : public TrafficMatrix {
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;
 };
 
+// A set of aggregates that share capacity.
+struct AggregatesAndCapacity {
+  // Aggregates and fractions.
+  std::vector<std::pair<AggregateId, double>> aggregates;
+
+  // Capacity.
+  nc::net::Bandwidth capacity;
+};
+
+// For each aggregate, a set of other aggregates it shares capacity with.
+class CompetingAggregates {
+ public:
+  void AddAggregatesAndCapacity(
+      const AggregateId& aggregate_id,
+      const std::vector<AggregatesAndCapacity>& aggregates_and_capacity);
+
+  const std::map<AggregateId, std::vector<AggregatesAndCapacity>>& aggregates()
+      const {
+    return aggregates_;
+  }
+
+ private:
+  std::map<AggregateId, std::vector<AggregatesAndCapacity>> aggregates_;
+};
+
 // For an aggregate combines binned history and flow count. The history spans
 // bin_size * bins.size() time.
 class AggregateHistory {
@@ -358,8 +383,10 @@ struct AggregateUpdateState {
   // Paths in the aggregate.
   std::vector<PathUpdateState> paths;
 
-  // If traffic exceeds this limit, a quick update is triggered.
-  nc::net::Bandwidth limit;
+  // For each path in paths, a set of aggregates the path competes with and
+  // capacity it competed for. Used when determining whether to trigger
+  // optimization or not. If empty will never trigger optimizations.
+  std::vector<AggregatesAndCapacity> competing_aggregates;
 };
 
 // Message sent from the controller to the observer. Has for each aggregate the
@@ -371,17 +398,29 @@ class TLDRUpdate : public ::nc::htsim::Message {
   TLDRUpdate(
       nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
       nc::EventQueueTime time_sent,
-      const std::map<AggregateId, AggregateUpdateState>& aggregate_updates);
+      const std::map<AggregateId, AggregateUpdateState>& aggregate_updates,
+      const std::map<AggregateId, AggregateHistory>& additional_histories);
 
-  const std::vector<AggregateUpdateState>& aggregates() const;
+  const std::map<AggregateId, AggregateUpdateState>& aggregates() const {
+    return aggregates_;
+  }
+
+  const std::map<AggregateId, AggregateHistory>& additional_histories() const {
+    return additional_histories_;
+  }
 
   nc::htsim::PacketPtr Duplicate() const override;
 
   std::string ToString() const override;
 
  private:
-  // Each aggregate's paths.
-  std::vector<AggregateUpdateState> aggregates_;
+  // Each aggregate's paths. There will be an AggregateUpdateState for each
+  // aggregate controlled by the TLDR this update is for.
+  std::map<AggregateId, AggregateUpdateState> aggregates_;
+
+  // Histories of aggregates that compete with any of the aggregates_'s paths.
+  // Used when determining when to trigger updates.
+  std::map<AggregateId, AggregateHistory> additional_histories_;
 };
 
 }  // namespace ctr

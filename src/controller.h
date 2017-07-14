@@ -156,7 +156,8 @@ class Controller : public ::nc::htsim::PacketHandler {
 
   // Generates AggregateUpdateStates from a RoutingConfiguration.
   std::map<AggregateId, AggregateUpdateState> RoutingToUpdateState(
-      const RoutingConfiguration& routing_config);
+      const RoutingConfiguration& routing_config,
+      const CompetingAggregates& competing_aggregates);
 
   // Generates new tags for paths or returns old ones.
   uint32_t TagForPath(const nc::net::Walk* path);

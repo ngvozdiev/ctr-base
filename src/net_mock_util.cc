@@ -404,7 +404,7 @@ int main(int argc, char** argv) {
       FLAGS_simulate_initial_handshake;
 
   nc::ThresholdEnforcerPolicy te_policy;
-  ctr::TLDRConfig tldr_config(te_policy, nc::htsim::kWildIPAddress,
+  ctr::TLDRConfig tldr_config(te_policy, {}, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,
                               round_duration, poll_period, 100,
                               FLAGS_disable_fast_optimization_requests);

@@ -162,6 +162,13 @@ void RoutingConfiguration::AddRouteAndFraction(
   configuration_[aggregate_id] = routes_and_fractions;
 }
 
+void CompetingAggregates::AddAggregatesAndCapacity(
+    const AggregateId& aggregate_id,
+    const std::vector<AggregatesAndCapacity>& aggregates_and_capacity) {
+  CHECK(!nc::ContainsKey(aggregates_, aggregate_id));
+  aggregates_[aggregate_id] = aggregates_and_capacity;
+}
+
 const std::vector<RouteAndFraction>& RoutingConfiguration::FindRoutesOrDie(
     const AggregateId& aggregate_id) const {
   return nc::FindOrDieNoPrint(configuration_, aggregate_id);
@@ -730,23 +737,16 @@ nc::htsim::PacketPtr TLDRTriggerReoptimize::Duplicate() const {
 TLDRUpdate::TLDRUpdate(
     nc::net::IPAddress ip_src, nc::net::IPAddress ip_dst,
     nc::EventQueueTime time_sent,
-    const std::map<AggregateId, AggregateUpdateState>& aggregate_updates)
-    : ::nc::htsim::Message(ip_src, ip_dst, kTLDRUpdateType, time_sent) {
-  nc::AppendValuesFromMap(aggregate_updates, &aggregates_);
-}
-
-const std::vector<AggregateUpdateState>& TLDRUpdate::aggregates() const {
-  return aggregates_;
-}
+    const std::map<AggregateId, AggregateUpdateState>& aggregate_updates,
+    const std::map<AggregateId, AggregateHistory>& additional_histories)
+    : ::nc::htsim::Message(ip_src, ip_dst, kTLDRUpdateType, time_sent),
+      aggregates_(aggregate_updates),
+      additional_histories_(additional_histories) {}
 
 nc::htsim::PacketPtr TLDRUpdate::Duplicate() const {
-  std::map<AggregateId, AggregateUpdateState> id_to_aggregate;
-  for (const auto& aggregate : aggregates_) {
-    id_to_aggregate.emplace(aggregate.aggregate_id, aggregate);
-  }
-
-  return nc::GetFreeList<TLDRUpdate>().New(
-      five_tuple_.ip_src(), five_tuple_.ip_dst(), time_sent(), id_to_aggregate);
+  return nc::GetFreeList<TLDRUpdate>().New(five_tuple_.ip_src(),
+                                           five_tuple_.ip_dst(), time_sent(),
+                                           aggregates_, additional_histories_);
 }
 
 std::string TLDRUpdate::ToString() const {

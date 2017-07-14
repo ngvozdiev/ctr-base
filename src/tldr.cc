@@ -10,13 +10,6 @@
 
 namespace ctr {
 
-static auto* kAggregateRateLimitMetric =
-    nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<double, std::string, std::string>(
-            "tldr_aggregate_rate_limit",
-            "Rate limit of the aggregate sent to the switch (in Mbps)",
-            "aggregate source", "aggregate destination");
-
 static auto* kPathFractionMetric =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
         "tldr_path_fraction", "Fraction sent to the switch", "path");
@@ -103,6 +96,47 @@ static bool MessageContainsFlowCounts(
   return false;
 }
 
+bool TLDR::LikelyToGoOverCapacity(
+    const AggregateId& aggregate_id,
+    const AggregateHistory& most_recent_history,
+    const AggregateUpdateState& most_recent_update_state) {
+  if (most_recent_update_state.competing_aggregates.empty()) {
+    return false;
+  }
+
+  ProbModel prob_model(tldr_config_.prob_model_config);
+  prob_model.AddAggregate(aggregate_id, &most_recent_history);
+  for (const auto& id_and_history :
+       most_recent_competing_aggregate_histories_) {
+    prob_model.AddAggregate(id_and_history.first, &id_and_history.second);
+  }
+
+  std::vector<ProbModelQuery> queries;
+  for (size_t i = 0; i < most_recent_update_state.paths.size(); ++i) {
+    const PathUpdateState& path_update_state =
+        most_recent_update_state.paths[i];
+    const AggregatesAndCapacity& competing_aggregates =
+        most_recent_update_state.competing_aggregates[i];
+    double fraction_on_path = path_update_state.route_and_fraction.second;
+
+    queries.emplace_back();
+    ProbModelQuery& query = queries.back();
+    query.rate = competing_aggregates.capacity;
+    query.type = ProbModelQuery::BOTH;
+    query.aggregates = competing_aggregates.aggregates;
+    query.aggregates.emplace_back(aggregate_id, fraction_on_path);
+  }
+
+  std::vector<ProbModelReply> replies = prob_model.Query(queries);
+  for (const auto& reply : replies) {
+    if (!reply.fit) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void TLDR::HandleStatsReplyNoFlowCounts(
     const nc::htsim::SSCPStatsReply& stats_message) {
   std::map<AggregateId, uint64_t> id_to_bytes_matched;
@@ -141,27 +175,14 @@ void TLDR::HandleStatsReplyNoFlowCounts(
       continue;
     }
 
-    if (aggregate_state.watermark > nc::net::Bandwidth::Zero()) {
-      if (history.mean_rate() < aggregate_state.watermark) {
-        continue;
-      }
-
-      double delta_f = (history.mean_rate() - aggregate_state.watermark) /
-                       aggregate_state.watermark;
-      if (delta_f < 0.05) {
-        continue;
-      }
-    }
-    aggregate_state.watermark = history.mean_rate();
-
     CHECK(aggregate_state.most_recent_update);
-    nc::net::Bandwidth rate_limit = aggregate_state.most_recent_update->limit;
-    if (history.mean_rate() > rate_limit) {
-      LOG(ERROR) << "Need update at " << id() << " aggregate id "
-                 << aggregate_id.ToString(*graph_) << " mean rate is "
-                 << history.mean_rate().Mbps() << "Mbps rate limit is "
-                 << rate_limit.Mbps() << "Mbps";
+    if (LikelyToGoOverCapacity(aggregate_id, history,
+                               *aggregate_state.most_recent_update)) {
       need_update = true;
+      LOG(INFO) << "Need update at " << id() << " aggregate id "
+                << aggregate_id.ToString(*graph_);
+
+      break;
     }
   }
 
@@ -208,7 +229,6 @@ void TLDR::HandleStatsReplyFlowCounts(
         nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate_id);
     aggregate_state.binner->AddBin(bytes_matched);
     aggregate_state.cached_flow_count = flow_count;
-    aggregate_state.watermark = nc::net::Bandwidth::Zero();
   }
 
   SendRequestToController(false);
@@ -315,41 +335,42 @@ void TLDR::HandleEvent() {
 
 void TLDR::HandleUpdate(const TLDRUpdate& update) {
   LOG(INFO) << "Rx " << update.ToString();
-  UpdateAggregateState(update.aggregates());
+  UpdateAggregateState(update.aggregates(), update.additional_histories());
   UpdateTagToAggregateId(update.aggregates());
   RepackPaths(update.aggregates());
   UpdateRateLimitMetrics(update.aggregates());
 }
 
 void TLDR::UpdateTagToAggregateId(
-    const std::vector<AggregateUpdateState>& aggregates) {
-  for (const AggregateUpdateState& aggregate : aggregates) {
-    for (const PathUpdateState& path : aggregate.paths) {
+    const std::map<AggregateId, AggregateUpdateState>& aggregates) {
+  for (const auto& id_and_update_state : aggregates) {
+    const AggregateId& id = id_and_update_state.first;
+    const AggregateUpdateState& update_state = id_and_update_state.second;
+
+    for (const PathUpdateState& path : update_state.paths) {
       AggregateId* current_id = nc::FindOrNull(tag_to_aggregate_id_, path.tag);
       if (current_id != nullptr) {
-        CHECK(aggregate.aggregate_id == *current_id)
-            << "Id/tag mismatch: " << aggregate.aggregate_id.ToString(*graph_)
-            << " vs " << current_id->ToString(*graph_) << " for path tag "
-            << path.tag;
+        CHECK(id == *current_id) << "Id/tag mismatch: " << id.ToString(*graph_)
+                                 << " vs " << current_id->ToString(*graph_)
+                                 << " for path tag " << path.tag;
       }
 
       nc::htsim::PacketTag tag(path.tag);
-      tag_to_aggregate_id_.emplace(tag, aggregate.aggregate_id);
+      tag_to_aggregate_id_.emplace(tag, id);
     }
   }
 }
 
 void TLDR::UpdateRateLimitMetrics(
-    const std::vector<AggregateUpdateState>& aggregates) {
-  for (const AggregateUpdateState& aggregate : aggregates) {
-    AggregateId id = aggregate.aggregate_id;
+    const std::map<AggregateId, AggregateUpdateState>& aggregates) {
+  for (const auto& id_and_update_state : aggregates) {
+    const AggregateId& id = id_and_update_state.first;
+    const AggregateUpdateState& update_state = id_and_update_state.second;
 
     std::string src = graph_->GetNode(id.src())->id();
     std::string dst = graph_->GetNode(id.dst())->id();
-    kAggregateRateLimitMetric->GetHandle(src, dst)
-        ->AddValue(aggregate.limit.Mbps());
 
-    for (const PathUpdateState& path : aggregate.paths) {
+    for (const PathUpdateState& path : update_state.paths) {
       const nc::net::Walk* graph_path = path.route_and_fraction.first;
       double fraction = path.route_and_fraction.second;
 
@@ -377,10 +398,6 @@ void TLDR::RepackPaths(const AggregateUpdateState& aggregate) {
   TLDRAggregateState& current_state =
       nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate.aggregate_id);
 
-  CHECK(aggregate.limit > nc::net::Bandwidth::Zero())
-      << "Aggregate with zero total limit "
-      << aggregate.aggregate_id.ToString(*graph_) << " paths "
-      << aggregate.paths.size();
   std::map<nc::htsim::PacketTag, double> tag_to_fraction;
   for (const PathUpdateState& path_state : aggregate.paths) {
     tag_to_fraction[path_state.tag] = path_state.route_and_fraction.second;
@@ -422,18 +439,20 @@ void TLDR::RepackPaths(const AggregateUpdateState& aggregate) {
   to_switch_->HandlePacket(std::move(route_update));
 }
 
-void TLDR::RepackPaths(const std::vector<AggregateUpdateState>& aggregates) {
-  for (const AggregateUpdateState& aggregate : aggregates) {
-    nc::htsim::MatchRuleKey key = aggregate.key;
-    RepackPaths(aggregate);
+void TLDR::RepackPaths(
+    const std::map<AggregateId, AggregateUpdateState>& aggregates) {
+  for (const auto& id_and_aggregate : aggregates) {
+    RepackPaths(id_and_aggregate.second);
   }
 }
 
 void TLDR::UpdateAggregateState(
-    const std::vector<AggregateUpdateState>& aggregates) {
+    const std::map<AggregateId, AggregateUpdateState>& aggregates,
+    const std::map<AggregateId, AggregateHistory>&
+        competing_aggregate_histories) {
   std::set<AggregateId> ids_in_update;
-  for (const AggregateUpdateState& aggregate : aggregates) {
-    AggregateId id = aggregate.aggregate_id;
+  for (const auto& id_and_update_state : aggregates) {
+    const AggregateId& id = id_and_update_state.first;
     ids_in_update.insert(id);
 
     TLDRAggregateState* state_to_update;
@@ -448,12 +467,16 @@ void TLDR::UpdateAggregateState(
       state_to_update->binner =
           nc::make_unique<VariableBinBinner>(event_queue(), true);
       state_to_update->cached_flow_count = 1;
-      state_to_update->watermark = nc::net::Bandwidth::Zero();
       LOG(INFO) << "Added state for aggregate " << id.ToString(*graph_);
     }
 
     state_to_update->most_recent_update =
-        nc::make_unique<AggregateUpdateState>(aggregate);
+        nc::make_unique<AggregateUpdateState>(id_and_update_state.second);
+  }
+
+  for (const auto& id_and_history : competing_aggregate_histories) {
+    most_recent_competing_aggregate_histories_.emplace(id_and_history.first,
+                                                       id_and_history.second);
   }
 
   for (auto it = id_to_aggregate_state_.begin();
