@@ -102,7 +102,9 @@ class Controller : public ::nc::htsim::PacketHandler {
     return id_to_aggregate_state_;
   }
 
-  const nc::net::Walk* PathForTagOrDie(uint32_t tag) const;
+  const nc::net::Walk* PathForTagOrDie(nc::htsim::PacketTag tag) const;
+
+  const nc::net::Walk* PathForTagOrNull(nc::htsim::PacketTag tag) const;
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 
@@ -160,9 +162,9 @@ class Controller : public ::nc::htsim::PacketHandler {
       const CompetingAggregates& competing_aggregates);
 
   // Generates new tags for paths or returns old ones.
-  uint32_t TagForPath(const nc::net::Walk* path);
+  nc::htsim::PacketTag TagForPath(const nc::net::Walk* path);
 
-  uint32_t TagForPathOrDie(const nc::net::Walk* path) const;
+  nc::htsim::PacketTag TagForPathOrDie(const nc::net::Walk* path) const;
 
   // All traffic originating from the controller will have this ip.
   const nc::net::IPAddress controller_ip_;
@@ -202,8 +204,10 @@ class Controller : public ::nc::htsim::PacketHandler {
     }
   };
 
-  // Per-path tag.
-  std::map<const nc::net::Walk*, uint32_t, WalkPtrComparator> path_to_tag_;
+  // Per-path tags.
+  std::map<const nc::net::Walk*, nc::htsim::PacketTag, WalkPtrComparator>
+      path_to_tag_;
+  std::map<nc::htsim::PacketTag, const nc::net::Walk*> tag_to_path_;
 
   const nc::net::GraphStorage* graph_;
 };
@@ -436,8 +440,11 @@ class NetworkContainer {
   void AddTCPFlowGroup(const AggregateId& id, const TCPFlowGroup& flow_group);
 
   // Adds all devices and links from the graph to the container. Will construct
-  // devices using the device factory.
-  void AddElementsFromGraph(DeviceFactory* device_factory);
+  // devices using the device factory. If external_internal_observer is not null
+  // will add it to all devices.
+  void AddElementsFromGraph(
+      DeviceFactory* device_factory,
+      nc::htsim::PacketObserver* external_internal_observer = nullptr);
 
   // Inializes the controller with per-aggregate state.
   void InitAggregatesInController();

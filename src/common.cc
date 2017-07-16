@@ -757,4 +757,25 @@ std::string TLDRUpdate::ToString() const {
   return out;
 }
 
+ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
+                                             std::chrono::milliseconds bin_size,
+                                             std::chrono::milliseconds duration,
+                                             size_t flow_count) {
+  size_t bin_size_ms = bin_size.count();
+  size_t init_window_ms = duration.count();
+  size_t bins_count = init_window_ms / bin_size_ms;
+
+  double bins_in_second = 1000.0 / bin_size_ms;
+  CHECK(bins_in_second > 0);
+  double bytes_per_bin = (rate.bps() / 8.0) / bins_in_second;
+  CHECK(bytes_per_bin > 0);
+
+  std::vector<uint64_t> bins;
+  for (size_t i = 0; i < bins_count; ++i) {
+    bins.emplace_back(bytes_per_bin);
+  }
+
+  return {bins, std::chrono::milliseconds(bin_size_ms), flow_count};
+}
+
 }  // namespace ctr

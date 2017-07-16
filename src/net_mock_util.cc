@@ -70,86 +70,6 @@ DEFINE_bool(pin_max, false,
             "scaling of aggregates before optimization. All aggregates will "
             "take their max level.");
 
-template <typename T>
-static void PrintTimeDiff(std::ostream& out, T chrono_diff) {
-  namespace sc = std::chrono;
-  auto diff = sc::duration_cast<sc::milliseconds>(chrono_diff).count();
-  auto const msecs = diff % 1000;
-  diff /= 1000;
-  auto const secs = diff % 60;
-  diff /= 60;
-  auto const mins = diff % 60;
-  diff /= 60;
-  auto const hours = diff % 24;
-  diff /= 24;
-  auto const days = diff;
-
-  bool printed_earlier = false;
-  if (days >= 1) {
-    printed_earlier = true;
-    out << days << (1 != days ? " days" : " day") << ' ';
-  }
-  if (printed_earlier || hours >= 1) {
-    printed_earlier = true;
-    out << hours << (1 != hours ? " hours" : " hour") << ' ';
-  }
-  if (printed_earlier || mins >= 1) {
-    printed_earlier = true;
-    out << mins << (1 != mins ? " minutes" : " minute") << ' ';
-  }
-  if (printed_earlier || secs >= 1) {
-    printed_earlier = true;
-    out << secs << (1 != secs ? " seconds" : " second") << ' ';
-  }
-  if (printed_earlier || msecs >= 1) {
-    printed_earlier = true;
-    out << msecs << (1 != msecs ? " milliseconds" : " millisecond");
-  }
-}
-
-static std::chrono::milliseconds TimeNow() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::high_resolution_clock::now().time_since_epoch());
-}
-
-class ProgressIndicator : public nc::EventConsumer {
- public:
-  ProgressIndicator(std::chrono::milliseconds update_period,
-                    nc::EventQueue* event_queue)
-      : nc::EventConsumer("ProgressIndicator", event_queue),
-        period_(event_queue->ToTime(update_period)),
-        init_real_time_(TimeNow()) {
-    EnqueueIn(period_);
-  }
-
-  void HandleEvent() override {
-    double progress = event_queue()->Progress();
-    CHECK(progress >= 0 && progress <= 1.0);
-    std::cout << "\rProgress: " << std::setprecision(3) << (progress * 100.0)
-              << "% ";
-
-    auto real_time_delta = TimeNow() - init_real_time_;
-    if (real_time_delta.count() > 0) {
-      std::cout << "time remaining: ";
-      auto remaining = std::chrono::milliseconds(static_cast<uint64_t>(
-          real_time_delta.count() / progress * (1 - progress)));
-
-      PrintTimeDiff(std::cout, remaining);
-      std::cout << "                ";
-    }
-
-    std::cout << std::flush;
-    EnqueueIn(period_);
-  }
-
- private:
-  // How often (in simulated time) to update the indicator.
-  nc::EventQueueTime period_;
-
-  // The initial time.
-  std::chrono::milliseconds init_real_time_;
-};
-
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
 static nc::EventQueue* event_queue_global_ptr;
@@ -160,26 +80,6 @@ void CustomLogHandler(nc::LogLevel level, const char* filename, int line,
       event_queue_global_ptr->CurrentTime());
   std::string new_message = nc::StrCat(time_as_ms, "ms ", message);
   nc::DefaultLogHandler(level, filename, line, new_message, color);
-}
-
-// Returns an aggregate history that will have a given mean rate.
-static ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
-                                             size_t flow_count) {
-  size_t bin_size_ms = FLAGS_history_bin_size_ms;
-  size_t init_window_ms = FLAGS_period_duration_ms;
-  size_t bins_count = init_window_ms / bin_size_ms;
-
-  double bins_in_second = 1000.0 / bin_size_ms;
-  CHECK(bins_in_second > 0);
-  double bytes_per_bin = (rate.bps() / 8.0) / bins_in_second;
-  CHECK(bytes_per_bin > 0);
-
-  std::vector<uint64_t> bins;
-  for (size_t i = 0; i < bins_count; ++i) {
-    bins.emplace_back(bytes_per_bin);
-  }
-
-  return {bins, std::chrono::milliseconds(bin_size_ms), flow_count};
 }
 
 static std::map<ctr::AggregateId, size_t> GetTCPTracerFlowCounts(
@@ -239,13 +139,20 @@ static void HandleDefault(
                                   bin_sequence);
 
     // Will also add the reverse aggregate for ACKs.
-    auto ack_history =
-        GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100), 10);
+    auto ack_history = ctr::GetDummyHistory(
+        nc::net::Bandwidth::FromKBitsPerSecond(100),
+        std::chrono::milliseconds(FLAGS_history_bin_size_ms),
+        std::chrono::milliseconds(FLAGS_period_duration_ms), 10);
     network_container->AddAggregate(id.Reverse(), ack_history);
   }
 
+  // Records per-path stats.
+  ctr::InputPacketObserver packet_observer(network_container->controller(),
+                                           std::chrono::milliseconds(10),
+                                           event_queue);
+
   // Now that the device factory is ready, we can initialize the container.
-  network_container->AddElementsFromGraph(&device_factory);
+  network_container->AddElementsFromGraph(&device_factory, &packet_observer);
 
   // With devices and queues in place we can add flow groups to the container.
   for (const auto& id_and_bin_sequence : initial_sequences) {
@@ -295,8 +202,13 @@ static void HandleQuick(
                                   bin_sequence);
   }
 
+  // Records per-path stats.
+  ctr::InputPacketObserver packet_observer(network_container->controller(),
+                                           std::chrono::milliseconds(10),
+                                           event_queue);
+
   // Now that the device factory is ready, we can initialize the container.
-  network_container->AddElementsFromGraph(&device_factory);
+  network_container->AddElementsFromGraph(&device_factory, &packet_observer);
   network_container->InitAggregatesInController();
 
   ctr::NetInstrument net_instrument(network_container->internal_queues(),
@@ -355,6 +267,7 @@ int main(int argc, char** argv) {
         std::piecewise_construct,
         std::forward_as_tuple(matrix_element.src, matrix_element.dst),
         std::forward_as_tuple(bin_sequence));
+    break;
   }
 
   ctr::PathProvider path_provider(&graph);
@@ -411,8 +324,8 @@ int main(int argc, char** argv) {
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &event_queue);
 
-  ProgressIndicator progress_indicator(std::chrono::milliseconds(100),
-                                       &event_queue);
+  nc::htsim::ProgressIndicator progress_indicator(
+      std::chrono::milliseconds(100), &event_queue);
   if (FLAGS_quick) {
     HandleQuick(initial_sequences, graph, poll_period, round_duration,
                 &event_queue, &network_container);

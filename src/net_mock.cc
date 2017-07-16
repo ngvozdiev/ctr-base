@@ -47,7 +47,7 @@ void MockDevice::HandleStateUpdate(const nc::htsim::SSCPAddOrUpdate& update) {
     CHECK(tag.IsNotZero());
     tags_in_actions.emplace(tag);
 
-    const nc::net::Walk* path = controller_->PathForTagOrDie(tag.Raw());
+    const nc::net::Walk* path = controller_->PathForTagOrDie(tag);
     double fraction = action->weight() / total_weight;
 
     auto it_and_bool = state->paths.emplace(

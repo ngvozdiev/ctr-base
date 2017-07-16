@@ -90,6 +90,9 @@ target_link_libraries(pcap_data_util ctr_base)
 add_executable(net_mock_util src/net_mock_util)
 target_link_libraries(net_mock_util ctr_base)
 
+add_executable(ladder_tcp_util src/ladder_tcp_util)
+target_link_libraries(ladder_tcp_util ctr_base)
+
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)
    add_test_exec(dist_model_test src/prob_model/dist_model_test.cc ctr_base)

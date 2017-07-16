@@ -2,18 +2,20 @@
 
 #include <stddef.h>
 #include <algorithm>
-#include <cstdint>
 #include <iostream>
 
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/packet.h"
+#include "ncode_common/src/htsim/match.h"
+#include "ncode_common/src/logging.h"
 #include "ncode_common/src/net/net_common.h"
+#include "controller.h"
 #include "metrics/metrics.h"
 
 namespace ctr {
 
 constexpr char NetInstrument::kNetInstrumentId[];
+constexpr char InputPacketObserver::kUntaggedPathId[];
 
 static auto* queue_size_pkts =
     nc::metrics::DefaultMetricManager()
@@ -80,6 +82,16 @@ static auto* tcp_source_close_count =
             "Number of times the TCP connection has gone through slow-start",
             "IP source", "IP destination", "TCP source port",
             "TCP destination port");
+
+static auto* kPathBytesMetric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string>(
+            "path_bytes_seed", "Bytes through a path", "Path");
+
+static auto* kPathPktsMetric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string>(
+            "path_pkts_seed", "Packets through a path", "Path");
 
 static std::chrono::milliseconds GetQueueSizeMs(
     const nc::htsim::QueueStats& stats, nc::net::Bandwidth rate) {
@@ -151,6 +163,43 @@ NetInstrument::NetInstrument(
   }
 
   EnqueueIn(event_queue->ToTime(period_));
+}
+
+InputPacketObserver::InputPacketObserver(
+    const controller::Controller* controller,
+    std::chrono::milliseconds record_period, nc::EventQueue* event_queue)
+    : EventConsumer("InputPacketObserver", event_queue),
+      period_(record_period),
+      controller_(controller) {
+  EnqueueIn(event_queue->ToTime(period_));
+}
+
+void InputPacketObserver::HandleEvent() {
+  Record();
+  EnqueueIn(event_queue()->ToTime(period_));
+}
+
+void InputPacketObserver::ObservePacket(const nc::htsim::Packet& pkt) {
+  CHECK(pkt.tag() != nc::htsim::kWildPacketTag);
+
+  BytesAndPackets& bytes_and_packets = tag_to_per_path_state_[pkt.tag()];
+  bytes_and_packets.first += pkt.size_bytes();
+  ++bytes_and_packets.second;
+}
+
+void InputPacketObserver::Record() {
+  for (const auto& tag_and_path_state : tag_to_per_path_state_) {
+    nc::htsim::PacketTag tag = tag_and_path_state.first;
+    const BytesAndPackets& bytes_and_packets = tag_and_path_state.second;
+
+    const nc::net::Walk* path = controller_->PathForTagOrNull(tag);
+    std::string path_str = path == nullptr
+                               ? kUntaggedPathId
+                               : path->ToStringNoPorts(*controller_->graph());
+
+    kPathBytesMetric->GetHandle(path_str)->AddValue(bytes_and_packets.first);
+    kPathPktsMetric->GetHandle(path_str)->AddValue(bytes_and_packets.second);
+  }
 }
 
 }  // namespace ctr

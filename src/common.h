@@ -287,6 +287,12 @@ class AggregateHistory {
   uint64_t flow_count_;
 };
 
+// Returns an aggregate history that will have a given mean rate.
+ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
+                                      std::chrono::milliseconds bin_size,
+                                      std::chrono::milliseconds duration,
+                                      size_t flow_count);
+
 // Message from TLDR to the controller. This is essentially a request for
 // capacity. For each aggregate that TLDR's endpoint controls there is the bins
 // seen over the last period.

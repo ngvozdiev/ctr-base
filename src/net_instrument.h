@@ -2,10 +2,20 @@
 #define NET_INSTRUMENT
 
 #include <chrono>
+#include <cstdint>
+#include <map>
+#include <utility>
 #include <vector>
 
+#include "ncode_common/src/htsim/packet.h"
 #include "ncode_common/src/htsim/queue.h"
 #include "ncode_common/src/htsim/tcp.h"
+
+namespace ctr {
+namespace controller {
+class Controller;
+} /* namespace controller */
+} /* namespace ctr */
 
 namespace ctr {
 
@@ -31,6 +41,41 @@ class NetInstrument : public nc::EventConsumer {
 
   // The queues to poll.
   std::vector<const nc::htsim::Queue*> queues_;
+};
+
+// A simple component that records per-path packets per period and bits per
+// period. It observes all packets that enter the network. It assumes that all
+// packets that it sees are tagged with a path's tag. It maintains separate
+// metrics for packets with preferential dropping and packets without. Also
+// updates the flow recorder.
+class InputPacketObserver : public nc::EventConsumer,
+                            public nc::htsim::PacketObserver {
+ public:
+  // Will use this as a path string for paths that have no tag.
+  static constexpr char kUntaggedPathId[] = "Untagged";
+
+  InputPacketObserver(const controller::Controller* controller,
+                      std::chrono::milliseconds record_period,
+                      nc::EventQueue* event_queue);
+
+  void ObservePacket(const nc::htsim::Packet& pkt) override;
+
+  void HandleEvent() override;
+
+ private:
+  using BytesAndPackets = std::pair<uint64_t, uint64_t>;
+
+  // Records per-path stats.
+  void Record();
+
+  // How often to record path stats.
+  const std::chrono::milliseconds period_;
+
+  // Relates packet tags to paths.
+  const controller::Controller* controller_;
+
+  // Indexed by tag value.
+  std::map<nc::htsim::PacketTag, BytesAndPackets> tag_to_per_path_state_;
 };
 
 }  // namespace ctr

@@ -369,7 +369,7 @@ RoutingSystem::CheckWithProbModel(
     for (const auto& route_and_fraction : routes) {
       const nc::net::Walk* walk = route_and_fraction.first;
 
-      double max_capacity_fraction = std::numeric_limits<double>::min();
+      double max_capacity_fraction = -1;
       nc::net::GraphLinkIndex link_most_likely_to_congest;
 
       // Need to find the most likely to congest link along the path, and
@@ -396,11 +396,12 @@ RoutingSystem::CheckWithProbModel(
           max_capacity_fraction = fraction;
         }
       }
-      CHECK(max_capacity_fraction != std::numeric_limits<double>::min());
+
       if (!aggregate_fits) {
         break;
       }
 
+      CHECK(max_capacity_fraction != -1);
       to_add.emplace_back();
       AggregatesAndCapacity& aggregates_and_capacity = to_add.back();
       aggregates_and_capacity.capacity =

@@ -67,7 +67,7 @@ void Controller::PopulatePathMessages(const AggregateId& id,
   // first link.
   nc::net::GraphLinkIndex first_link_index = links.front();
   DevicePortNumber input_port = graph_->GetLink(first_link_index)->dst_port();
-  PacketTag tag(TagForPathOrDie(path));
+  PacketTag tag = TagForPathOrDie(path);
   for (size_t i = 1; i < links.size(); ++i) {
     nc::net::GraphLinkIndex link_index = links[i];
     const nc::net::GraphLink* link = graph_->GetLink(link_index);
@@ -180,7 +180,7 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
       const nc::net::GraphLink* first_link = graph_->GetLink(first_link_index);
 
       nc::net::DevicePortNumber src_port = first_link->src_port();
-      nc::htsim::PacketTag tag(TagForPath(path));
+      nc::htsim::PacketTag tag = TagForPath(path);
       PathUpdateState path_update_state(tag, src_port, route_and_fraction);
       update_state.paths.emplace_back(path_update_state);
     }
@@ -200,18 +200,20 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
   return out;
 }
 
-uint32_t Controller::TagForPath(const nc::net::Walk* path) {
-  uint32_t* current_tag = nc::FindOrNull(path_to_tag_, path);
+nc::htsim::PacketTag Controller::TagForPath(const nc::net::Walk* path) {
+  nc::htsim::PacketTag* current_tag = nc::FindOrNull(path_to_tag_, path);
   if (current_tag != nullptr) {
     return *current_tag;
   }
 
-  uint32_t new_tag = path_to_tag_.size() + 1;
+  nc::htsim::PacketTag new_tag = nc::htsim::PacketTag(path_to_tag_.size() + 1);
   path_to_tag_.emplace(path, new_tag);
+  tag_to_path_.emplace(new_tag, path);
   return new_tag;
 }
 
-uint32_t Controller::TagForPathOrDie(const nc::net::Walk* path) const {
+nc::htsim::PacketTag Controller::TagForPathOrDie(
+    const nc::net::Walk* path) const {
   return nc::FindOrDieNoPrint(path_to_tag_, path);
 }
 
@@ -322,17 +324,14 @@ void Controller::HandlePacket(::nc::htsim::PacketPtr pkt) {
   }
 }
 
-const nc::net::Walk* Controller::PathForTagOrDie(uint32_t tag) const {
-  for (const auto& path_and_tag : path_to_tag_) {
-    const nc::net::Walk* path = path_and_tag.first;
-    uint32_t current_tag = path_and_tag.second;
-    if (current_tag == tag) {
-      return path;
-    }
-  }
+const nc::net::Walk* Controller::PathForTagOrDie(
+    nc::htsim::PacketTag tag) const {
+  return nc::FindOrDie(tag_to_path_, tag);
+}
 
-  LOG(FATAL) << "Unable to find tag for path";
-  return nullptr;
+const nc::net::Walk* Controller::PathForTagOrNull(
+    nc::htsim::PacketTag tag) const {
+  return nc::FindPtrOrNull(tag_to_path_, tag);
 }
 
 // Returns a map populated with the histories of all aggregates that compete
@@ -806,9 +805,9 @@ void NetworkContainer::AddDefaultRouteToDummyHandler(
   AddDefaultRoute(device_ptr, port->number(), nc::htsim::kDefaultTag);
 }
 
-void NetworkContainer::AddElementsFromGraph(DeviceFactory* device_factory) {
-  std::map<std::string, nc::htsim::Device*> devices;
-
+void NetworkContainer::AddElementsFromGraph(
+    DeviceFactory* device_factory,
+    nc::htsim::PacketObserver* external_internal_observer) {
   std::default_random_engine generator(config_.seed);
   std::uniform_int_distribution<size_t> tldr_device_dist(
       config_.min_delay_tldr_device.count(),
@@ -821,10 +820,16 @@ void NetworkContainer::AddElementsFromGraph(DeviceFactory* device_factory) {
   for (nc::net::GraphLinkIndex link : graph_->AllLinks()) {
     const nc::net::GraphLink* link_ptr = graph_->GetLink(link);
 
-    AddOrFindDevice(link_ptr->src_id(), &tldr_device_dist,
-                    &controller_tldr_dist, &generator, device_factory);
-    AddOrFindDevice(link_ptr->dst_id(), &tldr_device_dist,
-                    &controller_tldr_dist, &generator, device_factory);
+    nc::htsim::DeviceInterface* src_device =
+        AddOrFindDevice(link_ptr->src_id(), &tldr_device_dist,
+                        &controller_tldr_dist, &generator, device_factory);
+    nc::htsim::DeviceInterface* dst_device =
+        AddOrFindDevice(link_ptr->dst_id(), &tldr_device_dist,
+                        &controller_tldr_dist, &generator, device_factory);
+    if (external_internal_observer) {
+      src_device->AddExternalInternalObserver(external_internal_observer);
+      dst_device->AddExternalInternalObserver(external_internal_observer);
+    }
 
     uint64_t speed_bps = link_ptr->bandwidth().bps();
     uint64_t speed_Bps = speed_bps / 8.0;
