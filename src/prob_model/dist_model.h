@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/strutil.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/thread_runner.h"
 #include "../common.h"
@@ -154,6 +155,16 @@ struct ProbModelQuery {
 
   // Rate to test.
   nc::net::Bandwidth rate;
+
+  std::string ToString() const {
+    std::vector<std::string> pieces;
+    for (const auto& aggregate : aggregates) {
+      pieces.emplace_back(nc::StrCat(std::to_string(aggregate.first.src()), " ",
+                                     std::to_string(aggregate.first.dst()), " ",
+                                     std::to_string(aggregate.second)));
+    }
+    return nc::Join(pieces, ",");
+  }
 };
 
 struct ProbModelReply {

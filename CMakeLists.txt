@@ -64,7 +64,7 @@ set(METRICS_HEADER_FILES src/metrics/metrics.h src/metrics/metrics_parser.h ${PR
 add_library(metrics STATIC src/metrics/metrics.cc ${PROTO_METRICS_SRCS} ${METRICS_HEADER_FILES})
 target_link_libraries(metrics ${PROTOBUF_LIBRARIES} ncode gflags)
 
-add_library(metrics_parser src/metrics/metrics_parser.cc ${PROTO_METRICS_SRCS} ${METRICS_HEADER_FILES})
+add_library(metrics_parser SHARED src/metrics/metrics_parser.cc ${PROTO_METRICS_SRCS} ${METRICS_HEADER_FILES})
 target_link_libraries(metrics_parser ${PROTOBUF_LIBRARIES} ncode)
 
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)

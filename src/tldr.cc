@@ -122,7 +122,7 @@ bool TLDR::LikelyToGoOverCapacity(
     queries.emplace_back();
     ProbModelQuery& query = queries.back();
     query.rate = competing_aggregates.capacity;
-    query.type = ProbModelQuery::BOTH;
+    query.type = ProbModelQuery::CONVOLUTION;
     query.aggregates = competing_aggregates.aggregates;
     query.aggregates.emplace_back(aggregate_id, fraction_on_path);
   }
@@ -473,8 +473,8 @@ void TLDR::UpdateAggregateState(
   }
 
   for (const auto& id_and_history : competing_aggregate_histories) {
-    most_recent_competing_aggregate_histories_.emplace(id_and_history.first,
-                                                       id_and_history.second);
+    most_recent_competing_aggregate_histories_.erase(id_and_history.first);
+    most_recent_competing_aggregate_histories_.insert(id_and_history);
   }
 
   for (auto it = id_to_aggregate_state_.begin();

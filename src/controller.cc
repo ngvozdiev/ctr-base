@@ -231,11 +231,17 @@ void Controller::ReOptimize(RoundState* round) {
   }
 
   LOG(INFO) << "Will re-optimize the network";
-  auto config_and_competing_aggregates =
+  RoutingSystemUpdateResult update_result =
       routing_system_->Update(round->histories);
-  pending_output =
-      RoutingToUpdateState(*config_and_competing_aggregates.first,
-                           *config_and_competing_aggregates.second);
+  pending_output = RoutingToUpdateState(*update_result.routing,
+                                        *update_result.competing_aggregates);
+
+  // We can replace the histories in the round with the ones after the update
+  // operation. This way when messages are constructed to be sent out to nodes
+  // they will pick up the post-prediction histories.
+  CHECK(update_result.histories_after_prediction.size() ==
+        round->histories.size());
+  std::swap(update_result.histories_after_prediction, round->histories);
   LOG(INFO) << "Done optimizing";
 
   last_optimize_time_ = event_queue_->CurrentTime();
@@ -733,7 +739,7 @@ void NetworkContainer::AddTCPFlowGroup(const AggregateId& id,
     nc::net::IPAddress src_address(
         config_.tcp_group_source_ip_address_base.Raw() + flow_drivers_.size());
 
-    uint64_t max_rate_bps = 0;
+    nc::net::Bandwidth max_rate = nc::net::Bandwidth::Zero();
     std::vector<nc::htsim::KeyFrame> key_frames;
     for (const RateKeyFrame& rate_key_frame : flow_group.key_frames()) {
       uint64_t mean_rate_bps =
@@ -741,12 +747,12 @@ void NetworkContainer::AddTCPFlowGroup(const AggregateId& id,
 
       std::uniform_int_distribution<uint64_t> rate_distribution(
           (1 - spread) * mean_rate_bps, (1 + spread) * mean_rate_bps);
-      double rate_bps = rate_distribution(generator);
-      if (rate_bps > max_rate_bps) {
-        max_rate_bps = rate_bps;
-      }
+      nc::net::Bandwidth rate =
+          nc::net::Bandwidth::FromBitsPerSecond(rate_distribution(generator));
+      max_rate = std::max(max_rate, rate);
 
-      key_frames.push_back({rate_key_frame.at(), rate_bps});
+      key_frames.push_back(
+          {rate_key_frame.at(), static_cast<double>(rate.bps())});
     }
     CHECK(key_frames.size() > 0);
 
@@ -761,7 +767,7 @@ void NetworkContainer::AddTCPFlowGroup(const AggregateId& id,
     // Will size the queue according to the highest rate -- this may cause
     // some flows to have too deep queues if they start off very small.
     double total_delay_sec = (delay.count() + sp_delay.count()) / 1000.0;
-    size_t queue_size_bytes = max_rate_bps / 8.0 * total_delay_sec;
+    size_t queue_size_bytes = 2 * max_rate.bps() / 8.0 * total_delay_sec;
 
     // Will assume that there are already aggregates added for both the forward
     // and the reverse of the connection.

@@ -26,6 +26,20 @@ struct RoutingSystemConfig {
   ProbModelConfig prob_model_config;
 };
 
+// The result of an update operation.
+struct RoutingSystemUpdateResult {
+  // The new routing configuration.
+  std::unique_ptr<RoutingConfiguration> routing;
+
+  // For each aggregate, the set of other aggregates it competes with and what
+  // capacity it competes for.
+  std::unique_ptr<CompetingAggregates> competing_aggregates;
+
+  // The per-aggregate histories after prediction. Those will not be the same as
+  // the histories before prediction (the input to the update operation).
+  std::map<AggregateId, AggregateHistory> histories_after_prediction;
+};
+
 class RoutingSystem {
  public:
   RoutingSystem(const RoutingSystemConfig& config, Optimizer* optimizer,
@@ -37,9 +51,8 @@ class RoutingSystem {
 
   virtual ~RoutingSystem() {}
 
-  std::pair<std::unique_ptr<RoutingConfiguration>,
-            std::unique_ptr<CompetingAggregates>>
-  Update(const std::map<AggregateId, AggregateHistory>& history);
+  RoutingSystemUpdateResult Update(
+      const std::map<AggregateId, AggregateHistory>& history);
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 

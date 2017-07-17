@@ -86,12 +86,12 @@ static auto* tcp_source_close_count =
 static auto* kPathBytesMetric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<uint64_t, std::string>(
-            "path_bytes_seed", "Bytes through a path", "Path");
+            "path_bytes", "Bytes through a path", "Path");
 
 static auto* kPathPktsMetric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<uint64_t, std::string>(
-            "path_pkts_seed", "Packets through a path", "Path");
+            "path_pkts", "Packets through a path", "Path");
 
 static std::chrono::milliseconds GetQueueSizeMs(
     const nc::htsim::QueueStats& stats, nc::net::Bandwidth rate) {

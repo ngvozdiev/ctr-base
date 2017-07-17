@@ -172,9 +172,9 @@ class StabilityEvalHarness {
       const TrafficMatrix* tm = prev_tm ? prev_tm.get() : initial_tm_;
       UpdateVolumes(*tm);
 
-      std::unique_ptr<RoutingConfiguration> routing;
-      std::tie(routing, std::ignore) =
+      RoutingSystemUpdateResult update_result =
           routing_system_->Update(SyntheticHistoryFromTM(*tm));
+      auto& routing = update_result.routing;
 
       for (const auto& aggregate_and_routes : routing->routes()) {
         for (const auto& path_and_fraction : aggregate_and_routes.second) {

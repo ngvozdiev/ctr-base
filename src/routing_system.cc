@@ -199,9 +199,8 @@ static void RecordPathSplitsAndTotalDelay(
   }
 }
 
-std::pair<std::unique_ptr<RoutingConfiguration>,
-          std::unique_ptr<CompetingAggregates>>
-RoutingSystem::Update(const std::map<AggregateId, AggregateHistory>& history) {
+RoutingSystemUpdateResult RoutingSystem::Update(
+    const std::map<AggregateId, AggregateHistory>& history) {
   // First we will predict what the history is expected to be on the next
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
@@ -286,7 +285,7 @@ RoutingSystem::Update(const std::map<AggregateId, AggregateHistory>& history) {
                                 map_value.first.Mbps());
   }
 
-  return {std::move(output), std::move(competing_aggregates)};
+  return {std::move(output), std::move(competing_aggregates), next_history};
 }
 
 std::pair<std::set<AggregateId>, std::unique_ptr<CompetingAggregates>>
