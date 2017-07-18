@@ -477,7 +477,6 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   }
 
   problem.SetMatrix(problem_matrix);
-  problem.DumpToFile("dump.lp");
   auto problem_constructed_at = high_resolution_clock::now();
   if (FLAGS_debug_ctr) {
     milliseconds problem_construction_duration =

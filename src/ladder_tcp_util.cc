@@ -145,7 +145,7 @@ static void AddTopStream(NetworkContainer* container) {
   if (!FLAGS_only_short_flows) {
     // Flows will start at 500mbps, double and then shrink back.
     AddKeyFrames(
-        Bandwidth::FromMBitsPerSecond(500), Bandwidth::FromMBitsPerSecond(1500),
+        Bandwidth::FromMBitsPerSecond(500), Bandwidth::FromMBitsPerSecond(1250),
         Bandwidth::FromMBitsPerSecond(500), kLongFlowCount, &long_flow_group);
   } else {
     AddKeyFrames(
@@ -163,10 +163,10 @@ static void AddBottomStream(const std::string& src_id,
   GraphNodeIndex src = container->graph()->NodeFromStringOrDie(src_id);
   GraphNodeIndex dst = container->graph()->NodeFromStringOrDie(dst_id);
 
-  // Flows will be constantly at 650mbps.
+  // Flows will be constantly at 800Mbps.
   Bandwidth total_rate = FLAGS_only_short_flows
-                             ? Bandwidth::FromMBitsPerSecond(6)
-                             : Bandwidth::FromMBitsPerSecond(650);
+                             ? Bandwidth::FromMBitsPerSecond(8)
+                             : Bandwidth::FromMBitsPerSecond(800);
 
   container->AddAggregate(
       {src, dst}, ctr::GetDummyHistory(

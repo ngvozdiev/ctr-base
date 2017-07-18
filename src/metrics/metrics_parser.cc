@@ -431,6 +431,7 @@ std::string Manifest::FullToString() const {
                     kSetsCountColumnName, kEmptySetsCountColumnName,
                     kValuesCountColumnName});
 
+  uint64_t all_values = 0;
   for (const auto& id_and_manifest_entries : entries_) {
     const std::string& id = id_and_manifest_entries.first;
     const std::vector<std::unique_ptr<WrappedEntry>>& entries =
@@ -469,8 +470,10 @@ std::string Manifest::FullToString() const {
     row.emplace_back(std::to_string(total_zero));
     row.emplace_back(std::to_string(total_values));
     table.AddRow(row);
+
+    all_values += total_values;
   }
-  return table.ToString();
+  return nc::StrCat("Total values: ", all_values, "\n", table.ToString());
 }
 
 uint64_t Manifest::TotalEntryCount() const {

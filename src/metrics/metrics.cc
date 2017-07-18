@@ -69,7 +69,6 @@ OutputStream::OutputStream(const std::string& file) {
   fd_ = open(file.c_str(), O_WRONLY | O_TRUNC | O_CREAT,  // open mode
              S_IREAD | S_IWRITE | S_IRGRP | S_IROTH | S_ISUID);
   CHECK(fd_ > 0) << "Bad output file " << file;
-
   file_output_ = make_unique<google::protobuf::io::FileOutputStream>(fd_);
 }
 
@@ -84,14 +83,14 @@ void OutputStream::WriteBulk(const std::vector<PBMetricEntry>& entries,
                              uint32_t manifest_index) {
   std::lock_guard<std::mutex> lock(mu_);
   for (const auto& entry : entries) {
-    WriteDelimitedTo(entry, manifest_index);
+    CHECK(WriteDelimitedTo(entry, manifest_index));
   }
 }
 
 void OutputStream::WriteSingle(const PBMetricEntry& entry,
                                uint32_t manifest_index) {
   std::lock_guard<std::mutex> lock(mu_);
-  WriteDelimitedTo(entry, manifest_index);
+  CHECK(WriteDelimitedTo(entry, manifest_index));
 }
 
 // Writes a protobuf to the stream.
@@ -99,6 +98,7 @@ bool OutputStream::WriteDelimitedTo(const PBMetricEntry& entry,
                                     uint32_t manifest_index) {
   // Write the size and the manifest index. The index comes first.
   ::google::protobuf::io::CodedOutputStream coded_output(file_output_.get());
+
   coded_output.WriteVarint32(manifest_index);
   const int size = entry.ByteSize();
   coded_output.WriteVarint32(size);
@@ -115,7 +115,6 @@ bool OutputStream::WriteDelimitedTo(const PBMetricEntry& entry,
       return false;
     }
   }
-
   return true;
 }
 
@@ -144,7 +143,10 @@ MetricManager::MetricManager()
     : current_index_(std::numeric_limits<size_t>::max()),
       timestamp_provider_(make_unique<DefaultTimestampProvider>()) {}
 
-size_t MetricManager::NextIndex() { return ++current_index_; }
+size_t MetricManager::NextIndex() {
+  std::lock_guard<std::mutex> lock(mu_);
+  return ++current_index_;
+}
 
 void MetricManager::SetOutput(const std::string& output,
                               bool per_metric_files) {

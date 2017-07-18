@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 #include <mutex>
+#include <atomic>
 
 #include "metrics.pb.h"
 #include "ncode_common/src/circular_array.h"
@@ -382,7 +383,7 @@ class MetricBase {
   size_t local_current_index_;
 
   // Set to true if no more changes to the output stream are allowed.
-  bool stream_locked_;
+  std::atomic<bool> stream_locked_;
 };
 
 // A metric is type associated with a combination of fields.

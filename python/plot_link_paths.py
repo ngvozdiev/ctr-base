@@ -64,7 +64,7 @@ for i, link in enumerate(INTERESTING_LINKS):
             x, y = value
             x = np.array(x, dtype=np.float64) * 0.000000000001
             y = np.array(y, dtype=np.float64) * (100.0 / 1000.0 / 1000.0 / 1000.0) * 8
-            x, y = parser_wrapper.Bin(x, y, 10)
+            x, y = parser_wrapper.Bin(x, y, 1)
             xs.append(x)
             fs.append(interpolate.interp1d(x,y, bounds_error=False, fill_value=0))
             labels.append(AggFromPath(path))
