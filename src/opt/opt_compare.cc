@@ -20,32 +20,48 @@
 
 namespace ctr {
 
-static nc::viz::NpyArray::Types GetRCTypes() {
-  using namespace nc::viz;
-  NpyArray::Types types = {{"num_aggregates", NpyArray::UINT32}};
-  for (uint32_t i = 0; i < 101; ++i) {
-    types.emplace_back(nc::StrCat("path_stretch_ms_p", i), NpyArray::UINT32);
-  }
-  for (uint32_t i = 0; i < 101; ++i) {
-    types.emplace_back(nc::StrCat("path_stretch_rel_p", i), NpyArray::UINT32);
-  }
-  for (uint32_t i = 0; i < 101; ++i) {
-    types.emplace_back(nc::StrCat("paths_per_aggregate_p", i),
-                       NpyArray::UINT32);
-  }
-  for (uint32_t i = 0; i < 101; ++i) {
-    types.emplace_back(nc::StrCat("link_utilization_p", i), NpyArray::DOUBLE);
-  }
-  for (uint32_t i = 0; i < 101; ++i) {
-    types.emplace_back(nc::StrCat("unmet_demand_mbps_p", i), NpyArray::DOUBLE);
-  }
+static auto* path_stretch_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_path_stretch_ms",
+            "How far away from the shortest path a path is (absolute)",
+            "Topology", "Traffic matrix", "Optimizer");
 
-  return types;
-}
+static auto* path_stretch_rel =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string, std::string>(
+            "opt_path_stretch_rel",
+            "How far away from the shortest path a path is (relative)",
+            "Topology", "Traffic matrix", "Optimizer");
 
-RoutingConfigInfo::RoutingConfigInfo() : nc::viz::NpyArray(GetRCTypes()) {}
+static auto* path_flow_count =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_path_flow_count", "Number of flows on each path", "Topology",
+            "Traffic matrix", "Optimizer");
 
-void RoutingConfigInfo::Add(const RoutingConfiguration& routing) {
+static auto* aggregate_path_count =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_path_count", "Number of paths in each aggregate", "Topology",
+            "Traffic matrix", "Optimizer");
+
+static auto* link_utilization =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_link_utilization", "Per-link utilization", "Topology",
+            "Traffic matrix", "Optimizer");
+
+static auto* path_unmet_demand =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string, std::string, std::string>(
+            "opt_path_unmet_demand_bps",
+            "How many bps of a single flow's demand are not satisfied",
+            "Topology", "Traffic matrix", "Optimizer");
+
+void RecordRoutingConfig(const std::string& topology, const std::string& tm,
+                         const std::string& opt,
+                         const RoutingConfiguration& routing) {
   using namespace std::chrono;
   const nc::net::GraphStorage* graph = routing.graph();
 
@@ -56,10 +72,11 @@ void RoutingConfigInfo::Add(const RoutingConfiguration& routing) {
   const std::map<const nc::net::Walk*, nc::net::Bandwidth>& per_flow_rates =
       model.per_flow_bandwidth_map();
 
-  std::vector<milliseconds> path_stretches;
-  std::vector<double> path_stretches_rel;
-  std::vector<nc::net::Bandwidth> unmet_demand;
-  std::vector<size_t> num_paths;
+  auto* path_stretch_handle = path_stretch_ms->GetHandle(topology, tm, opt);
+  auto* path_flow_count_handle = path_flow_count->GetHandle(topology, tm, opt);
+  auto* path_stretch_rel_handle =
+      path_stretch_rel->GetHandle(topology, tm, opt);
+  auto* unmet_demand_handle = path_unmet_demand->GetHandle(topology, tm, opt);
 
   for (const auto& aggregate_and_aggregate_output : routing.routes()) {
     const AggregateId& aggregate_id = aggregate_and_aggregate_output.first;
@@ -100,6 +117,11 @@ void RoutingConfigInfo::Add(const RoutingConfiguration& routing) {
                                           required_per_flow - per_flow_rate);
       double delta_rel =
           static_cast<double>(path_delay_ms.count()) / sp_delay_ms.count();
+
+      path_stretch_handle->AddValue(path_delay_ms.count());
+      path_flow_count_handle->AddValue(fraction * total_num_flows);
+      path_stretch_rel_handle->AddValue(delta_rel);
+      unmet_demand_handle->AddValue(unmet.bps());
 
       for (size_t i = 0; i < fraction * total_num_flows; ++i) {
         path_stretches.emplace_back(delay_delta);
@@ -160,6 +182,10 @@ void RoutingConfigInfo::Add(const RoutingConfiguration& routing) {
 
   AddRow(row);
 }
+
+RoutingConfigInfo::RoutingConfigInfo() : nc::viz::NpyArray(GetRCTypes()) {}
+
+void RoutingConfigInfo::Add(const RoutingConfiguration& routing) {}
 
 static nc::viz::NpyArray::Types GetRCDTypes() {
   using namespace nc::viz;

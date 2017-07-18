@@ -10,18 +10,10 @@ struct RoutingConfigurationDelta;
 
 namespace ctr {
 
-// An array with the following fields:
-// distribution of absolute path stretches in ms (101 percentile values)
-// distribution of relative path stretches
-// distribution of numbers of paths per aggregate
-// distribution of link utilization
-// distribution of unmet demand per link
-class RoutingConfigInfo : public nc::viz::NpyArray {
- public:
-  RoutingConfigInfo();
-
-  void Add(const RoutingConfiguration& routing);
-};
+// Records various statistics about a RoutingConfiguration to metrics.
+void RecordRoutingConfig(const std::string& topology, const std::string& tm,
+                         const std::string& opt,
+                         const RoutingConfiguration& routing);
 
 // Information about the difference between two routing configs. Has fields:
 // fraction of total volume that changed paths
