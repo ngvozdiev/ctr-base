@@ -70,6 +70,18 @@ static auto* path_unmet_demand =
             "How many bps of a single flow's demand are not satisfied",
             "Topology", "Traffic matrix", "Optimizer");
 
+static auto* ctr_runtime_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+            "ctr_runtime_ms", "How long it took CTR to run", "Topology",
+            "Traffic matrix");
+
+static auto* ctr_runtime_cached_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+            "ctr_runtime_cached_ms", "How long it took CTR to run (cached)",
+            "Topology", "Traffic matrix");
+
 namespace ctr {
 
 static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
@@ -84,6 +96,8 @@ static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
                                         demands_and_counts);
 }
 
+static std::mutex global_mutex;
+
 static void RecordRoutingConfig(const std::string& topology,
                                 const std::string& tm, const std::string& opt,
                                 const RoutingConfiguration& routing) {
@@ -97,6 +111,7 @@ static void RecordRoutingConfig(const std::string& topology,
   const std::map<const nc::net::Walk*, nc::net::Bandwidth>& per_flow_rates =
       model.per_flow_bandwidth_map();
 
+  std::unique_lock<std::mutex> lock(global_mutex);
   auto* path_stretch_handle = path_stretch_ms->GetHandle(topology, tm, opt);
   auto* path_flow_count_handle = path_flow_count->GetHandle(topology, tm, opt);
   auto* path_stretch_rel_handle =
@@ -135,7 +150,6 @@ static void RecordRoutingConfig(const std::string& topology,
 
       milliseconds path_delay_ms = duration_cast<milliseconds>(path_delay);
       path_delay_ms = std::max(path_delay_ms, milliseconds(1));
-      milliseconds delay_delta = path_delay_ms - sp_delay_ms;
 
       nc::net::Bandwidth per_flow_rate =
           nc::FindOrDieNoPrint(per_flow_rates, path);
@@ -177,6 +191,8 @@ static void RecordRoutingConfig(const std::string& topology,
 
 static void RunOptimizers(const std::string& topology_file,
                           const std::string& tm_file) {
+  using namespace std::chrono;
+
   std::vector<std::string> node_order;
   nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
       nc::File::ReadFileToStringOrDie(topology_file), &node_order);
@@ -198,16 +214,32 @@ static void RunOptimizers(const std::string& topology_file,
   std::string topology_file_trimmed = nc::Split(topology_file, "/").back();
   std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
 
-  std::unique_ptr<RoutingConfiguration> routing =
-      ctr_optimizer.Optimize(*FromDemandMatrix(*demand_matrix));
+  std::unique_ptr<TrafficMatrix> tm = FromDemandMatrix(*demand_matrix);
+  auto ctr_start = high_resolution_clock::now();
+  std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(*tm);
+  auto ctr_duration = high_resolution_clock::now() - ctr_start;
+
+  ctr_start = std::chrono::high_resolution_clock::now();
+  ctr_optimizer.Optimize(*tm);
+  auto ctr_cached_duration =
+      std::chrono::high_resolution_clock::now() - ctr_start;
+
   RecordRoutingConfig(topology_file_trimmed, tm_file_trimmed, "CTR", *routing);
 
-  routing = b4_optimizer.Optimize(*FromDemandMatrix(*demand_matrix));
+  routing = b4_optimizer.Optimize(*tm);
   RecordRoutingConfig(topology_file_trimmed, tm_file_trimmed, "B4", *routing);
 
-  routing = minmax_optimizer.Optimize(*FromDemandMatrix(*demand_matrix));
+  routing = minmax_optimizer.Optimize(*tm);
   RecordRoutingConfig(topology_file_trimmed, tm_file_trimmed, "MinMax",
                       *routing);
+
+  std::unique_lock<std::mutex> lock(global_mutex);
+  auto* handle =
+      ctr_runtime_ms->GetHandle(topology_file_trimmed, tm_file_trimmed);
+  handle->AddValue(duration_cast<milliseconds>(ctr_duration).count());
+  handle =
+      ctr_runtime_cached_ms->GetHandle(topology_file_trimmed, tm_file_trimmed);
+  handle->AddValue(duration_cast<milliseconds>(ctr_cached_duration).count());
 }
 
 }  // namespace ctr
