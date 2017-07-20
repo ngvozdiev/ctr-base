@@ -103,8 +103,11 @@ bool CTROptimizer::AddFreePaths(
     }
 
     std::vector<PathPtr> paths_up_to_free;
-    CHECK(paths_in_output.size() <= per_aggregate_path_limit_);
     size_t remaining_paths = per_aggregate_path_limit_ - paths_in_output.size();
+    if (paths_in_output.size() > per_aggregate_path_limit_) {
+      remaining_paths = 0;
+    }
+
     if (total_path_count > soft_path_limit_) {
       remaining_paths = 0;
     }
