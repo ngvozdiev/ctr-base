@@ -82,6 +82,13 @@ static auto* ctr_runtime_cached_ms =
             "ctr_runtime_cached_ms", "How long it took CTR to run (cached)",
             "Topology", "Traffic matrix");
 
+static auto* tm_scale_factor =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "tm_scale_factor",
+            "By how much the TM had to be scaled to make B4 fit", "Topology",
+            "Traffic matrix");
+
 namespace ctr {
 
 static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
@@ -111,7 +118,6 @@ static void RecordRoutingConfig(const std::string& topology,
   const std::map<const nc::net::Walk*, nc::net::Bandwidth>& per_flow_rates =
       model.per_flow_bandwidth_map();
 
-  std::unique_lock<std::mutex> lock(global_mutex);
   auto* path_stretch_handle = path_stretch_ms->GetHandle(topology, tm, opt);
   auto* path_flow_count_handle = path_flow_count->GetHandle(topology, tm, opt);
   auto* path_stretch_rel_handle =
@@ -189,6 +195,41 @@ static void RecordRoutingConfig(const std::string& topology,
   }
 }
 
+static bool Fits(const ctr::RoutingConfiguration& routing) {
+  const std::set<ctr::AggregateId>& aggregates_no_fit =
+      ctr::OverSubModel(routing).aggregates_no_fit();
+  return aggregates_no_fit.empty();
+}
+
+// Runs B4. If B4 is unable to fit the traffic will scale the matrix down to the
+// point where it can.
+static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
+    const ctr::TrafficMatrix& tm, const std::string& topology_string,
+    const std::string& tm_string, ctr::PathProvider* path_provider) {
+  ctr::B4Optimizer b4_optimizer(path_provider, false, 1.0);
+  double scale = 1.01;
+  while (scale > 0) {
+    // Will scale it down by 1%.
+    scale -= 0.01;
+
+    auto scaled_tm = tm.ScaleDemands(scale, {});
+    // B4 should run fine on both the scaled and the randomized TMs.
+    auto routing = b4_optimizer.Optimize(*scaled_tm);
+    if (!Fits(*routing)) {
+      continue;
+    }
+
+    {
+      std::unique_lock<std::mutex> lock(global_mutex);
+      tm_scale_factor->GetHandle(topology_string, tm_string)->AddValue(scale);
+    }
+    return routing;
+  }
+
+  LOG(FATAL) << "Should not happen";
+  return {};
+}
+
 static void RunOptimizers(const std::string& topology_file,
                           const std::string& tm_file) {
   using namespace std::chrono;
@@ -206,39 +247,48 @@ static void RunOptimizers(const std::string& topology_file,
           nc::File::ReadFileToStringOrDie(tm_file), node_order, &graph);
   demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
-  PathProvider path_provider(&graph);
-  CTROptimizer ctr_optimizer(&path_provider, 1.0, true);
-  B4Optimizer b4_optimizer(&path_provider, false, 1.0);
-  MinMaxOptimizer minmax_optimizer(&path_provider, 1.0);
-
-  std::string topology_file_trimmed = nc::Split(topology_file, "/").back();
+  std::string top_file_trimmed = nc::Split(topology_file, "/").back();
   std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
 
+  // A separate PathProvider instance for B4. Want to run CTR with a fresh
+  // PathProvider, but have to run B4 first.
+  PathProvider b4_path_provider(&graph);
+
   std::unique_ptr<TrafficMatrix> tm = FromDemandMatrix(*demand_matrix);
+  std::unique_ptr<RoutingConfiguration> routing;
+  routing = RunB4(*tm, top_file_trimmed, tm_file_trimmed, &b4_path_provider);
+
+  {
+    std::unique_lock<std::mutex> lock(global_mutex);
+    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "B4", *routing);
+  }
+
+  PathProvider path_provider(&graph);
+  CTROptimizer ctr_optimizer(&path_provider, 1.0, true);
+  MinMaxOptimizer minmax_optimizer(&path_provider, 1.0);
+
   auto ctr_start = high_resolution_clock::now();
-  std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(*tm);
+  routing = ctr_optimizer.Optimize(*tm);
   auto ctr_duration = high_resolution_clock::now() - ctr_start;
+
+  {
+    std::unique_lock<std::mutex> lock(global_mutex);
+    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "CTR", *routing);
+  }
 
   ctr_start = std::chrono::high_resolution_clock::now();
   ctr_optimizer.Optimize(*tm);
   auto ctr_cached_duration =
       std::chrono::high_resolution_clock::now() - ctr_start;
 
-  RecordRoutingConfig(topology_file_trimmed, tm_file_trimmed, "CTR", *routing);
-
-  routing = b4_optimizer.Optimize(*tm);
-  RecordRoutingConfig(topology_file_trimmed, tm_file_trimmed, "B4", *routing);
-
   routing = minmax_optimizer.Optimize(*tm);
-  RecordRoutingConfig(topology_file_trimmed, tm_file_trimmed, "MinMax",
-                      *routing);
 
   std::unique_lock<std::mutex> lock(global_mutex);
-  auto* handle =
-      ctr_runtime_ms->GetHandle(topology_file_trimmed, tm_file_trimmed);
+  RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMax", *routing);
+
+  auto* handle = ctr_runtime_ms->GetHandle(top_file_trimmed, tm_file_trimmed);
   handle->AddValue(duration_cast<milliseconds>(ctr_duration).count());
-  handle =
-      ctr_runtime_cached_ms->GetHandle(topology_file_trimmed, tm_file_trimmed);
+  handle = ctr_runtime_cached_ms->GetHandle(top_file_trimmed, tm_file_trimmed);
   handle->AddValue(duration_cast<milliseconds>(ctr_cached_duration).count());
 }
 
