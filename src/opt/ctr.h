@@ -45,9 +45,6 @@ class CTROptimizerPass {
  private:
   using FrozenCapacityMap = nc::net::GraphLinkMap<double>;
 
-  // Freezes single path aggregates and adds them to the solution.
-  void FreezeSinglePathAggregates();
-
   // Performs a single pass by repeatedly calling
   // OptimizerMinLinkOversubscription.
   void Optimize();
