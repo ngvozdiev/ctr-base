@@ -59,7 +59,7 @@ static auto* aggregate_path_count =
 
 static auto* link_utilization =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+        -> GetUnsafeMetric<double, std::string, std::string, std::string>(
             "opt_link_utilization", "Per-link utilization", "Topology",
             "Traffic matrix", "Optimizer");
 
@@ -264,7 +264,7 @@ static void RunOptimizers(const std::string& topology_file,
   }
 
   PathProvider path_provider(&graph);
-  CTROptimizer ctr_optimizer(&path_provider, 1.0, true);
+  CTROptimizer ctr_optimizer(&path_provider, 1.0, false);
   MinMaxOptimizer minmax_optimizer(&path_provider, 1.0);
 
   auto ctr_start = high_resolution_clock::now();

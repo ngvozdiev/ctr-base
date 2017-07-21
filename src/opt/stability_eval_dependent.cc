@@ -97,9 +97,10 @@ class StabilityEvalHarness {
       const std::vector<nc::net::Bandwidth>& volumes =
           aggregate_and_volumes.second;
 
-      std::string out = nc::Join(volumes, ",", [](nc::net::Bandwidth v) {
-        return std::to_string(v.Mbps());
-      });
+      std::function<std::string(const nc::net::Bandwidth&)> format_f = [](
+          const nc::net::Bandwidth& bw) { return std::to_string(bw.Mbps()); };
+
+      std::string out = nc::Join(volumes, ",", format_f);
       std::cout << aggregate_id.ToString(*graph_) << " : (" << out << ")\n";
     }
   }

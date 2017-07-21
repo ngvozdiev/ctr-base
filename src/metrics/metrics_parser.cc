@@ -415,11 +415,16 @@ std::string DataSummaryToString(
     }
 
     std::vector<double> percentiles = Percentiles(&all_data, 10);
-    std::vector<std::string> row = {
-        metric_id, fields_id, std::to_string(data.size()),
-        std::to_string(start_timestamp), std::to_string(end_timestamp),
-        Join(percentiles, ",",
-             [](double v) { return nc::ToStringMaxDecimals(v, 3); })};
+    std::function<std::string(const double& v)> format_f = [](const double& v) {
+      return nc::ToStringMaxDecimals(v, 3);
+    };
+
+    std::vector<std::string> row = {metric_id,
+                                    fields_id,
+                                    std::to_string(data.size()),
+                                    std::to_string(start_timestamp),
+                                    std::to_string(end_timestamp),
+                                    Join(percentiles, ",", format_f)};
     table.AddRow(row);
   }
 
