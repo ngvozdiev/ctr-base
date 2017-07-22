@@ -287,7 +287,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
   } else if (FLAGS_opt == "B4(P)") {
     opt = nc::make_unique<B4Optimizer>(&path_provider, true, 1.0);
   } else if (FLAGS_opt == "MinMax") {
-    opt = nc::make_unique<MinMaxOptimizer>(&path_provider, 1.0);
+    opt = nc::make_unique<MinMaxOptimizer>(&path_provider, 1.0, false);
   }
 
   MeanScaleEstimatorFactory estimator_factory(

@@ -56,7 +56,7 @@ static double Cost(const nc::lp::DemandMatrix& matrix) {
   std::unique_ptr<ctr::RoutingConfiguration> ctr_out =
       ctr_optimizer.Optimize(tm);
 
-  ctr::MinMaxOptimizer minmax_optimizer(&path_provider, 1.0);
+  ctr::MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
   std::unique_ptr<ctr::RoutingConfiguration> minmax_out =
       minmax_optimizer.Optimize(tm);
 

@@ -265,7 +265,9 @@ static void RunOptimizers(const std::string& topology_file,
 
   PathProvider path_provider(&graph);
   CTROptimizer ctr_optimizer(&path_provider, 1.0, false);
-  MinMaxOptimizer minmax_optimizer(&path_provider, 1.0);
+  MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
+  MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
+  B4Optimizer b4_flow_count_optimizer(&path_provider, true, 1.0);
 
   auto ctr_start = high_resolution_clock::now();
   routing = ctr_optimizer.Optimize(*tm);
@@ -283,8 +285,23 @@ static void RunOptimizers(const std::string& topology_file,
 
   routing = minmax_optimizer.Optimize(*tm);
 
+  {
+    std::unique_lock<std::mutex> lock(global_mutex);
+    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMax", *routing);
+  }
+
+  routing = minmax_low_delay_optimizer.Optimize(*tm);
+
+  {
+    std::unique_lock<std::mutex> lock(global_mutex);
+    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMaxLD",
+                        *routing);
+  }
+
+  routing = b4_flow_count_optimizer.Optimize(*tm);
+
   std::unique_lock<std::mutex> lock(global_mutex);
-  RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMax", *routing);
+  RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "B4FC", *routing);
 
   auto* handle = ctr_runtime_ms->GetHandle(top_file_trimmed, tm_file_trimmed);
   handle->AddValue(duration_cast<milliseconds>(ctr_duration).count());

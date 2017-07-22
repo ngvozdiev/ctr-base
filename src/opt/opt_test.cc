@@ -179,7 +179,7 @@ class MinMaxTest : public TestBase {
 // A single aggregate with 2 disjoint paths through the network. The optimizer
 // should split traffic evenly among the two paths (given enough capacity).
 TEST_F(MinMaxTest, SingleAggregate) {
-  MinMaxOptimizer minmax_optimizer(path_provider_.get(), 1.0);
+  MinMaxOptimizer minmax_optimizer(path_provider_.get(), 1.0, false);
   AddAggregate("A", "B", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);
 
@@ -188,7 +188,7 @@ TEST_F(MinMaxTest, SingleAggregate) {
 }
 
 TEST_F(MinMaxTest, TwoAggregates) {
-  MinMaxOptimizer minmax_optimizer(path_provider_.get(), 1.0);
+  MinMaxOptimizer minmax_optimizer(path_provider_.get(), 1.0, false);
   AddAggregate("A", "B", kDefaultLinkspeed);
   AddAggregate("A", "D", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);
@@ -199,7 +199,7 @@ TEST_F(MinMaxTest, TwoAggregates) {
 }
 
 TEST_F(MinMaxTest, TwoAggregatesNoFit) {
-  MinMaxOptimizer minmax_optimizer(path_provider_.get(), 1.0);
+  MinMaxOptimizer minmax_optimizer(path_provider_.get(), 1.0, false);
   AddAggregate("A", "B", kDefaultLinkspeed * 2);
   AddAggregate("A", "D", kDefaultLinkspeed);
   auto routing = minmax_optimizer.Optimize(tm_);

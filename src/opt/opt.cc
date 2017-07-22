@@ -37,8 +37,9 @@ std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
 class MinMaxMCProblem : public nc::lp::MCProblem {
  public:
   MinMaxMCProblem(const nc::net::GraphStorage* graph_storage,
-                  double capacity_multiplier)
-      : nc::lp::MCProblem({}, graph_storage, capacity_multiplier) {}
+                  double capacity_multiplier, bool also_minimize_delay)
+      : nc::lp::MCProblem({}, graph_storage, capacity_multiplier),
+        also_minimize_delay_(also_minimize_delay) {}
 
   double Solve(
       std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths) {
@@ -54,7 +55,7 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
     // There will be one max utilization variable.
     VariableIndex max_utilization_var = problem.AddVariable();
     problem.SetVariableRange(max_utilization_var, 0, Problem::kInifinity);
-    problem.SetObjectiveCoefficient(max_utilization_var, 10000.0);
+    problem.SetObjectiveCoefficient(max_utilization_var, 100000.0);
 
     // Will add per-link constraints to make each link's utilization less than
     // the max utilization.
@@ -88,7 +89,11 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
         problem_matrix.emplace_back(constraint, variable, 1.0 / link_capacity);
       }
 
-      problem.SetObjectiveCoefficient(link_utilization_var, 1);
+      if (also_minimize_delay_) {
+        double link_weight =
+            std::chrono::duration<double, std::milli>(link->delay()).count();
+        problem.SetObjectiveCoefficient(link_utilization_var, link_weight);
+      }
     }
 
     // Solve the problem.
@@ -103,11 +108,14 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
     *paths = RecoverPaths(link_to_variables, *solution);
     return solution->ObjectiveValue();
   }
+
+  bool also_minimize_delay_;
 };
 
 std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     const TrafficMatrix& tm) {
-  MinMaxMCProblem problem(graph_, link_capacity_multiplier_);
+  MinMaxMCProblem problem(graph_, link_capacity_multiplier_,
+                          also_minimize_delay_);
 
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
@@ -117,9 +125,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
   }
 
   std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
-  //  LOG(ERROR) << "MinMax solving MC problem";
-  double min_utilization = problem.Solve(&paths);
-  //  LOG(ERROR) << "MinMax util " << min_utilization;
+  problem.Solve(&paths);
 
   auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const auto& aggregate_and_demand : tm.demands()) {

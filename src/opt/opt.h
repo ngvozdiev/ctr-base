@@ -52,15 +52,20 @@ class ShortestPathOptimizer : public Optimizer {
 // a given traffic matrix.
 class MinMaxOptimizer : public Optimizer {
  public:
-  MinMaxOptimizer(PathProvider* path_provider, double capacity_multiplier)
+  MinMaxOptimizer(PathProvider* path_provider, double capacity_multiplier,
+                  bool also_minimize_delay)
       : Optimizer(path_provider),
-        link_capacity_multiplier_(capacity_multiplier) {}
+        link_capacity_multiplier_(capacity_multiplier),
+        also_minimize_delay_(also_minimize_delay) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
 
   // All links' capacity is multiplied by this number.
   double link_capacity_multiplier_;
+
+  // If true will minmize delay as a secondary objective.
+  bool also_minimize_delay_;
 };
 
 // Runs a heuristic similar to that of B4. Each aggregate's "fair share" will be
