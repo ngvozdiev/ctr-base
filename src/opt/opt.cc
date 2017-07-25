@@ -34,12 +34,25 @@ std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
   return out;
 }
 
-class MinMaxMCProblem : public nc::lp::MCProblem {
+static nc::net::GraphLinkMap<double> GetCapacities(
+    const nc::net::GraphStorage& graph, double multiplier) {
+  nc::net::GraphLinkMap<double> out;
+  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
+    double capacity = graph.GetLink(link)->bandwidth().Mbps();
+    out[link] = capacity * multiplier;
+  }
+
+  return out;
+}
+
+class MinMaxProblem : public nc::lp::SingleCommodityFlowProblem {
  public:
-  MinMaxMCProblem(const nc::net::GraphStorage* graph_storage,
-                  double capacity_multiplier, bool also_minimize_delay)
-      : nc::lp::MCProblem({}, graph_storage, capacity_multiplier),
-        also_minimize_delay_(also_minimize_delay) {}
+  MinMaxProblem(const nc::net::GraphStorage* graph, double capacity_multiplier,
+                bool also_minimize_delay)
+      : nc::lp::SingleCommodityFlowProblem(
+            GetCapacities(*graph, capacity_multiplier), graph),
+        also_minimize_delay_(also_minimize_delay),
+        capacity_multiplier_(capacity_multiplier) {}
 
   double Solve(
       std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths) {
@@ -48,7 +61,7 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
     Problem problem(MINIMIZE);
     std::vector<ProblemMatrixElement> problem_matrix;
     VarMap link_to_variables =
-        GetLinkToVariableMap(false, &problem, &problem_matrix);
+        GetLinkToVariableMap(&problem, &problem_matrix, false);
     AddFlowConservationConstraints(link_to_variables, &problem,
                                    &problem_matrix);
 
@@ -61,7 +74,7 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
     // the max utilization.
     for (const auto& link_and_variables : link_to_variables) {
       nc::net::GraphLinkIndex link_index = link_and_variables.first;
-      const nc::net::GraphLink* link = graph_storage_->GetLink(link_index);
+      const nc::net::GraphLink* link = graph_->GetLink(link_index);
       const nc::net::GraphNodeMap<VariableIndex>& variables =
           *link_and_variables.second;
 
@@ -105,23 +118,24 @@ class MinMaxMCProblem : public nc::lp::MCProblem {
       return std::numeric_limits<double>::max();
     }
 
-    *paths = RecoverPaths(link_to_variables, *solution);
+    *paths = RecoverPathsFromSolution(link_to_variables, *solution);
     return solution->ObjectiveValue();
   }
 
   bool also_minimize_delay_;
+
+  double capacity_multiplier_;
 };
 
 std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     const TrafficMatrix& tm) {
-  MinMaxMCProblem problem(graph_, link_capacity_multiplier_,
-                          also_minimize_delay_);
+  MinMaxProblem problem(graph_, link_capacity_multiplier_,
+                        also_minimize_delay_);
 
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
     nc::net::Bandwidth demand = aggregate_and_demand.second.first;
-
-    problem.AddCommodity(aggregate_id.src(), aggregate_id.dst(), demand);
+    problem.AddDemand(aggregate_id.src(), aggregate_id.dst(), demand.Mbps());
   }
 
   std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
@@ -130,7 +144,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
   auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
-    nc::net::Bandwidth demand = aggregate_and_demand.second.first;
+    double demand = aggregate_and_demand.second.first.Mbps();
 
     // All input aggregates should have an entry in the solution.
     std::vector<nc::lp::FlowAndPath>& flow_and_paths =

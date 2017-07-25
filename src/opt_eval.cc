@@ -233,6 +233,7 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
 static void RunOptimizers(const std::string& topology_file,
                           const std::string& tm_file) {
   using namespace std::chrono;
+  LOG(ERROR) << "Running " << topology_file << " " << tm_file;
 
   std::vector<std::string> node_order;
   nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
