@@ -197,6 +197,10 @@ class RoutingConfiguration : public TrafficMatrix {
   RoutingConfigurationDelta GetDifference(
       const RoutingConfiguration& other) const;
 
+  // For each aggregate, returns the indices of the aggregate's paths in the K
+  // shortest paths sequence of the aggregate.
+  std::map<AggregateId, std::vector<size_t>> GetKValues() const;
+
   // Returns sum of all flows' delay.
   nc::net::Delay TotalPerFlowDelay() const;
 

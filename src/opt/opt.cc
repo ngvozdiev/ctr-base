@@ -236,7 +236,8 @@ class B4AggregateState {
   double fair_share() const { return fair_share_; }
 
   // Adds some capacity to the current path.
-  void AdvanceByFairShare(double fair_share) {
+  void AdvanceByFairShare(double fair_share,
+                          const nc::net::GraphStorage* graph) {
     CHECK(current_path_ != nullptr);
     path_to_capacity_[current_path_] += fair_share_ratio_ * fair_share;
   }
@@ -392,7 +393,11 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
       link_state->AdvanceByFairShare(fair_share_delta);
     }
     for (B4AggregateState& aggregate_state : aggregate_states) {
-      aggregate_state.AdvanceByFairShare(fair_share_delta);
+      if (aggregate_state.frozen()) {
+        continue;
+      }
+
+      aggregate_state.AdvanceByFairShare(fair_share_delta, graph_);
     }
     current_fair_share = fair_share_of_next_event;
 
@@ -419,12 +424,10 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
       }
     }
 
-    if (!aggregates_to_satisfy.empty()) {
-      for (B4AggregateState* aggregate_to_satisfy : aggregates_to_satisfy) {
-        // Will freeze the aggregate, since it has satisfied its demand.
-        aggregate_to_satisfy->freeze();
-        ++satisfied_aggregates;
-      }
+    for (B4AggregateState* aggregate_to_satisfy : aggregates_to_satisfy) {
+      // Will freeze the aggregate, since it has satisfied its demand.
+      aggregate_to_satisfy->freeze();
+      ++satisfied_aggregates;
     }
   }
 
