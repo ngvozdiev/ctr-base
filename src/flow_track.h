@@ -1,6 +1,17 @@
 #ifndef FLOW_TRACK_H
 #define FLOW_TRACK_H
 
+#include <chrono>
+#include <cstdint>
+#include <map>
+#include <utility>
+#include <vector>
+
+#include "ncode_common/src/lru_cache.h"
+#include "ncode_common/src/net/net_common.h"
+#include "ncode_common/src/net/pcap.h"
+#include "ncode_common/src/packer.h"
+
 namespace nc {
 
 // A TCP or UDP unidirectional flow.
@@ -14,39 +25,71 @@ struct UnidirectionalFlowState {
 struct UnidirectionalTCPFlowState : public UnidirectionalFlowState {
   nc::RLEField<uint32_t> sequence_numbers;
   nc::RLEField<uint32_t> ack_numbers;
+  nc::RLEField<uint8_t> tcp_flag_values;
 };
 
-struct BidirectionalTCPFlowState {
-  nc::pcap::Timestamp syn_seen_at;
-  nc::pcap::Timestamp syn_ack_seen_at;
-  nc::pcap::Timestamp fin_seen_at;
-  nc::pcap::Timestamp reverse_fin_seen_at;
+struct DataCluster {
+  DataCluster(nc::pcap::Timestamp first_byte_at)
+      : first_byte_at(first_byte_at), last_byte_at(first_byte_at), packets(0) {}
 
-  const UnidirectionalTCPFlowState* forward_flow;
-  const UnidirectionalTCPFlowState* reverse_flow;
+  std::string ToString() const;
+
+  nc::pcap::Timestamp first_byte_at;
+  nc::pcap::Timestamp last_byte_at;
+  uint64_t packets;
 };
 
-class FlowTracker;
-
-class UnidirectionalFlowStateCache
-    : public nc::LRUCache<nc::net::FiveTuple, UnidirectionalFlowState,
-                          nc::net::FiveTupleHasher> {
+class BidirectionalTCPFlowState {
  public:
-  UnidirectionalFlowStateCache(size_t cache_size, FlowTracker* parent)
-      : nc::LRUCache<nc::net::FiveTuple, UnidirectionalFlowState,
-                     nc::net::FiveTupleHasher>(cache_size),
-        parent_(parent) {}
+  BidirectionalTCPFlowState(const nc::net::FiveTuple& forward_tuple,
+                            const UnidirectionalTCPFlowState* forward_flow,
+                            const UnidirectionalTCPFlowState* reverse_flow) {
+    PopulateClientAndServer(forward_tuple, forward_flow, reverse_flow);
+  }
 
-  void ItemEvicted(const nc::net::FiveTuple& key,
-                   std::unique_ptr<UnidirectionalFlowState> value) override;
+  // Splits the TCP flow into bursts of data that are at least max_delta apart.
+  std::vector<DataCluster> BreakDown(nc::pcap::Timestamp max_delta) const;
+
+  std::string ToString() const;
 
  private:
-  FlowTracker* parent_;
+  void PopulateClientAndServer(const nc::net::FiveTuple& forward_tuple,
+                               const UnidirectionalTCPFlowState* forward_flow,
+                               const UnidirectionalTCPFlowState* reverse_flow);
+
+  nc::net::FiveTuple client_to_server_tuple_;
+  const UnidirectionalTCPFlowState* client_to_server_flow_;
+  const UnidirectionalTCPFlowState* server_to_client_flow_;
 };
 
-class FlowTracker {
+class FlowTracker : public nc::pcap::PacketHandler {
+ public:
+  FlowTracker(size_t max_flow_count) : tcp_flow_states(max_flow_count) {}
+
+  void HandleTCP(nc::pcap::Timestamp timestamp,
+                 const nc::pcap::IPHeader& ip_header,
+                 const nc::pcap::TCPHeader& tcp_header,
+                 uint16_t payload_len) override;
+
+  void HandleUDP(nc::pcap::Timestamp timestamp,
+                 const nc::pcap::IPHeader& ip_header,
+                 const nc::pcap::UDPHeader& udp_header,
+                 uint16_t payload_len) override;
+
+  void HandleICMP(nc::pcap::Timestamp timestamp,
+                  const nc::pcap::IPHeader& ip_header,
+                  const nc::pcap::ICMPHeader& icmp_header,
+                  uint16_t payload_len) override;
+
+  void HandleUnknownIP(nc::pcap::Timestamp timestamp,
+                       const nc::pcap::IPHeader& ip_header,
+                       uint16_t payload_len) override;
+
+  std::vector<BidirectionalTCPFlowState> BidirectionalTCPFlows() const;
+
  private:
-  UnidirectionalFlowStateCache flow_states;
+  nc::LRUCache<nc::net::FiveTuple, UnidirectionalTCPFlowState,
+               nc::net::FiveTupleHasher> tcp_flow_states;
 };
 
 }  // namespace nc

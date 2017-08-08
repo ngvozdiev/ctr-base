@@ -118,3 +118,9 @@ target_link_libraries(plot_completion_time_delta metrics_parser gflags)
 
 add_executable(opt_eval src/opt_eval.cc)
 target_link_libraries(opt_eval ctr_base)
+
+add_library(flow_track_lib STATIC src/flow_track.cc)
+target_link_libraries(flow_track_lib ncode gflags_nothreads)
+
+add_executable(flow_track src/flow_track_main.cc)
+target_link_libraries(flow_track flow_track_lib)

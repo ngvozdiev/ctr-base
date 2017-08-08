@@ -25,6 +25,8 @@
 #include "opt/path_provider.h"
 
 DEFINE_string(topology_files, "", "Topology files");
+DEFINE_uint64(topology_size_limit, 100000,
+              "Topologies with size more than this will be skipped");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
@@ -256,6 +258,13 @@ static void RunOptimizers(const std::string& topology_file,
   builder.ScaleCapacity(FLAGS_link_capacity_scale);
   builder.ScaleDelay(FLAGS_delay_scale);
   nc::net::GraphStorage graph(builder);
+
+  size_t node_count = graph.AllNodes().Count();
+  if (node_count > FLAGS_topology_size_limit) {
+    LOG(INFO) << "Skipping " << topology_file << " / " << tm_file << " limit "
+              << FLAGS_topology_size_limit << " vs " << node_count;
+    return;
+  }
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
