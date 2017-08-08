@@ -57,6 +57,13 @@ static auto* aggregate_path_count =
             "opt_path_count", "Number of paths in each aggregate", "Topology",
             "Traffic matrix", "Optimizer");
 
+static auto* path_k_index =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<
+        uint32_t, std::string, std::string, std::string>(
+        "opt_path_k_index",
+        "Index in the series of K shortest paths for each aggregate's paths",
+        "Topology", "Traffic matrix", "Optimizer");
+
 static auto* link_utilization =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string, std::string>(
@@ -124,7 +131,9 @@ static void RecordRoutingConfig(const std::string& topology,
       path_stretch_rel->GetHandle(topology, tm, opt);
   auto* unmet_demand_handle = path_unmet_demand->GetHandle(topology, tm, opt);
   auto* path_count_handle = aggregate_path_count->GetHandle(topology, tm, opt);
+  auto* path_k_index_handle = path_k_index->GetHandle(topology, tm, opt);
 
+  std::map<AggregateId, std::vector<size_t>> k_values = routing.GetKValues();
   for (const auto& aggregate_and_aggregate_output : routing.routes()) {
     const AggregateId& aggregate_id = aggregate_and_aggregate_output.first;
     const std::vector<RouteAndFraction>& routes =
@@ -143,6 +152,9 @@ static void RecordRoutingConfig(const std::string& topology,
     // Will limit the delay at 1ms.
     sp_delay_ms = std::max(sp_delay_ms, milliseconds(1));
 
+    const std::vector<size_t>& k_values_for_aggregate =
+        nc::FindOrDieNoPrint(k_values, aggregate_id);
+
     size_t path_count = 0;
     for (const auto& route : routes) {
       const nc::net::Walk* path = route.first;
@@ -152,6 +164,8 @@ static void RecordRoutingConfig(const std::string& topology,
       microseconds path_delay = path->delay();
       CHECK(path_delay >= shortest_path_delay);
 
+      CHECK(path_count < k_values_for_aggregate.size());
+      path_k_index_handle->AddValue(k_values_for_aggregate[path_count]);
       ++path_count;
 
       milliseconds path_delay_ms = duration_cast<milliseconds>(path_delay);

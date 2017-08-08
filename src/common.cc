@@ -223,6 +223,26 @@ std::string RoutingConfiguration::AggregateToString(
                     "ms)");
 }
 
+std::map<AggregateId, std::vector<size_t>> RoutingConfiguration::GetKValues()
+    const {
+  std::map<AggregateId, std::vector<size_t>> out;
+  size_t i = 0;
+  for (const auto& id_and_routes : configuration_) {
+    const AggregateId& id = id_and_routes.first;
+    std::vector<size_t>& indices = out[id];
+
+    nc::net::KShortestPathsGenerator ksp_gen(id.src(), id.dst(), *graph_, {});
+    for (const auto& route : id_and_routes.second) {
+      const nc::net::Walk& to_look_for = *route.first;
+      indices.emplace_back(ksp_gen.KforPath(to_look_for));
+    }
+
+    ++i;
+  }
+
+  return out;
+}
+
 void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
   using namespace std::chrono;
 
@@ -758,9 +778,9 @@ std::string TLDRUpdate::ToString() const {
 }
 
 ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
-                                             std::chrono::milliseconds bin_size,
-                                             std::chrono::milliseconds duration,
-                                             size_t flow_count) {
+                                      std::chrono::milliseconds bin_size,
+                                      std::chrono::milliseconds duration,
+                                      size_t flow_count) {
   size_t bin_size_ms = bin_size.count();
   size_t init_window_ms = duration.count();
   size_t bins_count = init_window_ms / bin_size_ms;
