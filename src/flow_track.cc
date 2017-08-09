@@ -15,38 +15,62 @@ namespace nc {
 
 using namespace nc::net;
 using namespace nc::pcap;
+using namespace std::chrono;
+
+using TimeAndSize = std::pair<uint64_t, uint16_t>;
 
 std::string DataCluster::ToString() const {
   nc::pcap::Timestamp duration = last_byte_at - first_byte_at;
   uint64_t duration_ms =
       std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-  return nc::StrCat("duration: ", duration_ms, "ms, pkts: ", packets);
+  return nc::StrCat("duration: ", duration_ms, "ms, pkts: ", packets,
+                    " bytes: ", bytes);
 }
 
-static std::vector<uint64_t> Combine(
+static std::vector<TimeAndSize> GetTimesAndSizes(
+    const UnidirectionalTCPFlowState& flow_state) {
+  std::vector<uint64_t> timestamps_forward = flow_state.timestamps.Restore();
+  std::vector<uint16_t> sizes_forward = flow_state.total_len_values.Restore();
+
+  std::vector<TimeAndSize> out;
+  out.reserve(timestamps_forward.size());
+
+  CHECK(timestamps_forward.size() == sizes_forward.size());
+  for (size_t i = 0; i < timestamps_forward.size(); ++i) {
+    out.emplace_back(timestamps_forward[i], sizes_forward[i]);
+  }
+
+  return out;
+}
+
+static std::vector<TimeAndSize> Combine(
     const UnidirectionalTCPFlowState& forward,
     const UnidirectionalTCPFlowState& reverse) {
-  std::vector<uint64_t> timestamps_forward = forward.timestamps.Restore();
-  std::vector<uint64_t> timestamps_reverse = reverse.timestamps.Restore();
+  std::vector<TimeAndSize> data_one = GetTimesAndSizes(forward);
+  std::vector<TimeAndSize> data_two = GetTimesAndSizes(reverse);
 
-  std::vector<uint64_t> all_values;
-  std::move(timestamps_forward.begin(), timestamps_forward.end(),
-            std::back_inserter(all_values));
-  std::move(timestamps_reverse.begin(), timestamps_reverse.end(),
-            std::back_inserter(all_values));
+  std::vector<TimeAndSize> all_data;
+  std::move(data_one.begin(), data_one.end(), std::back_inserter(all_data));
+  std::move(data_two.begin(), data_two.end(), std::back_inserter(all_data));
 
-  std::sort(all_values.begin(), all_values.end());
-  return all_values;
+  std::sort(all_data.begin(), all_data.end(),
+            [](const TimeAndSize& lhs, const TimeAndSize& rhs) {
+              return lhs.first < rhs.first;
+            });
+  return all_data;
 }
 
 static std::vector<DataCluster> BreakDownStatic(
     Timestamp max_delta, const UnidirectionalTCPFlowState& forward,
     const UnidirectionalTCPFlowState& reverse) {
-  std::vector<uint64_t> timestamps_combined = Combine(forward, reverse);
+  std::vector<TimeAndSize> data_combined = Combine(forward, reverse);
 
   std::vector<DataCluster> clusters;
-  for (size_t i = 0; i < timestamps_combined.size(); ++i) {
-    uint64_t time = timestamps_combined[i];
+  for (size_t i = 0; i < data_combined.size(); ++i) {
+    TimeAndSize time_and_size = data_combined[i];
+    uint64_t time = time_and_size.first;
+    uint16_t size = time_and_size.second;
+
     if (clusters.empty()) {
       clusters.emplace_back(Timestamp(time));
     } else {
@@ -61,6 +85,7 @@ static std::vector<DataCluster> BreakDownStatic(
     DataCluster& current_cluster = clusters.back();
     current_cluster.last_byte_at = Timestamp(time);
     ++current_cluster.packets;
+    current_cluster.bytes += size;
   }
 
   return clusters;
@@ -76,12 +101,40 @@ std::string BidirectionalTCPFlowState::ToString() const {
   std::string out = StrCat("Client to server 5-tuple: ",
                            client_to_server_tuple_.ToString(), "\n");
   std::vector<DataCluster> clusters = BreakDown(std::chrono::milliseconds(100));
+  Timestamp rtt_estimate = EstimateRTT();
   std::vector<std::string> cluster_strings;
   for (const DataCluster& cluster : clusters) {
     cluster_strings.emplace_back(cluster.ToString());
   }
 
-  return StrCat(out, Join(cluster_strings, ","), "\n");
+  return StrCat(out, Join(cluster_strings, ", "), "\nRTT estimate: ",
+                duration_cast<milliseconds>(rtt_estimate).count(), "ms");
+}
+
+Timestamp BidirectionalTCPFlowState::EstimateRTT() const {
+  std::vector<uint8_t> flags =
+      client_to_server_flow_->tcp_flag_values.Restore();
+  CHECK(!flags.empty());
+  uint8_t flags_of_first_packet = flags.front();
+  if (!(flags_of_first_packet & TCPHeader::kSynFlag)) {
+    return nc::pcap::Timestamp::max();
+  }
+
+  std::vector<uint8_t> reverse_flags =
+      server_to_client_flow_->tcp_flag_values.Restore();
+  CHECK(!reverse_flags.empty());
+  uint8_t flags_of_first_reverse_packet = reverse_flags.front();
+  if (!((flags_of_first_reverse_packet & TCPHeader::kSynFlag) &&
+        (flags_of_first_reverse_packet & TCPHeader::kAckFlag))) {
+    return nc::pcap::Timestamp::max();
+  }
+
+  uint64_t time_of_first_packet =
+      client_to_server_flow_->timestamps.Restore().front();
+  uint64_t time_of_first_reverse_packet =
+      server_to_client_flow_->timestamps.Restore().front();
+  CHECK(time_of_first_reverse_packet > time_of_first_packet);
+  return Timestamp(time_of_first_reverse_packet - time_of_first_packet);
 }
 
 void FlowTracker::HandleTCP(Timestamp timestamp, const IPHeader& ip_header,

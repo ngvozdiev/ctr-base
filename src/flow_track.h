@@ -30,13 +30,17 @@ struct UnidirectionalTCPFlowState : public UnidirectionalFlowState {
 
 struct DataCluster {
   DataCluster(nc::pcap::Timestamp first_byte_at)
-      : first_byte_at(first_byte_at), last_byte_at(first_byte_at), packets(0) {}
+      : first_byte_at(first_byte_at),
+        last_byte_at(first_byte_at),
+        packets(0),
+        bytes(0) {}
 
   std::string ToString() const;
 
   nc::pcap::Timestamp first_byte_at;
   nc::pcap::Timestamp last_byte_at;
   uint64_t packets;
+  uint64_t bytes;
 };
 
 class BidirectionalTCPFlowState {
@@ -49,6 +53,10 @@ class BidirectionalTCPFlowState {
 
   // Splits the TCP flow into bursts of data that are at least max_delta apart.
   std::vector<DataCluster> BreakDown(nc::pcap::Timestamp max_delta) const;
+
+  // Estimates the RTT of the connection from the initial SYN/SYN+ACK handshake.
+  // If the handshake is not captured will return Timestamp::max().
+  nc::pcap::Timestamp EstimateRTT() const;
 
   std::string ToString() const;
 
