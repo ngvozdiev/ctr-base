@@ -5,8 +5,29 @@ import subprocess
 import os
 import signal
 
-PAGES = ['http://www.google.co.uk', 'http://www.youtube.com', 'http://www.google.com', 'http://www.facebook.com', 'http://www.reddit.com', 'http://www.amazon.co.uk', 'http://www.bbc.co.uk', 'http://www.wikipedia.org', 'http://www.ebay.co.uk', 'http://www.twitter.com', 'http://www.ladbible.com', 'http://www.live.com', 'http://www.yahoo.com', 'http://www.instagram.com', 'http://www.linkedin.com', 'http://www.livejasmin.com', 'http://www.netflix.com', 'http://www.theguardian.com', 'http://www.imgur.com']
-IFACE = 'en0'
+PAGES = ['http://www.google.co.uk', 'http://www.youtube.com',
+         'http://www.google.com', 'http://www.facebook.com',
+         'http://www.reddit.com', 'http://www.amazon.co.uk',
+         'http://www.bbc.co.uk', 'http://www.wikipedia.org',
+         'http://www.ebay.co.uk', 'http://www.twitter.com',
+         'http://www.ladbible.com', 'http://www.live.com',
+         'http://www.yahoo.com', 'http://www.instagram.com',
+         'http://www.linkedin.com', 'http://www.livejasmin.com',
+         'http://www.netflix.com', 'http://www.theguardian.com',
+         'http://www.imgur.com', 'http://www.diply.com',
+         'http://www.dailymail.co.uk', 'http://www.paypal.com',
+         'http://www.vk.com', 'http://www.imdb.com',
+         'http://www.twitch.tv', 'http://www.tumblr.com',
+         'http://www.givemesport.com', 'http://www.gov.uk',
+         'http://www.wikia.com', 'http://www.sportbible.com',
+         'http://www.office.com', 'http://www.rightmove.co.uk',
+         'http://www.booking.com', 'http://www.gumtree.com',
+         'http://www.telegraph.co.uk', 'http://www.tripadvisor.co.uk',
+         'http://www.msn.com', 'http://www.bing.com',
+         'http://www.wordpress.com', 'http://www.microsoft.com',
+         'http://www.gov.uk', 'http://www.lloydsbank.co.uk',
+         'http://www.pirateproxy.cc', 'http://www.stackoverflow.com']
+IFACE = 'eno1'
 
 def RunWget(output):
     pcap_cmd = 'tcpdump -n -i {} -w {}'.format(IFACE, output)
@@ -15,7 +36,7 @@ def RunWget(output):
         shell=True, preexec_fn=os.setsid) 
     return process
 
-def DoPages(driver, wait_time=5):
+def DoPages(driver, wait_time=2):
     for page in PAGES:
         driver.get(page)
         time.sleep(wait_time)
@@ -30,7 +51,7 @@ def DisableCacheForProfile(profile):
     profile.set_preference("browser.cache.offline.enable", False)
     profile.set_preference("network.http.use-cache", False)
 
-for use_adblock in [False, True]:
+for use_adblock in [False]:
     # Will first do a run without the cache.
     profile = webdriver.FirefoxProfile()
     if use_adblock:

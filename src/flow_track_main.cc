@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/strutil.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/net/pcap.h"
 #include "ncode_common/src/viz/grapher.h"
@@ -33,6 +34,7 @@ int main(int argc, char** argv) {
   offline_pcap.Run();
 
   std::vector<double> fractions;
+  std::vector<double> cluster_sizes;
 
   std::vector<nc::BidirectionalTCPFlowState> bidirectional_flows =
       tracker.BidirectionalTCPFlows();
@@ -42,18 +44,35 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    std::vector<nc::DataCluster> clusters = flow.BreakDown(rtt_estimate * 2);
+    rtt_estimate =
+        std::max(rtt_estimate, Timestamp(std::chrono::milliseconds(1)));
+    rtt_estimate =
+        std::min(rtt_estimate, Timestamp(std::chrono::milliseconds(500)));
+
+    std::vector<nc::DataCluster> clusters = flow.BreakDown(rtt_estimate * 5);
     for (const auto& cluster : clusters) {
       Timestamp cluster_duration = cluster.last_byte_at - cluster.first_byte_at;
+      bool all_no_payload = (cluster.bytes == cluster.packets * 40);
+      if (all_no_payload) {
+        continue;
+      }
+
       double fraction =
           cluster_duration.count() / static_cast<double>(rtt_estimate.count());
-      fractions.emplace_back(std::max(1.0, fraction));
+      fraction = std::max(1.0, fraction);
+      fractions.emplace_back(std::ceil(fraction));
+      cluster_sizes.emplace_back(cluster.bytes);
     }
   }
 
   nc::viz::DataSeries1D data;
   data.data = std::move(fractions);
+  nc::viz::PythonGrapher python_grapher(
+      nc::StrCat(FLAGS_output, "_rtt_fractions"));
+  python_grapher.PlotCDF({}, {data});
 
-  nc::viz::PythonGrapher python_grapher(FLAGS_output);
+  data.data = std::move(cluster_sizes);
+  python_grapher =
+      nc::viz::PythonGrapher(nc::StrCat(FLAGS_output, "_cluster_sizes"));
   python_grapher.PlotCDF({}, {data});
 }
