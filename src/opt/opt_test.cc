@@ -224,7 +224,7 @@ class CTRTest : public TestBase {
 };
 
 TEST_F(CTRTest, SingleAggregateFit) {
-  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true, false);
   AddAggregate("A", "C", kDefaultLinkspeed);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -232,7 +232,7 @@ TEST_F(CTRTest, SingleAggregateFit) {
 }
 
 TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true, false);
   AddAggregate("A", "C", kDefaultLinkspeed * 2);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -244,7 +244,7 @@ TEST_F(CTRTest, SingleAggregateFitTwoPaths) {
 // be loaded up to kDefaultLinkspeed * 0.9 and the rest of the aggregate to end
 // up on the second best path. There should be no oversubscription.
 TEST_F(CTRTest, SingleAggregateTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true, false);
   AddAggregate("A", "B", kDefaultLinkspeed * 1.2);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -253,7 +253,7 @@ TEST_F(CTRTest, SingleAggregateTwoPaths) {
 }
 
 TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
-  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true, false);
   AddAggregate("A", "C", kDefaultLinkspeed * 3);
   auto routing = ctr_optimizer.Optimize(tm_);
 
@@ -262,7 +262,7 @@ TEST_F(CTRTest, SingleAggregateNoFitTwoPaths) {
 }
 
 TEST_F(CTRTest, FourAggregates) {
-  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true);
+  CTROptimizer ctr_optimizer(path_provider_.get(), 1.0, true, false);
   AddAggregate("A", "B", nc::net::Bandwidth::FromKBitsPerSecond(1500));
   AddAggregate("B", "A", nc::net::Bandwidth::FromKBitsPerSecond(200));
   AddAggregate("C", "D", nc::net::Bandwidth::FromKBitsPerSecond(1500));

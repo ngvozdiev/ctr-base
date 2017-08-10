@@ -32,8 +32,9 @@ struct RunOutput {
 // A single pass of the optimizer.
 class CTROptimizerPass {
  public:
-  CTROptimizerPass(double link_capacity_multiplier, const TrafficMatrix* input,
-                   const CTRPathMap* paths, const nc::net::GraphStorage* graph,
+  CTROptimizerPass(double link_capacity_multiplier, bool ignore_flow_counts,
+                   const TrafficMatrix* input, const CTRPathMap* paths,
+                   const nc::net::GraphStorage* graph,
                    const RoutingConfiguration* base_solution);
 
   const nc::net::GraphLinkSet& links_with_no_capacity() const {
@@ -100,14 +101,19 @@ class CTROptimizerPass {
 
   // Can scale all links' capacities by that fraction.
   double link_capacity_multiplier_;
+
+  // If true will treat all aggregates the same, irrespective of their flow
+  // count.
+  bool ignore_flow_counts_;
 };
 
 class CTROptimizer : public Optimizer {
  public:
-  explicit CTROptimizer(PathProvider* path_provider,
-                        double link_capacity_multiplier, bool add_limits)
+  CTROptimizer(PathProvider* path_provider, double link_capacity_multiplier,
+               bool add_limits, bool ignore_flow_counts)
       : Optimizer(path_provider),
         add_limits_(add_limits),
+        ignore_flow_counts_(ignore_flow_counts),
         link_capacity_multiplier_(link_capacity_multiplier) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
@@ -171,6 +177,9 @@ class CTROptimizer : public Optimizer {
   // If true will run two different optimizations, one with limits to avoid
   // reordering and another one without.
   bool add_limits_;
+
+  // Whether or not to ignore flow counts when optimizing.
+  bool ignore_flow_counts_;
 
   // All links' capacities will be multiplied by this number.
   double link_capacity_multiplier_;

@@ -9,12 +9,17 @@ import matplotlib.patches as mpatches
 import argparse
 
 PERCENTILES = [100, 99, 95]
-OPTIMIZERS = ['MinMax', 'B4', 'CTR', 'MinMaxLD']
+OPTIMIZERS = ['MinMax', 'B4', 'B4FC', 'CTR', 'CTRNFC', 'MinMaxLD']
 
 parser = argparse.ArgumentParser(description='Plots link occupancy')
 parser.add_argument('--file', type=str, help='Metric file')
 parser.add_argument('--sofile', type=str, help='Library file for parser', default='libmetrics_parser.dylib')
 args = parser.parse_args()
+
+def PlotCDF(x, label):
+    x = np.sort(x)
+    y = np.arange(len(x))/float(len(x))
+    plt.plot(x, y, label=label)            
 
 def GetFlowDistribution(path_stretches, flow_counts_per_path, p):
     assert(len(path_stretches) == len(flow_counts_per_path))
@@ -32,7 +37,7 @@ def GetFlowDistribution(path_stretches, flow_counts_per_path, p):
     assert(False)
     
 p = parser_wrapper.MetricsParser(args.file, args.sofile)
-for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
+for metric, flow_count_scale, log_scale in [('opt_path_stretch_rel', True, True), ('opt_path_k_index', False, True)]:
     data_list = []
     for opt in OPTIMIZERS:
         data = defaultdict(dict)
@@ -44,7 +49,10 @@ for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
             tm_id = k[1].split(':')[1]
 
             for percentile in PERCENTILES:
-                v = GetFlowDistribution(path_stretch_v[1], flow_count_v[1], float(percentile/100.0))
+                if flow_count_scale:
+                    v = GetFlowDistribution(path_stretch_v[1], flow_count_v[1], float(percentile/100.0))
+                else:
+                    v = np.percentile(path_stretch_v[1], percentile)
                 data[percentile][tm_id] = (v, tm_id)
         data_list.append(data)
 
@@ -62,9 +70,11 @@ for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
         for i in range(len(OPTIMIZERS)):
             y = [k[i][0] for k in data]
             opt = OPTIMIZERS[i]
-            plt.plot(sorted(y), label=opt)
-
+            PlotCDF(y, opt)
         plt.legend()
+        if log_scale:
+            plt.xscale('symlog')
+
 plt.show()
     
 
