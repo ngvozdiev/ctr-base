@@ -8,8 +8,8 @@ import itertools
 import matplotlib.patches as mpatches
 import argparse
 
-PERCENTILES = [100, 95]
-OPTIMIZERS = ['B4', 'CTR', 'MinMax', 'MinMaxLD', 'B4FC']
+PERCENTILES = [100, 99, 95]
+OPTIMIZERS = ['MinMax', 'B4', 'CTR', 'MinMaxLD']
 
 parser = argparse.ArgumentParser(description='Plots link occupancy')
 parser.add_argument('--file', type=str, help='Metric file')
@@ -32,12 +32,11 @@ def GetFlowDistribution(path_stretches, flow_counts_per_path, p):
     assert(False)
     
 p = parser_wrapper.MetricsParser(args.file, args.sofile)
-data_list = []
-
 for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
+    data_list = []
     for opt in OPTIMIZERS:
         data = defaultdict(dict)
-        path_stretch_data = p.Parse('opt_path_stretch_rel', '.*{}$'.format(opt))
+        path_stretch_data = p.Parse(metric, '.*{}$'.format(opt))
         flow_count_data = p.Parse('opt_path_flow_count', '.*{}$'.format(opt))
 
         for k, path_stretch_v in sorted(path_stretch_data.items()):
@@ -47,7 +46,7 @@ for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
             for percentile in PERCENTILES:
                 v = GetFlowDistribution(path_stretch_v[1], flow_count_v[1], float(percentile/100.0))
                 data[percentile][tm_id] = (v, tm_id)
-                data_list.append(data)
+        data_list.append(data)
 
     by_percentile = defaultdict(list)
     for data in data_list:
@@ -57,7 +56,6 @@ for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
     for percentile, data in by_percentile.items():
         by_percentile[percentile] = sorted(zip(*data))
 
-
     for percentile, data in by_percentile.items():
         plt.figure()
         plt.title('P_{}_{}'.format(percentile, metric))
@@ -66,7 +64,7 @@ for metric in ['opt_path_stretch_rel', 'path_stretch_ms']:
             opt = OPTIMIZERS[i]
             plt.plot(sorted(y), label=opt)
 
-plt.legend()
+        plt.legend()
 plt.show()
     
 

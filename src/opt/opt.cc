@@ -102,10 +102,12 @@ class MinMaxProblem : public nc::lp::SingleCommodityFlowProblem {
         problem_matrix.emplace_back(constraint, variable, 1.0 / link_capacity);
       }
 
+      double link_weight =
+          std::chrono::duration<double, std::milli>(link->delay()).count();
       if (also_minimize_delay_) {
-        double link_weight =
-            std::chrono::duration<double, std::milli>(link->delay()).count();
         problem.SetObjectiveCoefficient(link_utilization_var, link_weight);
+      } else {
+        problem.SetObjectiveCoefficient(link_utilization_var, -link_weight);
       }
     }
 
@@ -236,8 +238,7 @@ class B4AggregateState {
   double fair_share() const { return fair_share_; }
 
   // Adds some capacity to the current path.
-  void AdvanceByFairShare(double fair_share,
-                          const nc::net::GraphStorage* graph) {
+  void AdvanceByFairShare(double fair_share) {
     CHECK(current_path_ != nullptr);
     path_to_capacity_[current_path_] += fair_share_ratio_ * fair_share;
   }
@@ -397,7 +398,7 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
         continue;
       }
 
-      aggregate_state.AdvanceByFairShare(fair_share_delta, graph_);
+      aggregate_state.AdvanceByFairShare(fair_share_delta);
     }
     current_fair_share = fair_share_of_next_event;
 
