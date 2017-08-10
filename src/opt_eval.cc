@@ -28,7 +28,8 @@ DEFINE_string(topology_files, "", "Topology files");
 DEFINE_uint64(topology_size_limit, 100000,
               "Topologies with size more than this will be skipped");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
-DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
+DEFINE_string(tm_scale, "1.0",
+              "By how much to scale the traffic matrix, comma-separated");
 DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_string(output, "opt_eval_out", "Output directory");
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
@@ -247,7 +248,7 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
 }
 
 static void RunOptimizers(const std::string& topology_file,
-                          const std::string& tm_file) {
+                          const std::string& tm_file, double scale) {
   using namespace std::chrono;
   LOG(ERROR) << "Running " << topology_file << " " << tm_file;
 
@@ -269,10 +270,11 @@ static void RunOptimizers(const std::string& topology_file,
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
           nc::File::ReadFileToStringOrDie(tm_file), node_order, &graph);
-  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+  demand_matrix = demand_matrix->Scale(scale);
 
   std::string top_file_trimmed = nc::Split(topology_file, "/").back();
   std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
+  tm_file_trimmed = nc::StrCat(tm_file_trimmed, "_scale_", scale);
 
   // A separate PathProvider instance for B4. Want to run CTR with a fresh
   // PathProvider, but have to run B4 first.
@@ -353,7 +355,7 @@ static std::vector<std::string> GetMatrixFiles(
   return nc::Glob(matrix_location);
 }
 
-using TopologyAndMatrix = std::pair<std::string, std::string>;
+using TopologyAndMatrix = std::tuple<std::string, std::string, double>;
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
@@ -361,21 +363,33 @@ int main(int argc, char** argv) {
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
-  std::vector<TopologyAndMatrix> to_process;
-  for (const std::string& topology_file : topology_files) {
-    std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
-    if (matrix_files.empty()) {
-      LOG(ERROR) << "No matrices for " << topology_file;
-      continue;
-    }
+  std::vector<std::string> scales = nc::Split(FLAGS_tm_scale, ",");
+  CHECK(!scales.empty());
 
-    for (const std::string& matrix_file : matrix_files) {
-      to_process.emplace_back(topology_file, matrix_file);
+  std::vector<TopologyAndMatrix> to_process;
+  for (const std::string& scale_str : scales) {
+    double scale;
+    CHECK(nc::safe_strtod(scale_str, &scale));
+
+    for (const std::string& topology_file : topology_files) {
+      std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
+      if (matrix_files.empty()) {
+        LOG(ERROR) << "No matrices for " << topology_file;
+        continue;
+      }
+
+      for (const std::string& matrix_file : matrix_files) {
+        to_process.emplace_back(topology_file, matrix_file, scale);
+      }
     }
   }
 
   nc::RunInParallel<TopologyAndMatrix>(
-      to_process, [](const TopologyAndMatrix& tm_and_matrix) {
-        ctr::RunOptimizers(tm_and_matrix.first, tm_and_matrix.second);
+      to_process, [](const TopologyAndMatrix& topology_and_matrix) {
+        std::string topology_file, tm_file;
+        double scale;
+        std::tie(topology_file, tm_file, scale) = topology_and_matrix;
+
+        ctr::RunOptimizers(topology_file, tm_file, scale);
       }, FLAGS_threads);
 }
