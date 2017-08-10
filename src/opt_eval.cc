@@ -199,8 +199,9 @@ static void RecordRoutingConfig(const std::string& topology,
                                           required_per_flow - per_flow_rate);
       double delta_rel =
           static_cast<double>(path_delay_ms.count()) / sp_delay_ms.count();
+      milliseconds delta = path_delay_ms - sp_delay_ms;
 
-      path_stretch_handle->AddValue(path_delay_ms.count());
+      path_stretch_handle->AddValue(delta.count());
       path_flow_count_handle->AddValue(fraction * total_num_flows);
       path_stretch_rel_handle->AddValue(delta_rel);
       unmet_demand_handle->AddValue(unmet.bps());
