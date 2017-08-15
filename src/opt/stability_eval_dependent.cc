@@ -177,11 +177,22 @@ class StabilityEvalHarness {
           routing_system_->Update(SyntheticHistoryFromTM(*tm));
       auto& routing = update_result.routing;
 
+      std::set<const nc::net::Walk*> paths_in_routing;
       for (const auto& aggregate_and_routes : routing->routes()) {
         for (const auto& path_and_fraction : aggregate_and_routes.second) {
-          path_to_fraction_[path_and_fraction.first].emplace_back(
-              i, path_and_fraction.second);
+          const nc::net::Walk* path = path_and_fraction.first;
+          path_to_fraction_[path].emplace_back(i, path_and_fraction.second);
+          paths_in_routing.insert(path);
         }
+      }
+
+      for (const auto& path_and_fractions : path_to_fraction_) {
+        const nc::net::Walk* path = path_and_fractions.first;
+        if (nc::ContainsKey(paths_in_routing, path)) {
+          continue;
+        }
+
+        path_to_fraction_[path].emplace_back(i, 0.0);
       }
 
       if (prev_routing) {
@@ -249,9 +260,9 @@ static void RunWithSimpleTopologyTwoAggregates() {
   builder.AddLink({"B", "A",
                    nc::net::Bandwidth::FromGBitsPerSecond(FLAGS_ab_link_gbps),
                    ab_delay});
-  builder.AddLink({"A", "C", nc::net::Bandwidth::FromGBitsPerSecond(1),
+  builder.AddLink({"A", "D", nc::net::Bandwidth::FromGBitsPerSecond(1),
                    std::chrono::milliseconds(1)});
-  builder.AddLink({"C", "A", nc::net::Bandwidth::FromGBitsPerSecond(1),
+  builder.AddLink({"D", "A", nc::net::Bandwidth::FromGBitsPerSecond(1),
                    std::chrono::milliseconds(1)});
   builder.AddLink({"C", "D",
                    nc::net::Bandwidth::FromGBitsPerSecond(FLAGS_cd_link_gbps),
@@ -259,9 +270,9 @@ static void RunWithSimpleTopologyTwoAggregates() {
   builder.AddLink({"D", "C",
                    nc::net::Bandwidth::FromGBitsPerSecond(FLAGS_cd_link_gbps),
                    cd_delay});
-  builder.AddLink({"B", "D", nc::net::Bandwidth::FromGBitsPerSecond(1),
+  builder.AddLink({"B", "C", nc::net::Bandwidth::FromGBitsPerSecond(1),
                    std::chrono::milliseconds(1)});
-  builder.AddLink({"D", "B", nc::net::Bandwidth::FromGBitsPerSecond(1),
+  builder.AddLink({"C", "B", nc::net::Bandwidth::FromGBitsPerSecond(1),
                    std::chrono::milliseconds(1)});
 
   nc::net::GraphStorage graph(builder);
@@ -269,7 +280,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
   AggregateId id_one(
       {graph.NodeFromStringOrDie("A"), graph.NodeFromStringOrDie("B")});
   AggregateId id_two(
-      {graph.NodeFromStringOrDie("C"), graph.NodeFromStringOrDie("D")});
+      {graph.NodeFromStringOrDie("D"), graph.NodeFromStringOrDie("C")});
 
   initial_tm.AddDemand(
       id_one, {nc::net::Bandwidth::FromGBitsPerSecond(FLAGS_ab_aggregate_gbps),
@@ -281,7 +292,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
   PathProvider path_provider(&graph);
   std::unique_ptr<Optimizer> opt;
   if (FLAGS_opt == "CTR") {
-    opt = nc::make_unique<CTROptimizer>(&path_provider, 1.0, true);
+    opt = nc::make_unique<CTROptimizer>(&path_provider, 1.0, true, false);
   } else if (FLAGS_opt == "B4") {
     opt = nc::make_unique<B4Optimizer>(&path_provider, false, 1.0);
   } else if (FLAGS_opt == "B4(P)") {
@@ -291,7 +302,7 @@ static void RunWithSimpleTopologyTwoAggregates() {
   }
 
   MeanScaleEstimatorFactory estimator_factory(
-      {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
+      {1.01, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   RoutingSystemConfig routing_system_config;
   routing_system_config.store_to_metrics = false;
   RoutingSystem routing_system(routing_system_config, opt.get(),

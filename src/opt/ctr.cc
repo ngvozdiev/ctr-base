@@ -275,8 +275,8 @@ double CTROptimizer::OptimizePrivate(
     }
 
     CTROptimizerPass pass(
-        link_capacity_multiplier_, &input, &path_map_, graph_,
-        use_previous && previous_ ? previous_.get() : nullptr);
+        link_capacity_multiplier_, ignore_flow_counts_, &input, &path_map_,
+        graph_, use_previous && previous_ ? previous_.get() : nullptr);
     RunOutput& run_output = pass.run_output();
     double obj_value = run_output.obj_value;
     CHECK(obj_value != std::numeric_limits<double>::max());
@@ -414,6 +414,10 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     }
 
     double flow_count = demand_and_flow_count.second;
+    if (ignore_flow_counts_) {
+      flow_count = 1;
+    }
+
     const std::vector<PathPtr>& paths =
         nc::FindOrDieNoPrint(*paths_, aggregate_id);
     CHECK(!paths.empty());
@@ -717,6 +721,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
 }
 
 CTROptimizerPass::CTROptimizerPass(double link_capacity_multiplier,
+                                   bool ignore_flow_counts,
                                    const TrafficMatrix* input,
                                    const CTRPathMap* paths,
                                    const nc::net::GraphStorage* graph,
@@ -726,7 +731,8 @@ CTROptimizerPass::CTROptimizerPass(double link_capacity_multiplier,
       graph_(graph),
       latest_run_max_oversubscription_(0),
       base_solution_(base_solution),
-      link_capacity_multiplier_(link_capacity_multiplier) {
+      link_capacity_multiplier_(link_capacity_multiplier),
+      ignore_flow_counts_(ignore_flow_counts) {
   initial_obj_ = 0;
   initial_oversubscription_ = 0;
 

@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 from matplotlib.widgets import CheckButtons
 
+import matplotlib
+matplotlib.rcParams.update({'font.size': 14})
+
 fig, axs = plt.subplots(2, sharex=True)
 
 #plt.plot([0], [0])
@@ -33,11 +36,11 @@ ax_ab_flows = plt.axes([0.25, 0.24, 0.65, 0.01], facecolor=axcolor)
 ax_decay_factor = plt.axes([0.25, 0.26, 0.65, 0.01], facecolor=axcolor)
 
 s_cd_capacity = Slider(ax_cd_capacity, 'C->D capacity', 0.1, 2, valinit=cd_capacity_init)
-s_cd_delay = Slider(ax_cd_delay, 'C->D delay', 1, 20, valinit=cd_delay_init)
+s_cd_delay = Slider(ax_cd_delay, 'C->D delay', 1, 200, valinit=cd_delay_init)
 s_cd_demand = Slider(ax_cd_demand, 'C->D demand', 0.1, 2, valinit=cd_demand_init)
 s_cd_flows = Slider(ax_cd_flows, 'C->D flows', 100, 2000, valinit=cd_flows_init)
 s_ab_capacity = Slider(ax_ab_capacity, 'A->B capacity', 0.1, 2, valinit=ab_capacity_init)
-s_ab_delay = Slider(ax_ab_delay, 'A->B delay', 1, 20, valinit=ab_delay_init)
+s_ab_delay = Slider(ax_ab_delay, 'A->B delay', 1, 200, valinit=ab_delay_init)
 s_ab_demand = Slider(ax_ab_demand, 'A->B demand', 0.1, 2, valinit=ab_demand_init)
 s_ab_flows = Slider(ax_ab_flows, 'A->B flows', 100, 2000, valinit=ab_flows_init)
 s_decay_factor = Slider(ax_decay_factor, 'Decay factor', 0, 1, valinit=decay_factor_init)
@@ -57,13 +60,14 @@ def Update(val):
     if check.lines[0][0].get_visible():
         dampen_ratio = True
 
-    cmd = '../build/stability_eval_dependent --cd_link_gbps {} --cd_link_ms {} --cd_aggregate_gbps {} --cd_aggregate_flows {} --ab_link_gbps {} --ab_link_ms {} --ab_aggregate_gbps {} --ab_aggregate_flows {} --decay_factor {} --steps {} --opt="{}" --dampen_ratio={}'.format(cd_capacity, cd_delay, cd_demand, int(cd_flows), ab_capacity, ab_delay, ab_demand, int(ab_flows), decay_factor, 100, opt, dampen_ratio)
+    cmd = '../build/stability_eval_dependent --cd_link_gbps {} --cd_link_ms {} --cd_aggregate_gbps {} --cd_aggregate_flows {} --ab_link_gbps {} --ab_link_ms {} --ab_aggregate_gbps {} --ab_aggregate_flows {} --decay_factor {} --steps {} --opt="{}" --dampen_ratio={}'.format(cd_capacity, cd_delay, cd_demand, int(cd_flows), ab_capacity, ab_delay, ab_demand, int(ab_flows), decay_factor, 10, opt, dampen_ratio)
     #print cmd
     start_time = timeit.default_timer()
     output = subprocess.check_output(cmd, shell=True)
     elapsed = timeit.default_timer() - start_time
     #print elapsed
     split = output.strip().split('\n')
+    print output
 
     axs[0].clear()
     axs[0].set_ylabel('fraction')
@@ -87,9 +91,10 @@ def Update(val):
 
     for label, xy in path_data:
         x, y = zip(*eval(xy))
-        axs[0].plot(x, y, 'o', label=label)
+        axs[0].plot(x, y, '--', label=label, linewidth=2)
     axs[0].legend()
     axs[0].set_ylim([0, 1])
+    axs[0].set_xlabel('run #')
 
     for label, vs in aggregate_data:
         y = eval(vs)

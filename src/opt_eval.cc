@@ -25,13 +25,21 @@
 #include "opt/path_provider.h"
 
 DEFINE_string(topology_files, "", "Topology files");
+DEFINE_string(
+    tm_files, "",
+    "Traffic matrix file(s). If empty will look for TMs named like the "
+    "topology, but with the .demands extension");
 DEFINE_uint64(topology_size_limit, 100000,
               "Topologies with size more than this will be skipped");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
-DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
+DEFINE_string(tm_scale, "1.0",
+              "By how much to scale the traffic matrix, comma-separated");
 DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_string(output, "opt_eval_out", "Output directory");
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
+DEFINE_bool(scale_to_make_b4_fit, true,
+            "If true will always scale down the TM to make B4 fit before "
+            "running the rest of the optimizers.");
 
 static auto* path_stretch_ms =
     nc::metrics::DefaultMetricManager()
@@ -100,12 +108,24 @@ static auto* tm_scale_factor =
 
 namespace ctr {
 
+static constexpr size_t kTopAggregateFlowCount = 10000;
+
 static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
     const nc::lp::DemandMatrix& demand_matrix) {
+  nc::net::Bandwidth max_demand = nc::net::Bandwidth::Zero();
+  for (const auto& element : demand_matrix.elements()) {
+    max_demand = std::max(max_demand, element.demand);
+  }
+
+  // Will assign flow counts so that the max bandwidth aggregate has
+  // kTopAggregateFlowCount, and all other aggregates proportionally less.
   std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
   for (const auto& element : demand_matrix.elements()) {
+    size_t flow_count = kTopAggregateFlowCount * (element.demand / max_demand);
+    flow_count = std::max(1ul, flow_count);
+
     AggregateId id(element.src, element.dst);
-    demands_and_counts[id] = {element.demand, 1000ul};
+    demands_and_counts[id] = {element.demand, flow_count};
   }
 
   return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
@@ -179,8 +199,9 @@ static void RecordRoutingConfig(const std::string& topology,
                                           required_per_flow - per_flow_rate);
       double delta_rel =
           static_cast<double>(path_delay_ms.count()) / sp_delay_ms.count();
+      milliseconds delta = path_delay_ms - sp_delay_ms;
 
-      path_stretch_handle->AddValue(path_delay_ms.count());
+      path_stretch_handle->AddValue(delta.count());
       path_flow_count_handle->AddValue(fraction * total_num_flows);
       path_stretch_rel_handle->AddValue(delta_rel);
       unmet_demand_handle->AddValue(unmet.bps());
@@ -231,7 +252,7 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
     auto scaled_tm = tm.ScaleDemands(scale, {});
     // B4 should run fine on both the scaled and the randomized TMs.
     auto routing = b4_optimizer.Optimize(*scaled_tm);
-    if (!Fits(*routing)) {
+    if (FLAGS_scale_to_make_b4_fit && !Fits(*routing)) {
       continue;
     }
 
@@ -247,7 +268,7 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
 }
 
 static void RunOptimizers(const std::string& topology_file,
-                          const std::string& tm_file) {
+                          const std::string& tm_file, double scale) {
   using namespace std::chrono;
   LOG(ERROR) << "Running " << topology_file << " " << tm_file;
 
@@ -269,10 +290,11 @@ static void RunOptimizers(const std::string& topology_file,
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
           nc::File::ReadFileToStringOrDie(tm_file), node_order, &graph);
-  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+  demand_matrix = demand_matrix->Scale(scale);
 
   std::string top_file_trimmed = nc::Split(topology_file, "/").back();
   std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
+  tm_file_trimmed = nc::StrCat(tm_file_trimmed, "_scale_", scale);
 
   // A separate PathProvider instance for B4. Want to run CTR with a fresh
   // PathProvider, but have to run B4 first.
@@ -288,7 +310,8 @@ static void RunOptimizers(const std::string& topology_file,
   }
 
   PathProvider path_provider(&graph);
-  CTROptimizer ctr_optimizer(&path_provider, 1.0, false);
+  CTROptimizer ctr_optimizer(&path_provider, 1.0, false, false);
+  CTROptimizer ctr_optimizer_no_flow_counts(&path_provider, 1.0, false, true);
   MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
   MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
   B4Optimizer b4_flow_count_optimizer(&path_provider, true, 1.0);
@@ -306,6 +329,13 @@ static void RunOptimizers(const std::string& topology_file,
   ctr_optimizer.Optimize(*tm);
   auto ctr_cached_duration =
       std::chrono::high_resolution_clock::now() - ctr_start;
+
+  routing = ctr_optimizer_no_flow_counts.Optimize(*tm);
+
+  {
+    std::unique_lock<std::mutex> lock(global_mutex);
+    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "CTRNFC", *routing);
+  }
 
   routing = minmax_optimizer.Optimize(*tm);
 
@@ -348,12 +378,22 @@ static std::vector<std::string> GetTopologyFiles() {
 
 static std::vector<std::string> GetMatrixFiles(
     const std::string& topology_file) {
+  if (!FLAGS_tm_files.empty()) {
+    std::vector<std::string> out;
+    for (const std::string& tm_file : nc::Split(FLAGS_tm_files, ",")) {
+      std::vector<std::string> tm_globbed = nc::Glob(tm_file);
+      out.insert(out.end(), tm_globbed.begin(), tm_globbed.end());
+    }
+
+    return out;
+  }
+
   std::string matrix_location =
       nc::StringReplace(topology_file, ".graph", ".*.demands", true);
   return nc::Glob(matrix_location);
 }
 
-using TopologyAndMatrix = std::pair<std::string, std::string>;
+using TopologyAndMatrix = std::tuple<std::string, std::string, double>;
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
@@ -361,21 +401,33 @@ int main(int argc, char** argv) {
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
-  std::vector<TopologyAndMatrix> to_process;
-  for (const std::string& topology_file : topology_files) {
-    std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
-    if (matrix_files.empty()) {
-      LOG(ERROR) << "No matrices for " << topology_file;
-      continue;
-    }
+  std::vector<std::string> scales = nc::Split(FLAGS_tm_scale, ",");
+  CHECK(!scales.empty());
 
-    for (const std::string& matrix_file : matrix_files) {
-      to_process.emplace_back(topology_file, matrix_file);
+  std::vector<TopologyAndMatrix> to_process;
+  for (const std::string& scale_str : scales) {
+    double scale;
+    CHECK(nc::safe_strtod(scale_str, &scale));
+
+    for (const std::string& topology_file : topology_files) {
+      std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
+      if (matrix_files.empty()) {
+        LOG(ERROR) << "No matrices for " << topology_file;
+        continue;
+      }
+
+      for (const std::string& matrix_file : matrix_files) {
+        to_process.emplace_back(topology_file, matrix_file, scale);
+      }
     }
   }
 
   nc::RunInParallel<TopologyAndMatrix>(
-      to_process, [](const TopologyAndMatrix& tm_and_matrix) {
-        ctr::RunOptimizers(tm_and_matrix.first, tm_and_matrix.second);
+      to_process, [](const TopologyAndMatrix& topology_and_matrix) {
+        std::string topology_file, tm_file;
+        double scale;
+        std::tie(topology_file, tm_file, scale) = topology_and_matrix;
+
+        ctr::RunOptimizers(topology_file, tm_file, scale);
       }, FLAGS_threads);
 }
