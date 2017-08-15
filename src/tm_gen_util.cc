@@ -19,8 +19,8 @@
 #include "opt/path_provider.h"
 
 DEFINE_string(topology, "", "A file with a topology");
-DEFINE_string(output, "tm.demands",
-              "Output file where to save the traffic matrix");
+DEFINE_string(output_suffix, "tm_gen",
+              "Traffic matrices will be saved to files with this suffix");
 DEFINE_double(scale, 1.2,
               "All aggregates in the generated matrix will initially fit on "
               "their shortest paths. The matrix can be further scaled after "
@@ -30,10 +30,13 @@ DEFINE_double(min_scale_factor, 1.3,
               "without becoming unfeasible.");
 DEFINE_uint64(seed, 1ul, "Seed for the generated TM.");
 DEFINE_uint64(max_try_count, 1000ul, "How many different TMs to try.");
+DEFINE_uint64(tm_count, 1, "How many TMs to generate");
 DEFINE_double(max_global_utilization, std::numeric_limits<double>::max(),
               "Max global utilization for the generated matrix.");
 DEFINE_double(link_capacity_scale, 1.0,
               "By how much to scale all links' capacity");
+DEFINE_uint64(max_variable_count, 10000, "Max number of LP variables");
+DEFINE_uint64(max_constraint_count, 10000, "Max number of LP constraints");
 
 // Returns the cost of a matrix. The cost is tied to the improvement expected
 // from using CTR vs MinMax.
@@ -64,7 +67,7 @@ static double Cost(const nc::lp::DemandMatrix& matrix) {
   return delta.total_per_flow_delay_delta;
 }
 
-static std::unique_ptr<nc::lp::DemandMatrix> GetMatrix(
+static std::vector<std::unique_ptr<nc::lp::DemandMatrix>> GetMatrices(
     nc::net::GraphStorage* graph) {
   nc::lp::DemandGenerator generator(FLAGS_seed, graph);
 
@@ -151,11 +154,27 @@ static std::unique_ptr<nc::lp::DemandMatrix> GetMatrix(
 
   generator.SetMinScaleFactor(FLAGS_min_scale_factor);
   generator.SetMinOverloadedLinkCount(2);
-  std::unique_ptr<nc::lp::DemandMatrix> matrix = generator.GenerateMatrix(
-      FLAGS_max_try_count, FLAGS_scale,
-      [](const nc::lp::DemandMatrix& matrix) { return Cost(matrix); });
-  CHECK(matrix) << "Unable to find matrix";
-  return matrix;
+
+  size_t var_count, constraint_count;
+  std::tie(var_count, constraint_count) = generator.EstimateLPSize();
+  LOG(INFO) << "Estimated LP size " << var_count << " / " << constraint_count;
+  if (var_count > FLAGS_max_variable_count ||
+      constraint_count > FLAGS_max_constraint_count) {
+    LOG(FATAL) << "LP too large";
+  }
+
+  std::vector<std::unique_ptr<nc::lp::DemandMatrix>> matrices =
+      generator.GenerateMatrices(FLAGS_max_try_count, FLAGS_scale);
+
+  std::sort(matrices.begin(), matrices.end(),
+            [](const std::unique_ptr<nc::lp::DemandMatrix>& lhs,
+               const std::unique_ptr<nc::lp::DemandMatrix>& rhs) {
+              return lhs->SPGlobalUtilization() > rhs->SPGlobalUtilization();
+            });
+
+  matrices.resize(
+      std::min(static_cast<size_t>(FLAGS_tm_count), matrices.size()));
+  return matrices;
 }
 
 int main(int argc, char** argv) {
@@ -168,9 +187,15 @@ int main(int argc, char** argv) {
   builder.RemoveMultipleLinks();
   builder.ScaleCapacity(FLAGS_link_capacity_scale);
   nc::net::GraphStorage graph(builder);
-  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix = GetMatrix(&graph);
+  std::vector<std::unique_ptr<nc::lp::DemandMatrix>> demand_matrices =
+      GetMatrices(&graph);
+  for (uint64_t i = 0; i < demand_matrices.size(); ++i) {
+    const nc::lp::DemandMatrix& demand_matrix = *demand_matrices[i];
+    std::string output = nc::StrCat(FLAGS_topology, "_", FLAGS_output_suffix,
+                                    "_", i, ".demands");
 
-  nc::File::WriteStringToFileOrDie(demand_matrix->ToRepetita(node_order),
-                                   FLAGS_output);
-  LOG(INFO) << "Written TM to " << FLAGS_output;
+    nc::File::WriteStringToFileOrDie(demand_matrix.ToRepetita(node_order),
+                                     output);
+    LOG(INFO) << "Written TM to " << output;
+  }
 }
