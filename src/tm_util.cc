@@ -18,6 +18,7 @@ DEFINE_double(
     "The matrix should be feasible if all commodities are scaled by this much");
 DEFINE_uint64(seed, 1, "Seed for the RNG");
 DEFINE_string(output, "", "If non-empty will save the output matrix there");
+DEFINE_uint64(passes, 100, "How many passes to do for each TM");
 
 static void MakeFitRecursive(
     const nc::lp::DemandMatrix& input,
@@ -75,13 +76,11 @@ static void MakeFitRecursive(
 // Removes small commodities until the TM fits with a given
 // commodity_scale_factor.
 static std::unique_ptr<nc::lp::DemandMatrix> MakeFit(
-    const nc::lp::DemandMatrix& input, double target_csf) {
+    const nc::lp::DemandMatrix& input, double target_csf, std::mt19937* rnd) {
   // Demands, ordered by size.
   std::vector<nc::lp::DemandMatrixElement> all_elements = input.elements();
-
-  std::mt19937 rnd(FLAGS_seed);
   std::shuffle(all_elements.begin(),
-               std::next(all_elements.begin(), all_elements.size()), rnd);
+               std::next(all_elements.begin(), all_elements.size()), *rnd);
 
   nc::net::Bandwidth max_demand;
   for (const auto& element : all_elements) {
@@ -119,15 +118,32 @@ int main(int argc, char** argv) {
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
           nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
           &graph);
-  demand_matrix = MakeFit(*demand_matrix, FLAGS_target_commodity_scale_factor);
 
-  LOG(INFO) << graph.Stats().ToString();
-  if (demand_matrix) {
-    LOG(INFO) << demand_matrix->ToString();
+  std::mt19937 rnd(FLAGS_seed);
+  std::unique_ptr<nc::lp::DemandMatrix> best_candidate;
+  size_t best_candidate_element_count = 0;
+  for (size_t i = 0; i < FLAGS_passes; ++i) {
+    auto candidate =
+        MakeFit(*demand_matrix, FLAGS_target_commodity_scale_factor, &rnd);
+    if (!candidate) {
+      continue;
+    }
+
+    size_t element_count = candidate->elements().size();
+    LOG(INFO) << "pass " << i << " ec " << element_count;
+    if (element_count > best_candidate_element_count) {
+      best_candidate = std::move(candidate);
+      best_candidate_element_count = element_count;
+    }
   }
 
-  if (!FLAGS_output.empty()) {
-    std::string serialized_matrix = demand_matrix->ToRepetita(node_order);
+  LOG(INFO) << graph.Stats().ToString();
+  if (best_candidate) {
+    LOG(INFO) << best_candidate->ToString();
+  }
+
+  if (!FLAGS_output.empty() && best_candidate) {
+    std::string serialized_matrix = best_candidate->ToRepetita(node_order);
     nc::File::WriteStringToFile(serialized_matrix, FLAGS_output);
   }
 }
