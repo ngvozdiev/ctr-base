@@ -18,7 +18,12 @@ DEFINE_double(
     "The matrix should be feasible if all commodities are scaled by this much");
 DEFINE_uint64(seed, 1, "Seed for the RNG");
 DEFINE_string(output, "", "If non-empty will save the output matrix there");
-DEFINE_uint64(passes, 100, "How many passes to do for each TM");
+DEFINE_uint64(
+    max_sp_utilization_passes, 100,
+    "How many passes to do before giving up on sp_link_utilization_threshold");
+DEFINE_double(sp_link_utilization_threshold, 1.3,
+              "Utilization of at least one link when aggregates are routed "
+              "over their SP should be this.");
 
 static void MakeFitRecursive(
     const nc::lp::DemandMatrix& input,
@@ -120,30 +125,26 @@ int main(int argc, char** argv) {
           &graph);
 
   std::mt19937 rnd(FLAGS_seed);
-  std::unique_ptr<nc::lp::DemandMatrix> best_candidate;
-  size_t best_candidate_element_count = 0;
-  for (size_t i = 0; i < FLAGS_passes; ++i) {
-    auto candidate =
+  std::unique_ptr<nc::lp::DemandMatrix> candidate;
+  for (size_t i = 0; i < FLAGS_max_sp_utilization_passes; ++i) {
+    candidate =
         MakeFit(*demand_matrix, FLAGS_target_commodity_scale_factor, &rnd);
     if (!candidate) {
       continue;
     }
 
-    size_t element_count = candidate->elements().size();
-    LOG(INFO) << "pass " << i << " ec " << element_count;
-    if (element_count > best_candidate_element_count) {
-      best_candidate = std::move(candidate);
-      best_candidate_element_count = element_count;
+    if (candidate->SPMaxUtilization() >= FLAGS_sp_link_utilization_threshold) {
+      break;
     }
   }
 
   LOG(INFO) << graph.Stats().ToString();
-  if (best_candidate) {
-    LOG(INFO) << best_candidate->ToString();
+  if (candidate) {
+    LOG(INFO) << candidate->ToString();
   }
 
-  if (!FLAGS_output.empty() && best_candidate) {
-    std::string serialized_matrix = best_candidate->ToRepetita(node_order);
+  if (!FLAGS_output.empty() && candidate) {
+    std::string serialized_matrix = candidate->ToRepetita(node_order);
     nc::File::WriteStringToFile(serialized_matrix, FLAGS_output);
   }
 }

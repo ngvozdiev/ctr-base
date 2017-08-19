@@ -30,7 +30,7 @@ using PathPtr = const nc::net::Walk*;
 
 static constexpr double kM1 = 1000000000.0;
 static constexpr double kM2 = 0.001;
-static constexpr double kLinkFullThreshold = 1.0;
+static constexpr double kLinkFullThreshold = 0.9999;
 
 static bool HasFreeCapacity(const nc::net::GraphLinkSet& links_with_no_capacity,
                             const nc::net::Walk& path) {
@@ -258,6 +258,10 @@ double CTROptimizer::OptimizePrivate(
   nc::net::GraphLinkSet links_with_no_capacity;
   double prev_obj_value = std::numeric_limits<double>::max();
   double max_oversubscription = 0;
+
+  if (FLAGS_debug_ctr) {
+    CLOG(INFO, YELLOW) << "New FUBAR call";
+  }
 
   std::map<AggregateId, std::vector<RouteAndFraction>> aggregate_outputs;
   size_t pass_count = 0;

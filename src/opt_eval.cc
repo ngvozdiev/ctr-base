@@ -31,11 +31,12 @@ DEFINE_string(
     "topology, but with the .demands extension");
 DEFINE_uint64(topology_size_limit, 100000,
               "Topologies with size more than this will be skipped");
+DEFINE_uint64(topology_delay_limit_ms, 10,
+              "Topologies with diameter less than this limit will be skipped");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_string(tm_scale, "1.0",
               "By how much to scale the traffic matrix, comma-separated");
 DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
-DEFINE_string(output, "opt_eval_out", "Output directory");
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 DEFINE_bool(scale_to_make_b4_fit, true,
             "If true will always scale down the TM to make B4 fit before "
@@ -282,8 +283,18 @@ static void RunOptimizers(const std::string& topology_file,
 
   size_t node_count = graph.AllNodes().Count();
   if (node_count > FLAGS_topology_size_limit) {
-    LOG(INFO) << "Skipping " << topology_file << " / " << tm_file << " limit "
-              << FLAGS_topology_size_limit << " vs " << node_count;
+    LOG(INFO) << "Skipping " << topology_file << " / " << tm_file
+              << " size limit " << FLAGS_topology_size_limit << " vs "
+              << node_count;
+    return;
+  }
+
+  nc::net::Delay diameter = graph.Stats().sp_delay_percentiles.back();
+  if (diameter < milliseconds(FLAGS_topology_delay_limit_ms)) {
+    LOG(INFO) << "Skipping " << topology_file << " / " << tm_file
+              << " delay limit " << FLAGS_topology_delay_limit_ms
+              << "ms vs diameter delay "
+              << duration_cast<milliseconds>(diameter).count() << "ms";
     return;
   }
 
