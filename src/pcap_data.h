@@ -185,6 +185,9 @@ class BinSequence {
   // Sum of all bytes (in bits) divided by bin_size * bin_count in seconds.
   nc::net::Bandwidth MeanRate();
 
+  // The maximum instantaneous rate reached for any bin.
+  nc::net::Bandwidth MaxRate();
+
  private:
   // Combines every 'bin_size_multiplier' bins into a PcapDataTraceBin and
   // returns the sequence.

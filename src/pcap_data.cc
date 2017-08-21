@@ -740,6 +740,28 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() {
   return {bytes, packets};
 }
 
+nc::net::Bandwidth BinSequence::MaxRate() {
+  using namespace std::chrono;
+
+  uint64_t max_bytes = 0;
+  for (const TraceAndSlice& trace_and_slice : traces_) {
+    PcapDataTrace* trace = trace_and_slice.trace;
+    TraceSliceIndex slice = trace_and_slice.slice;
+    size_t end_bin = trace_and_slice.start_bin + count;
+    trace->Bins(slice, trace_and_slice.start_bin, end_bin,
+                [&max_bytes, &trace_and_slice](const PBBin& bin_pb) {
+                  uint64_t bytes_in_bin =
+                      bin_pb.byte_count() * trace_and_slice.fraction;
+                  max_bytes = std::max(max_bytes, bytes_in_bin);
+                });
+  }
+
+  std::chrono::microseconds bin_size = bin_size();
+  double bin_size_seconds = duration_cast<duration<double>>(bin_size).count();
+  double bits_per_second = (max_bytes * 8) / bin_size_seconds;
+  return nc::net::Bandwidth::FromBitsPerSecond(bits_per_second);
+}
+
 const std::chrono::microseconds BinSequence::bin_size() const {
   CHECK(!traces_.empty());
   return traces_.front().trace->base_bin_size();
