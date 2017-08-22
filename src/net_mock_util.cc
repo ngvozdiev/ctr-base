@@ -46,7 +46,6 @@ DEFINE_double(link_capacity_scale, 1.0,
 DEFINE_double(link_delay_scale, 1.3, "By how much to scale all links' delay");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
-DEFINE_bool(quick, false, "Whether to perform packet-level simulation or not");
 DEFINE_bool(disable_rto, false, "If true will disable TCP's rto mechanism");
 DEFINE_uint64(duration_sec, 90, "For how long to run (in simulated time)");
 DEFINE_uint64(
@@ -177,46 +176,6 @@ static void HandleDefault(
   event_queue->RunAndStopIn(std::chrono::seconds(FLAGS_duration_sec));
 }
 
-static void HandleQuick(
-    const std::map<ctr::AggregateId, ctr::BinSequence>& initial_sequences,
-    const nc::net::GraphStorage& graph, std::chrono::milliseconds poll_period,
-    std::chrono::milliseconds round_duration, nc::EventQueue* event_queue,
-    ctr::controller::NetworkContainer* network_container) {
-  // Will first add aggregates and populate the device factory.
-  ctr::MockDeviceFactory device_factory(network_container->controller());
-  for (const auto& id_and_bin_sequence : initial_sequences) {
-    const ctr::AggregateId& id = id_and_bin_sequence.first;
-    const ctr::BinSequence& bin_sequence = id_and_bin_sequence.second;
-    ctr::BinSequence from_start = bin_sequence.CutFromStart(round_duration);
-
-    uint64_t flow_count = FlowCountFromBinsSequence(&from_start);
-    ctr::AggregateHistory init_history =
-        from_start.GenerateHistory(poll_period, flow_count);
-
-    nc::htsim::MatchRuleKey key_for_aggregate =
-        network_container->AddAggregate(id, init_history);
-
-    // Will add the bin sequence to the source device.
-    const std::string& src_device_id = graph.GetNode(id.src())->id();
-    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
-                                  bin_sequence);
-  }
-
-  // Records per-path stats.
-  ctr::InputPacketObserver packet_observer(network_container->controller(),
-                                           std::chrono::milliseconds(10),
-                                           event_queue);
-
-  // Now that the device factory is ready, we can initialize the container.
-  network_container->AddElementsFromGraph(&device_factory, &packet_observer);
-  network_container->InitAggregatesInController();
-
-  ctr::NetInstrument net_instrument(network_container->internal_queues(),
-                                    network_container->flow_group_tcp_sources(),
-                                    std::chrono::milliseconds(10), event_queue);
-  event_queue->RunAndStopIn(std::chrono::seconds(FLAGS_duration_sec));
-}
-
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
@@ -244,7 +203,7 @@ int main(int argc, char** argv) {
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
   std::vector<ctr::BinSequence> all_bin_sequences;
-  for (ctr::PcapDataTrace* trace : trace_store.AllTraces()) {
+  for (const ctr::PcapDataTrace* trace : trace_store.AllTraces()) {
     all_bin_sequences.emplace_back(trace->ToSequence(trace->AllSlices()));
   }
   ctr::BinSequenceGenerator bin_sequence_generator(all_bin_sequences, 1000);
@@ -326,13 +285,9 @@ int main(int argc, char** argv) {
 
   nc::htsim::ProgressIndicator progress_indicator(
       std::chrono::milliseconds(100), &event_queue);
-  if (FLAGS_quick) {
-    HandleQuick(initial_sequences, graph, poll_period, round_duration,
-                &event_queue, &network_container);
-  } else {
-    HandleDefault(initial_sequences, GetTCPTracerFlowCounts(*demand_matrix),
-                  graph, enter_port, poll_period, round_duration, &event_queue,
-                  &network_container);
-  }
+
+  HandleDefault(initial_sequences, GetTCPTracerFlowCounts(*demand_matrix),
+                graph, enter_port, poll_period, round_duration, &event_queue,
+                &network_container);
   nc::metrics::DefaultMetricManager()->PersistAllMetrics();
 }
