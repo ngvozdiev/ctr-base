@@ -35,14 +35,18 @@ void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other,
   bytes += other.bytes * fraction;
   uint16_t prev = flows_enter;
   flows_enter += other.flows_enter * fraction;
-  CHECK(flows_enter >= prev);
+  if (flows_enter < prev) {
+    flows_enter = std::numeric_limits<uint16_t>::max();
+  }
 }
 
 void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
   bytes += other.bytes;
   uint16_t prev = flows_enter;
   flows_enter += other.flows_enter;
-  CHECK(flows_enter >= prev);
+  if (flows_enter < prev) {
+    flows_enter = std::numeric_limits<uint16_t>::max();
+  }
 }
 
 struct TCPFlowRecord {
@@ -743,6 +747,7 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() {
 nc::net::Bandwidth BinSequence::MaxRate() {
   using namespace std::chrono;
 
+  size_t count = bin_count();
   uint64_t max_bytes = 0;
   for (const TraceAndSlice& trace_and_slice : traces_) {
     PcapDataTrace* trace = trace_and_slice.trace;
@@ -756,7 +761,7 @@ nc::net::Bandwidth BinSequence::MaxRate() {
                 });
   }
 
-  std::chrono::microseconds bin_size = bin_size();
+  std::chrono::microseconds bin_size = this->bin_size();
   double bin_size_seconds = duration_cast<duration<double>>(bin_size).count();
   double bits_per_second = (max_bytes * 8) / bin_size_seconds;
   return nc::net::Bandwidth::FromBitsPerSecond(bits_per_second);
@@ -1008,9 +1013,10 @@ BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
     CHECK(bin_count > 0);
 
     BinSequence sub_sequence = sequence.CutFromStart(bin_count);
-    LOG(ERROR) << "A";
-    nc::net::Bandwidth rate = sub_sequence.MeanRate();
-    LOG(ERROR) << "B " << rate.Mbps() << " r " << rate_remaining.Mbps();
+    nc::net::Bandwidth rate = sub_sequence.MaxRate();
+    LOG(INFO) << "About to add " << rate.Mbps() << "Mbps remaining "
+              << rate_remaining.Mbps() << "Mbps target " << target_rate.Mbps()
+              << "Mbps";
 
     if (rate <= rate_remaining) {
       rate_remaining -= rate;
@@ -1023,8 +1029,19 @@ BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
       continue;
     }
 
+    for (size_t i = 1; i < 101; ++i) {
+      double fraction = i * 0.01;
+      BinSequence new_sequence = sequence.SplitOrDie({fraction})[0];
+      LOG(INFO) << "Will split " << fraction << " new sequence "
+                << new_sequence.MaxRate().Mbps() << "Mbps mean "
+                << new_sequence.MeanRate().Mbps() << "Mbps";
+    }
+
     double fraction = rate_remaining / rate;
     BinSequence new_sequence = sequence.SplitOrDie({fraction})[0];
+    LOG(INFO) << "Will split " << fraction << " new sequence "
+              << new_sequence.MaxRate().Mbps() << "Mbps expected "
+              << (rate * fraction).Mbps() << "Mbps";
     if (out) {
       out->Combine(new_sequence);
     } else {
