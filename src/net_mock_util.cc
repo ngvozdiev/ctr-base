@@ -266,11 +266,15 @@ int main(int argc, char** argv) {
     LOG(FATAL) << "Unknown optimizer " << FLAGS_opt;
   }
 
+  ctr::ProbModelConfig prob_model_config;
+  prob_model_config.exceed_probability = FLAGS_exceed_probability;
+
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.05, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.pin_max = FLAGS_pin_max;
   routing_system_config.pin_mean = FLAGS_pin_mean;
+  routing_system_config.prob_model_config = prob_model_config;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 
@@ -299,8 +303,6 @@ int main(int argc, char** argv) {
       FLAGS_simulate_initial_handshake;
 
   nc::ThresholdEnforcerPolicy te_policy;
-  ctr::ProbModelConfig prob_model_config;
-  prob_model_config.exceed_probability = FLAGS_exceed_probability;
   ctr::TLDRConfig tldr_config(
       te_policy, prob_model_config, nc::htsim::kWildIPAddress,
       nc::htsim::kWildIPAddress, controller_ip, round_duration, poll_period,
