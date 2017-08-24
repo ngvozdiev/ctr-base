@@ -23,134 +23,19 @@
 
 namespace ctr {
 
-class MockNetwork;
-
-class MockDevice : public nc::htsim::DeviceInterface {
- public:
-  MockDevice(
-      const std::string& id,
-      const std::map<nc::htsim::MatchRuleKey, BinSequence>& bin_sequences,
-      nc::net::IPAddress ip_address, MockNetwork* mock_network,
-      const controller::Controller* controller, nc::EventQueue* event_queue)
-      : nc::htsim::DeviceInterface(id, ip_address, event_queue),
-        controller_(controller),
-        mock_network_(mock_network) {
-    for (const auto& key_and_bins : bin_sequences) {
-      const nc::htsim::MatchRuleKey& key = key_and_bins.first;
-      const BinSequence& bins = key_and_bins.second;
-      states_.emplace(key, bins);
-    }
-  }
-
-  void HandleStateUpdate(const nc::htsim::SSCPAddOrUpdate& update);
-
-  void ReplyToRequest(const nc::htsim::SSCPStatsRequest& request,
-                      nc::htsim::SSCPStatsReply* reply);
-
-  void HandlePacket(nc::htsim::PacketPtr pkt) override;
-
-  void HandlePacketFromPort(nc::htsim::Port* input_port,
-                            nc::htsim::PacketPtr pkt) override;
-
- private:
-  struct PathState {
-    PathState(const nc::net::Walk* path, nc::net::DevicePortNumber output_port,
-              nc::htsim::PacketTag tag)
-        : path(path), stats(output_port, tag), fraction(0), total_syns(0) {}
-
-    const nc::net::Walk* path;
-    nc::htsim::ActionStats stats;
-    double fraction;
-    size_t total_syns;
-  };
-
-  struct AggregateState {
-    AggregateState(BinSequence bin_sequence) : bin_sequence(bin_sequence) {}
-
-    // The most recent routes for this aggregate.
-    std::map<nc::htsim::PacketTag, PathState> paths;
-
-    // This aggregate's bins.
-    BinSequence bin_sequence;
-  };
-
-  // Per-aggregate state.
-  std::map<nc::htsim::MatchRuleKey, AggregateState> states_;
-
-  // Used to get paths from tags.
-  const controller::Controller* controller_;
-
-  // The network.
-  MockNetwork* mock_network_;
-
-  friend class MockNetwork;
-};
-
-class MockNetwork {
- public:
-  MockNetwork(const nc::net::GraphStorage* graph,
-              const nc::EventQueue* event_queue)
-      : graph_(graph), event_queue_(event_queue) {}
-
-  void AdvanceTime();
-
-  void AddMockDevice(MockDevice* device) { devices_.emplace_back(device); }
-
- private:
-  const nc::net::GraphStorage* graph_;
-  const nc::EventQueue* event_queue_;
-
-  std::vector<MockDevice*> devices_;
-  nc::EventQueueTime last_advance_time_;
-};
-
-class MockDeviceFactory : public controller::DeviceFactory {
- public:
-  MockDeviceFactory(const controller::Controller* controller)
-      : controller_(controller),
-        mock_network_(controller->graph(), controller->event_queue()) {}
-
-  virtual std::unique_ptr<nc::htsim::DeviceInterface> NewDevice(
-      const std::string& id, nc::net::IPAddress address,
-      nc::EventQueue* event_queue) override {
-    auto new_device = nc::make_unique<MockDevice>(
-        id, bins_[id], address, &mock_network_, controller_, event_queue);
-    mock_network_.AddMockDevice(new_device.get());
-    return std::move(new_device);
-  }
-
-  void AddBinSequence(const std::string& device_id,
-                      const nc::htsim::MatchRuleKey& key,
-                      const BinSequence& bin_sequence) {
-    std::map<nc::htsim::MatchRuleKey, BinSequence>& bins_for_device =
-        bins_[device_id];
-    bins_for_device.emplace(key, bin_sequence);
-  }
-
- private:
-  // Upon construction each device needs to be initialized with the bin
-  // sequences that correspond to aggregates coming out of the device.
-  std::map<std::string, std::map<nc::htsim::MatchRuleKey, BinSequence>> bins_;
-
-  const controller::Controller* controller_;
-
-  // A mock network used by MockDevices.
-  MockNetwork mock_network_;
-};
-
 class MockSimNetwork;
 
 class MockSimDevice : public nc::htsim::Device {
  public:
-  MockSimDevice(
-      const std::string& id,
-      const std::map<nc::htsim::MatchRuleKey, BinSequence>& bin_sequences,
-      nc::net::IPAddress ip_address, nc::EventQueue* event_queue)
+  MockSimDevice(const std::string& id,
+                std::map<nc::htsim::MatchRuleKey,
+                         std::unique_ptr<BinSequence>>&& bin_sequences,
+                nc::net::IPAddress ip_address, nc::EventQueue* event_queue)
       : nc::htsim::Device(id, ip_address, event_queue) {
-    for (const auto& key_and_bins : bin_sequences) {
+    for (auto& key_and_bins : bin_sequences) {
       const nc::htsim::MatchRuleKey& key = key_and_bins.first;
-      const BinSequence& bins = key_and_bins.second;
-      states_.emplace(key, bins);
+      std::unique_ptr<BinSequence>& bins = key_and_bins.second;
+      states_.emplace(key, std::move(bins));
     }
   }
 
@@ -163,9 +48,12 @@ class MockSimDevice : public nc::htsim::Device {
 
  private:
   struct PathState {
-    PathState() : fraction(0), bins_cached_from(0) {}
+    PathState() : bins_cached_from(0) {}
 
-    double fraction;
+    // This sequence is a subset of the aggregate's bin sequence (in
+    // AggregateState) that should go over this path.
+    std::unique_ptr<BinSequence> bin_sequence;
+
     nc::CircularArray<uint64_t, 1 << 10> syns;
 
     // This path's bins. Used as a cache by MockSimNetwork.
@@ -174,8 +62,9 @@ class MockSimDevice : public nc::htsim::Device {
   };
 
   struct AggregateState {
-    AggregateState(BinSequence bin_sequence)
-        : rule(nullptr), bin_sequence(bin_sequence) {}
+    AggregateState(std::unique_ptr<BinSequence> initial_bin_sequence)
+        : rule(nullptr),
+          initial_bin_sequence(std::move(initial_bin_sequence)) {}
 
     // The most recent rule on the device.
     nc::htsim::MatchRule* rule;
@@ -184,7 +73,7 @@ class MockSimDevice : public nc::htsim::Device {
     std::map<nc::htsim::PacketTag, PathState> paths;
 
     // This aggregate's bins.
-    BinSequence bin_sequence;
+    std::unique_ptr<BinSequence> initial_bin_sequence;
   };
 
   // Per-aggregate state.
@@ -225,8 +114,7 @@ class MockSimNetwork : public nc::EventConsumer {
 
   nc::htsim::PacketPtr GetDummyPacket(uint32_t size);
 
-  void PrefetchBins(MockSimDevice::AggregateState* aggregate_state,
-                    MockSimDevice::PathState* path_state);
+  void PrefetchBins(MockSimDevice::PathState* path_state);
 
   std::vector<MockSimDevice*> devices_;
 
@@ -246,8 +134,11 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
   virtual std::unique_ptr<nc::htsim::DeviceInterface> NewDevice(
       const std::string& id, nc::net::IPAddress address,
       nc::EventQueue* event_queue) override {
-    auto new_device =
-        nc::make_unique<MockSimDevice>(id, bins_[id], address, event_queue);
+    std::map<nc::htsim::MatchRuleKey, std::unique_ptr<BinSequence>>&
+        bins_for_id = bins_[id];
+
+    auto new_device = nc::make_unique<MockSimDevice>(id, std::move(bins_for_id),
+                                                     address, event_queue);
     new_device->set_die_on_fail_to_match(true);
     mock_network_.AddMockDevice(new_device.get());
     return std::move(new_device);
@@ -255,10 +146,10 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
 
   void AddBinSequence(const std::string& device_id,
                       const nc::htsim::MatchRuleKey& key,
-                      const BinSequence& bin_sequence) {
-    std::map<nc::htsim::MatchRuleKey, BinSequence>& bins_for_device =
-        bins_[device_id];
-    bins_for_device.emplace(key, bin_sequence);
+                      std::unique_ptr<BinSequence> bin_sequence) {
+    std::map<nc::htsim::MatchRuleKey, std::unique_ptr<BinSequence>>&
+        bins_for_device = bins_[device_id];
+    bins_for_device.emplace(key, std::move(bin_sequence));
   }
 
   void Init() { mock_network_.Init(); }
@@ -266,7 +157,8 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
  private:
   // Upon construction each device needs to be initialized with the bin
   // sequences that correspond to aggregates coming out of the device.
-  std::map<std::string, std::map<nc::htsim::MatchRuleKey, BinSequence>> bins_;
+  std::map<std::string, std::map<nc::htsim::MatchRuleKey,
+                                 std::unique_ptr<BinSequence>>> bins_;
 
   // A mock network used by MockDevices.
   MockSimNetwork mock_network_;

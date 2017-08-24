@@ -11,6 +11,8 @@
 #include "ncode_common/src/map_util.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/substitute.h"
+#include "ncode_common/src/file.h"
+#include "ncode_common/src/viz/web_page.h"
 #include "routing_system.h"
 
 namespace ctr {
@@ -56,6 +58,7 @@ void Controller::PopulatePathMessages(const AggregateId& id,
 
   if (std::find(paths_installed.begin(), paths_installed.end(), path) !=
       paths_installed.end()) {
+    LOG(INFO) << "Path already installed " << path->ToStringNoPorts(*graph_);
     return;
   }
 
@@ -149,10 +152,9 @@ void Controller::HandleRequest(
     nc::InsertOrDieNoPrint(&histories, id, request);
   }
 
-  //  LOG(INFO) << nc::Substitute(
-  //      "Collected requests from $0 / $1 aggregates round $2",
-  //      histories.size(),
-  //      id_to_aggregate_state_.size(), round_id);
+  LOG(INFO) << nc::Substitute(
+      "Collected requests from $0 / $1 aggregates round $2", histories.size(),
+      id_to_aggregate_state_.size(), round_id);
 
   if (histories.size() == id_to_aggregate_state_.size()) {
     // We heard from all aggregates. Time to re-optimize.
@@ -188,12 +190,15 @@ std::map<AggregateId, AggregateUpdateState> Controller::RoutingToUpdateState(
     const std::vector<AggregatesAndCapacity>* aggregates_and_capacity =
         nc::FindOrNull(competing_aggregates.aggregates(), id);
     if (aggregates_and_capacity == nullptr) {
+      // Leaving competing aggregates empty will disable triggered optimization.
+      LOG(ERROR) << "Unable to find competing aggregates for "
+                 << id.ToString(*graph_) << " probably network is overloaded.";
+      out.emplace(id, update_state);
       continue;
     }
 
     CHECK(aggregates_and_capacity->size() == routes.size());
     update_state.competing_aggregates = *aggregates_and_capacity;
-
     out.emplace(id, update_state);
   }
 
@@ -233,6 +238,11 @@ void Controller::ReOptimize(RoundState* round) {
   LOG(INFO) << "Will re-optimize the network";
   RoutingSystemUpdateResult update_result =
       routing_system_->Update(round->histories);
+  nc::viz::HtmlPage page;
+  update_result.routing->ToHTML(&page);
+  nc::File::WriteStringToFile(page.Construct(), "out.html");
+  
+  CHECK(update_result.routing->demands().size() == round->histories.size());
   pending_output = RoutingToUpdateState(*update_result.routing,
                                         *update_result.competing_aggregates);
 
@@ -242,7 +252,9 @@ void Controller::ReOptimize(RoundState* round) {
   CHECK(update_result.histories_after_prediction.size() ==
         round->histories.size());
   std::swap(update_result.histories_after_prediction, round->histories);
-  LOG(INFO) << "Done optimizing";
+  LOG(INFO) << "Done optimizing " << round->pending_output.size()
+            << " aggregates";
+  
 
   last_optimize_time_ = event_queue_->CurrentTime();
 

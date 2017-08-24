@@ -34,7 +34,9 @@ void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
   bytes += other.bytes;
   uint16_t prev = flows_enter;
   flows_enter += other.flows_enter;
-  CHECK(flows_enter >= prev);
+  if (flows_enter < prev) {
+    flows_enter = std::numeric_limits<uint16_t>::max();
+  }
 }
 
 struct TCPFlowRecord {
@@ -658,6 +660,12 @@ BinSequence::BinSequence(const std::vector<TraceAndSlice>& traces)
   CHECK(!traces_.empty());
 }
 
+BinSequence::BinSequence(std::vector<TraceAndSlice>::const_iterator from,
+                         std::vector<TraceAndSlice>::const_iterator to)
+    : traces_(from, to) {
+  CHECK(!traces_.empty());
+}
+
 void BinSequence::Combine(const BinSequence& other) {
   CHECK(other.bin_size() == bin_size());
 
@@ -711,24 +719,47 @@ nc::net::Bandwidth BinSequence::MaxRate() const {
   return nc::net::Bandwidth::FromBitsPerSecond(bits_per_second);
 }
 
+PBBinSequence BinSequence::ToProtobuf() const {
+  PBBinSequence out;
+  for (const TraceAndSlice& trace_and_slice : traces_) {
+    PBTraceAndSlice* trace_and_slice_pb = out.add_traces_and_slices();
+    *trace_and_slice_pb->mutable_id() =
+        trace_and_slice.trace->id().ToProtobuf();
+    trace_and_slice_pb->set_slice_index(trace_and_slice.slice);
+    trace_and_slice_pb->set_start_bin(trace_and_slice.start_bin);
+    trace_and_slice_pb->set_end_bin(trace_and_slice.end_bin);
+  }
+
+  return out;
+}
+
 const std::chrono::microseconds BinSequence::bin_size() const {
   CHECK(!traces_.empty());
   return traces_.front().trace->base_bin_size();
 }
 
-std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate) const {
+std::chrono::milliseconds BinSequence::SimulateQueue(
+    nc::net::Bandwidth rate) const {
   double rate_Bps = rate.bps() / 8.0;
   double bins_in_second =
       1.0 / std::chrono::duration<double>(bin_size()).count();
   double bytes_per_bin = rate_Bps / bins_in_second;
 
+  double max_queue_size_bytes = 0;
   std::vector<TrimmedPcapDataTraceBin> bins = AccumulateBinsPrivate(1);
-  std::vector<double> out(bins.size());
+  double queue_size_bytes = 0;
   for (size_t i = 0; i < bins.size(); ++i) {
-    out[i] = (bins[i].bytes - bytes_per_bin) / bytes_per_bin;
+    max_queue_size_bytes = std::max(max_queue_size_bytes, queue_size_bytes);
+
+    queue_size_bytes += bins[i].bytes;
+    queue_size_bytes -= bytes_per_bin;
+
+    queue_size_bytes = std::max(queue_size_bytes, 0.0);
   }
 
-  return out;
+  double max_queue_size_sec = max_queue_size_bytes / rate_Bps;
+  return std::chrono::milliseconds(
+      static_cast<uint64_t>(max_queue_size_sec * 1000));
 }
 
 AggregateHistory BinSequence::GenerateHistory(
@@ -745,11 +776,11 @@ AggregateHistory BinSequence::GenerateHistory(
   return {bins_for_history, history_bin_size, flow_count};
 }
 
-std::vector<BinSequence> BinSequence::SplitOrDie(
+std::vector<std::unique_ptr<BinSequence>> BinSequence::SplitOrDie(
     const std::vector<double>& fractions) const {
   double total = std::accumulate(fractions.begin(), fractions.end(), 0.0);
   CHECK(total <= 1);
-  std::vector<BinSequence> out;
+  std::vector<std::unique_ptr<BinSequence>> out;
 
   double cumulative = 0;
   size_t i = 0;
@@ -761,13 +792,18 @@ std::vector<BinSequence> BinSequence::SplitOrDie(
       new_traces.emplace_back(traces_[i]);
     }
 
-    out.emplace_back(new_traces);
+    if (new_traces.empty()) {
+      out.emplace_back();
+    } else {
+      out.emplace_back(nc::make_unique<BinSequence>(new_traces));
+    }
   }
 
   return out;
 }
 
-BinSequence BinSequence::CutFromStart(size_t offset_from_start) const {
+std::unique_ptr<BinSequence> BinSequence::CutFromStart(
+    size_t offset_from_start) const {
   size_t count = bin_count();
   CHECK(count >= offset_from_start) << count << " vs " << offset_from_start;
 
@@ -776,10 +812,10 @@ BinSequence BinSequence::CutFromStart(size_t offset_from_start) const {
     trace_and_slice.end_bin = trace_and_slice.start_bin + offset_from_start;
   }
 
-  return {new_traces};
+  return nc::make_unique<BinSequence>(new_traces);
 }
 
-BinSequence BinSequence::CutFromStart(
+std::unique_ptr<BinSequence> BinSequence::CutFromStart(
     std::chrono::microseconds duration) const {
   std::chrono::microseconds bin_size_micros = bin_size();
   CHECK(duration.count() % bin_size_micros.count() == 0);
@@ -787,7 +823,7 @@ BinSequence BinSequence::CutFromStart(
   return CutFromStart(bin_count);
 }
 
-BinSequence BinSequence::Offset(size_t offset) const {
+std::unique_ptr<BinSequence> BinSequence::Offset(size_t offset) const {
   size_t count = bin_count();
   CHECK(count >= offset);
 
@@ -796,7 +832,7 @@ BinSequence BinSequence::Offset(size_t offset) const {
     trace_and_slice.start_bin += offset;
   }
 
-  return {new_traces};
+  return nc::make_unique<BinSequence>(new_traces);
 }
 
 std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBins(
@@ -871,13 +907,20 @@ TraceSliceSet PcapDataTrace::AllSlices() const {
   return out;
 }
 
-BinSequence PcapDataTrace::ToSequence(const TraceSliceSet& slices) const {
+std::vector<BinSequence::TraceAndSlice> PcapDataTrace::TracesAndSlices(
+    const TraceSliceSet& slices, std::chrono::milliseconds time_offset) const {
+  using namespace std::chrono;
+  size_t bin_offset = time_offset.count() /
+                      duration_cast<milliseconds>(base_bin_size()).count();
+  CHECK(bin_offset < trace_pb_.bin_count());
+
   std::vector<BinSequence::TraceAndSlice> traces_and_slices;
   for (TraceSliceIndex slice : slices) {
-    traces_and_slices.push_back({this, slice, 0, trace_pb_.bin_count()});
+    traces_and_slices.push_back(
+        {this, slice, bin_offset, trace_pb_.bin_count()});
   }
 
-  return {traces_and_slices};
+  return traces_and_slices;
 }
 
 std::string PcapDataTrace::Summary() const {
@@ -889,7 +932,7 @@ std::string PcapDataTrace::Summary() const {
                           trace_pb_.bin_size_micros(), trace_pb_.bin_count(),
                           trace_pb_.split_count());
 
-  BinSequence bin_sequence = ToSequence(AllSlices());
+  BinSequence bin_sequence(TracesAndSlices(AllSlices()));
   uint64_t total_bytes;
   uint64_t total_packets;
   std::tie(total_bytes, total_packets) = bin_sequence.TotalBytesAndPackets();
@@ -915,52 +958,194 @@ std::string PcapTraceStore::Summary() const {
   return nc::Join(out, "\n");
 }
 
-BinSequence BinsAtRate(nc::net::Bandwidth target_rate,
-                       std::chrono::microseconds init_window,
-                       BinSequenceGenerator* sequence_generator) {
-  nc::net::Bandwidth rate_remaining = target_rate;
+std::unique_ptr<BinSequence> PcapTraceStore::BinSequenceFromProtobufOrDie(
+    const PBBinSequence& sequence_pb) const {
+  std::vector<BinSequence::TraceAndSlice> traces_and_slices;
+  for (const auto& trace_and_slice_pb : sequence_pb.traces_and_slices()) {
+    TraceId id(trace_and_slice_pb.id());
+    TraceSliceIndex slice(trace_and_slice_pb.slice_index());
+    size_t from = trace_and_slice_pb.start_bin();
+    size_t to = trace_and_slice_pb.end_bin();
 
-  std::unique_ptr<BinSequence> out;
-  while (true) {
-    BinSequence sequence = sequence_generator->Next();
-    std::chrono::microseconds bin_size = sequence.bin_size();
-    size_t bin_count = init_window.count() / bin_size.count();
-    CHECK(bin_count > 0);
+    const PcapDataTrace* trace_ptr = nc::FindOrDie(traces_, id).get();
+    CHECK(trace_ptr->AllSlices().Contains(slice));
+    CHECK(from <= to);
+    CHECK(to <= trace_ptr->ToProtobuf().bin_count())
+        << to << " vs " << trace_ptr->ToProtobuf().bin_count();
 
-    BinSequence sub_sequence = sequence.CutFromStart(bin_count);
-    LOG(ERROR) << "A";
-    nc::net::Bandwidth rate = sub_sequence.MeanRate();
-    LOG(ERROR) << "B " << rate.Mbps() << " r " << rate_remaining.Mbps();
-
-    if (rate <= rate_remaining) {
-      rate_remaining -= rate;
-      if (out) {
-        out->Combine(sequence);
-      } else {
-        out = nc::make_unique<BinSequence>(sequence);
-      }
-
-      continue;
-    }
-
-    double fraction = rate_remaining / rate;
-    BinSequence new_sequence = sequence.SplitOrDie({fraction})[0];
-    if (out) {
-      out->Combine(new_sequence);
-    } else {
-      out = nc::make_unique<BinSequence>(new_sequence);
-    }
-
-    break;
+    traces_and_slices.push_back({trace_ptr, slice, from, to});
   }
 
-  return *out;
+  return nc::make_unique<BinSequence>(traces_and_slices);
 }
 
-BinSequence BinSequenceGenerator::Next() {
-  const BinSequence& trace_to_offset = initial_list_[i_ % initial_list_.size()];
-  size_t step_count = i_++ / initial_list_.size();
-  return trace_to_offset.Offset(step_count * offset_step_);
+std::unique_ptr<BinSequence> PcapTraceStore::ExtendBinSequence(
+    const BinSequence& bin_sequence) const {
+  std::vector<BinSequence::TraceAndSlice> extended;
+  for (const BinSequence::TraceAndSlice& trace_and_slice :
+       bin_sequence.traces()) {
+    extended.emplace_back(trace_and_slice);
+
+    uint64_t max_bin_count = trace_and_slice.trace->ToProtobuf().bin_count();
+    extended.back().end_bin = max_bin_count;
+  }
+
+  return nc::make_unique<BinSequence>(extended);
+}
+
+void PcapTraceFitStore::AddToStore(nc::net::Bandwidth rate,
+                                   const BinSequence& bin_sequence,
+                                   const std::string& output_file) {
+  std::chrono::milliseconds queue_size = bin_sequence.SimulateQueue(rate);
+  nc::net::Bandwidth mean_rate = bin_sequence.MeanRate();
+
+  PBTracesToFitRate traces_to_fit_rate_pb;
+  *traces_to_fit_rate_pb.mutable_bin_sequence() = bin_sequence.ToProtobuf();
+  traces_to_fit_rate_pb.set_max_queue_size_ms(queue_size.count());
+  traces_to_fit_rate_pb.set_rate_mbps(rate.Mbps());
+  traces_to_fit_rate_pb.set_mean_rate_mbps(mean_rate.Mbps());
+
+  LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
+            << output_file;
+
+  auto output_stream = GetOutputStream(output_file, true);
+  CHECK(WriteDelimitedTo(traces_to_fit_rate_pb, output_stream.get()));
+  output_stream->Close();
+  output_stream.reset();
+}
+
+PcapTraceFitStore::PcapTraceFitStore(const std::string& file,
+                                     const PcapTraceStore* store)
+    : store_(store) {
+  auto input_stream = GetInputStream(file, 0);
+  input_stream->SetCloseOnDelete(true);
+
+  while (true) {
+    PBTracesToFitRate traces_to_fit_rate_pb;
+    google::protobuf::io::CodedInputStream coded_input(input_stream.get());
+    if (!ReadDelimitedFrom(&traces_to_fit_rate_pb, &coded_input)) {
+      break;
+    }
+
+    nc::net::Bandwidth rate = nc::net::Bandwidth::FromMBitsPerSecond(
+        traces_to_fit_rate_pb.rate_mbps());
+    LOG(INFO) << "Loaded traces that fit " << rate.Mbps();
+    std::unique_ptr<BinSequence> bin_sequence =
+        store_->BinSequenceFromProtobufOrDie(
+            traces_to_fit_rate_pb.bin_sequence());
+    rate_to_bin_sequence_[rate].emplace_back(std::move(bin_sequence));
+  }
+}
+
+std::unique_ptr<BinSequence> PcapTraceFitStore::GetBinSequence(
+    nc::net::Bandwidth bw, nc::net::Bandwidth threshold) {
+  CHECK(bw > threshold);
+  nc::net::Bandwidth to_look_for = bw - threshold;
+  auto it = rate_to_bin_sequence_.upper_bound(to_look_for);
+  if (it == rate_to_bin_sequence_.end()) {
+    return {};
+  }
+
+  // 'it' will be greater or equal to to_look_for.
+  nc::net::Bandwidth delta = it->first - to_look_for;
+  if (delta > threshold * 2) {
+    return {};
+  }
+
+  for (std::unique_ptr<BinSequence>& bin_sequence : it->second) {
+    if (bin_sequence) {
+      return std::move(bin_sequence);
+    }
+  }
+
+  return {};
+}
+
+// Performs binary search to pick a offset as large as possible into
+// traces_and_slices.
+static void PickRecursive(
+    const std::vector<BinSequence::TraceAndSlice>& traces_and_slices,
+    std::chrono::microseconds initial_window, nc::net::Bandwidth target_rate,
+    size_t from, size_t to, std::unique_ptr<BinSequence>* out,
+    nc::net::Bandwidth* out_rate) {
+  size_t delta = (to - from) / 2;
+  if (delta == 0) {
+    return;
+  }
+
+  size_t offset = from + delta;
+  auto new_sequence = nc::make_unique<BinSequence>(
+      traces_and_slices.begin(), std::next(traces_and_slices.begin(), offset));
+
+  std::unique_ptr<BinSequence> bin_sequence =
+      new_sequence->CutFromStart(initial_window);
+  std::chrono::milliseconds max_queue_size =
+      bin_sequence->SimulateQueue(target_rate);
+
+  if (max_queue_size > std::chrono::milliseconds(10)) {
+    LOG(ERROR) << "Offset " << offset << " max queue size "
+               << max_queue_size.count() << "ms";
+    PickRecursive(traces_and_slices, initial_window, target_rate, from, offset,
+                  out, out_rate);
+  } else {
+    nc::net::Bandwidth mean_rate = bin_sequence->MeanRate();
+    if (*out_rate < mean_rate) {
+      *out_rate = mean_rate;
+      *out = std::move(bin_sequence);
+    }
+
+    LOG(ERROR) << "Offset " << offset << " max queue size "
+               << max_queue_size.count() << "ms mean " << mean_rate.Mbps()
+               << "Mbps";
+    PickRecursive(traces_and_slices, initial_window, target_rate, offset, to,
+                  out, out_rate);
+  }
+}
+
+static std::unique_ptr<BinSequence> PickOrDie(
+    const std::vector<BinSequence::TraceAndSlice>& traces_and_slices,
+    std::chrono::microseconds initial_window, nc::net::Bandwidth target_rate) {
+  nc::net::Bandwidth rate = nc::net::Bandwidth::Zero();
+  std::unique_ptr<BinSequence> out;
+  PickRecursive(traces_and_slices, initial_window, target_rate, 0,
+                traces_and_slices.size(), &out, &rate);
+
+  if (!out) {
+    // We were unable to find even a single slice that would yield low queues,
+    // will just pick the first one and hope for the best.
+    out = nc::make_unique<BinSequence>(traces_and_slices.begin(),
+                                       std::next(traces_and_slices.begin(), 1));
+    LOG(ERROR) << "Unable to pick traces to fit " << target_rate.Mbps()
+               << " instead picked mean " << out->MeanRate().Mbps()
+               << "Mbps max " << out->MaxRate().Mbps() << "Mbps";
+  }
+
+  return out;
+}
+
+BinSequenceGenerator::BinSequenceGenerator(
+    const std::vector<const PcapDataTrace*>& all_traces,
+    const std::vector<std::chrono::milliseconds>& offsets, size_t seed)
+    : rnd_(seed) {
+  for (const PcapDataTrace* trace : all_traces) {
+    for (std::chrono::milliseconds offset : offsets) {
+      std::vector<BinSequence::TraceAndSlice> traces_and_slices =
+          trace->TracesAndSlices(trace->AllSlices(), offset);
+      all_traces_and_slices_.insert(all_traces_and_slices_.end(),
+                                    traces_and_slices.begin(),
+                                    traces_and_slices.end());
+    }
+  }
+}
+
+std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
+    nc::net::Bandwidth target_rate, std::chrono::microseconds init_window) {
+  std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_cpy =
+      all_traces_and_slices_;
+  std::shuffle(all_traces_and_slices_cpy.begin(),
+               all_traces_and_slices_cpy.end(), rnd_);
+
+  return PickOrDie(all_traces_and_slices_cpy, init_window, target_rate);
 }
 
 }  // namespace e2e

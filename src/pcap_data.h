@@ -90,9 +90,6 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
     CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint16_t>::max());
   }
 
-  // Combines this bin with a fraction of another.
-  void Combine(const TrimmedPcapDataTraceBin& other, double fraction);
-
   // Like above, but does not take a fraction.
   void Combine(const TrimmedPcapDataTraceBin& other);
 
@@ -107,20 +104,23 @@ struct TraceSliceTag {};
 using TraceSliceIndex = nc::Index<TraceSliceTag, uint32_t>;
 using TraceSliceSet = nc::PerfectHashSet<uint32_t, TraceSliceTag>;
 
+template <typename Value>
+using TraceSliceMap = nc::PerfectHashMap<uint32_t, TraceSliceTag, Value>;
+
 // A bin sequence is a view into a slice of a trace (or multiple).
 class BinSequence {
  public:
   struct TraceAndSlice {
-    PcapDataTrace* trace;
+    const PcapDataTrace* trace;
     TraceSliceIndex slice;
     size_t start_bin;
     size_t end_bin;
-    double fraction;
   };
 
   BinSequence(const std::vector<TraceAndSlice>& traces);
 
-  BinSequence(const BinSequence& other) : BinSequence(other.traces_) {}
+  BinSequence(std::vector<TraceAndSlice>::const_iterator from,
+              std::vector<TraceAndSlice>::const_iterator to);
 
   // Combines this sequence's bins with another sequence's bins. Both
   // sequences should have the same bin size.
@@ -139,69 +139,70 @@ class BinSequence {
   }
 
   // Total bytes and packets in the whole sequence.
-  std::pair<uint64_t, uint64_t> TotalBytesAndPackets();
+  std::pair<uint64_t, uint64_t> TotalBytesAndPackets() const;
 
   // Splits this sequence into a number of smaller sequences. Each will have the
   // same number of bins, but will only carry a part of this sequence's
   // sub-sequences. Fill die if there are more elements in 'fractions' than
   // there are sub-sequences. The sum of 'fractions' should be 1. Splitting is
   // deterministic and depends on the order of traces_.
-  std::vector<BinSequence> SplitOrDie(
+  std::vector<std::unique_ptr<BinSequence>> SplitOrDie(
       const std::vector<double>& fractions) const;
 
-  std::vector<BinSequence> PreciseSplitOrDie(
-      const std::vector<double>& fractions) const;
-
-  // Returns as many integers as there are bins. Given a rate, we can compute
-  // how many bytes (B) will be transmitted for the period of a single bin. This
-  // function returns B_i - B for each bin where B_i is the number of bytes in
-  // the bin. If all values are positive this bin sequence will fit through a
-  // link of rate 'rate' without causing congestion.
-  std::vector<double> Residuals(nc::net::Bandwidth rate);
+  // Simluates how this sequence of bins would fit through a queue of given
+  // rate. Returns the max queue size.
+  std::chrono::milliseconds SimulateQueue(nc::net::Bandwidth rate) const;
 
   // Generates an AggregateHistory from the entire range of this BinSequence.
   // Each of the history's bins will combine 'history_bin_size' bins from this
   // BinSequence.
   AggregateHistory GenerateHistory(std::chrono::milliseconds history_bin_size,
-                                   uint64_t flow_count);
+                                   uint64_t flow_count) const;
 
   // Returns another BinSequence with the same traces, but only contains the
   // first 'offset_from_start' bins.
-  BinSequence CutFromStart(size_t offset_from_start) const;
+  std::unique_ptr<BinSequence> CutFromStart(size_t offset_from_start) const;
 
   // Same as above, but takes in a duration. The duration should be an exact
   // multiple of bin_size.
-  BinSequence CutFromStart(std::chrono::microseconds duration) const;
+  std::unique_ptr<BinSequence> CutFromStart(
+      std::chrono::microseconds duration) const;
 
   // Offsets both the start and the end bin of this sequence.
-  BinSequence Offset(size_t bin_count) const;
+  std::unique_ptr<BinSequence> Offset(size_t bin_count) const;
 
   // Optionally rebins the trace and returns the bins. If 'bin_size' is equal to
   // this trace's base bin size (returned by bin_size()) no rebinning will
   // happen. If it is a multiple of the base bin size will combine every N bins.
   std::vector<TrimmedPcapDataTraceBin> AccumulateBins(
-      std::chrono::microseconds bin_size);
+      std::chrono::microseconds bin_size) const;
 
   // Sum of all bytes (in bits) divided by bin_size * bin_count in seconds.
-  nc::net::Bandwidth MeanRate();
+  nc::net::Bandwidth MeanRate() const;
 
   // The maximum instantaneous rate reached for any bin.
-  nc::net::Bandwidth MaxRate();
+  nc::net::Bandwidth MaxRate() const;
+
+  // Serializes this BinSequence.
+  PBBinSequence ToProtobuf() const;
+
+  const std::vector<TraceAndSlice>& traces() const { return traces_; }
 
  private:
   // Combines every 'bin_size_multiplier' bins into a PcapDataTraceBin and
   // returns the sequence.
   std::vector<TrimmedPcapDataTraceBin> AccumulateBinsPrivate(
-      size_t bin_size_multiplier);
+      size_t bin_size_multiplier) const;
 
   std::vector<TraceAndSlice> traces_;
+
+  DISALLOW_COPY_AND_ASSIGN(BinSequence);
 };
 
 // A collection of .pcap files that form a single trace.
 class PcapDataTrace {
  public:
-  static constexpr size_t kCacheSize = 10000000;
-  static constexpr size_t kHintsSize = 1000;
+  static constexpr size_t kFlowCacheSize = 1000000;
 
   // Constructs a PcapDataTrace from a partially populated 'trace_pb'. Will
   // append persistent information to 'output_file'.
@@ -218,20 +219,23 @@ class PcapDataTrace {
                        callback) const;
 
   // Calls a function with bins between stat_bin (inclusive) and end_bin
-  // (exclusive) of a single slice of the trace.
-  void Bins(TraceSliceIndex slice, size_t start_bin, size_t end_bin,
-            std::function<void(const PBBin& binned_data)> callback);
+  // (exclusive) of a single slice of the trace. Will read the bins from disk.
+  void BinsFromDisk(
+      TraceSliceIndex slice, size_t start_bin, size_t end_bin,
+      std::function<void(const PBBin& binned_data)> callback) const;
 
-  // Like Bins, but combines multiple slices into one. Will also pull the
-  // results from the bin cache if possible.
+  // Returns the bins from a given slice. Will not touch disk, but only look at
+  // bins stored in memory.
   std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
             std::vector<TrimmedPcapDataTraceBin>::const_iterator>
-  BinsCombined(const TraceSliceSet& slices, size_t start_bin, size_t end_bin);
+  Bins(TraceSliceIndex slice, size_t start_bin, size_t end_bin) const;
 
   TraceSliceSet AllSlices() const;
 
-  // Constructs a BinSequence with slices from the trace.
-  BinSequence ToSequence(const TraceSliceSet& slices);
+  // Returns a vector of TraceAndSlice for a set of slices.
+  std::vector<BinSequence::TraceAndSlice> TracesAndSlices(
+      const TraceSliceSet& slices, std::chrono::milliseconds time_offset =
+                                       std::chrono::milliseconds::zero()) const;
 
   std::vector<std::string> trace_files() const;
   const TraceId& id() const { return id_; }
@@ -241,7 +245,7 @@ class PcapDataTrace {
   const std::chrono::microseconds base_bin_size() const;
 
   // Summarizes the trace in a human-readable form.
-  std::string Summary();
+  std::string Summary() const;
 
   // Creates a new trace, at a given file at some offset.
   PcapDataTrace(const std::string& file, size_t offset);
@@ -250,16 +254,6 @@ class PcapDataTrace {
   size_t TotalSizeInFile() const;
 
  private:
-  struct CachedBins {
-    size_t from;
-    size_t to;
-    std::vector<TrimmedPcapDataTraceBin> bins;
-  };
-
-  // Combines all bins for a set of slices and stores them in the cache.
-  const CachedBins* AddToBinCache(const TraceSliceSet& slices, size_t from,
-                                  size_t to);
-
   size_t TraceProtobufSize() const;
 
   // Locates this trace's entry in the store.
@@ -272,18 +266,13 @@ class PcapDataTrace {
   // The id.
   TraceId id_;
 
-  // For each slice stores a bin number and an offset---bins with a bin number
-  // larger or equal to this number are offset many bytes away from the start of
-  // the slice's bins.
-  std::map<TraceSliceIndex, std::map<size_t, size_t>> bin_start_hints_;
-
-  // Cached, combined bins for series of slices.
-  std::map<TraceSliceSet, CachedBins> bins_cache_;
+  // The bins indexed by slice.
+  TraceSliceMap<std::vector<TrimmedPcapDataTraceBin>> bins_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };
 
-// Stores and manages .pcap traces. Also caches expensive results.
+// Stores and manages .pcap traces.
 class PcapTraceStore {
  public:
   PcapTraceStore(const std::string& file);
@@ -300,8 +289,8 @@ class PcapTraceStore {
     return out;
   }
 
-  std::vector<PcapDataTrace*> AllTraces() {
-    std::vector<PcapDataTrace*> out;
+  std::vector<const PcapDataTrace*> AllTraces() const {
+    std::vector<const PcapDataTrace*> out;
     for (const auto& id_and_trace : traces_) {
       out.emplace_back(id_and_trace.second.get());
     }
@@ -309,9 +298,39 @@ class PcapTraceStore {
     return out;
   }
 
+  std::unique_ptr<BinSequence> BinSequenceFromProtobufOrDie(
+      const PBBinSequence& sequence_pb) const;
+
+  // Makes sure a each trace in a BinSequence extends until the end.
+  std::unique_ptr<BinSequence> ExtendBinSequence(
+      const BinSequence& bin_sequence) const;
+
  private:
   std::string file_;
   std::map<TraceId, std::unique_ptr<PcapDataTrace>> traces_;
+};
+
+// Stores information about what combination of traces fit a given rate.
+class PcapTraceFitStore {
+ public:
+  static void AddToStore(nc::net::Bandwidth rate,
+                         const BinSequence& bin_sequence,
+                         const std::string& output_file);
+
+  PcapTraceFitStore(const std::string& file, const PcapTraceStore* store);
+
+  // Returns the BinSequence that fits bw if none are found will return empty
+  // unique pointer.
+  std::unique_ptr<BinSequence> GetBinSequence(
+      nc::net::Bandwidth bw,
+      nc::net::Bandwidth threshold = nc::net::Bandwidth::FromKBitsPerSecond(1));
+
+ private:
+  // For each rate one or more bin sequences that fit that rate.
+  std::map<nc::net::Bandwidth, std::vector<std::unique_ptr<BinSequence>>>
+      rate_to_bin_sequence_;
+
+  const PcapTraceStore* store_;
 };
 
 // Bins a pcap trace.
@@ -405,21 +424,20 @@ class ObserverPack : public nc::htsim::PacketHandler {
 // offset a previous BinSequence.
 class BinSequenceGenerator {
  public:
-  BinSequenceGenerator(std::vector<BinSequence>& initial_list,
-                       size_t offset_step)
-      : initial_list_(initial_list), offset_step_(offset_step), i_(0) {}
+  BinSequenceGenerator(const std::vector<const PcapDataTrace*>& all_traces,
+                       const std::vector<std::chrono::milliseconds>& offsets,
+                       size_t seed);
 
-  BinSequence Next();
+  // Returns a BinSequence that will fit within the given 'target_rate' (its max
+  // rate will be less than the target rate) over 'init_window'.
+  std::unique_ptr<BinSequence> Next(nc::net::Bandwidth target_rate,
+                                    std::chrono::microseconds init_window);
 
  private:
-  std::vector<BinSequence> initial_list_;
-  size_t offset_step_;
-  size_t i_;
-};
+  std::mt19937 rnd_;
 
-BinSequence BinsAtRate(nc::net::Bandwidth rate,
-                       std::chrono::microseconds init_window,
-                       BinSequenceGenerator* sequence_generator);
+  std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_;
+};
 
 }  // namespace e2e
 

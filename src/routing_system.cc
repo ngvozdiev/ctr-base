@@ -86,6 +86,13 @@ static auto* per_link_load =
         "Mbps)",
         "Link");
 
+static auto* per_link_utilization =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
+        "link_utilization_in_output",
+        "What the output of the optimizer says each link's utilization should "
+        "be",
+        "Link");
+
 static auto* scale_loop_iteration_count =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
         "scale_up_iteration_count",
@@ -194,8 +201,11 @@ static void RecordPathSplitsAndTotalDelay(
     nc::net::GraphLinkIndex link = link_and_load.first;
     nc::net::Bandwidth load = *link_and_load.second;
 
-    std::string link_id = graph.GetLink(link)->ToStringNoPorts();
+    const nc::net::GraphLink* link_ptr = graph.GetLink(link);
+    std::string link_id = link_ptr->ToStringNoPorts();
     per_link_load->GetHandle(link_id)->AddValue(load.Mbps());
+    per_link_utilization->GetHandle(link_id)
+        ->AddValue(load / link_ptr->bandwidth());
   }
 }
 
