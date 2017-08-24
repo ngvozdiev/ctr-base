@@ -99,6 +99,8 @@ class MockSimNetwork : public nc::EventConsumer {
     EnqueueNext();
   }
 
+  PcapDataBinCache* bin_cache() { return &bin_cache_; }
+
  private:
   static constexpr size_t kPrefetchSize = 100;
 
@@ -123,6 +125,8 @@ class MockSimNetwork : public nc::EventConsumer {
   nc::net::DevicePortNumber default_enter_port_;
 
   nc::EventQueue* event_queue_;
+
+  PcapDataBinCache bin_cache_;
 };
 
 class MockSimDeviceFactory : public controller::DeviceFactory {
@@ -153,6 +157,8 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
   }
 
   void Init() { mock_network_.Init(); }
+
+  PcapDataBinCache* bin_cache() { return mock_network_.bin_cache(); }
 
  private:
   // Upon construction each device needs to be initialized with the bin

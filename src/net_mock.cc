@@ -124,7 +124,7 @@ void MockSimNetwork::PrefetchBins(MockSimDevice::PathState* path_state) {
   std::unique_ptr<BinSequence> period_sequence =
       to_end->Offset(last_bin_count_);
   std::vector<TrimmedPcapDataTraceBin> bins =
-      period_sequence->AccumulateBins(GetBinSize());
+      period_sequence->AccumulateBins(GetBinSize(), &bin_cache_);
   CHECK(bins.size() == kPrefetchSize) << bins.size() << " vs " << kPrefetchSize;
 
   path_state->bins = std::move(bins);

@@ -104,11 +104,12 @@ static std::map<ctr::AggregateId, size_t> GetTCPTracerFlowCounts(
   return out;
 }
 
-static uint64_t FlowCountFromBinsSequence(
-    const ctr::BinSequence& bin_sequence) {
+static uint64_t FlowCountFromBinsSequence(const ctr::BinSequence& bin_sequence,
+                                          ctr::PcapDataBinCache* bin_cache) {
   std::vector<uint64_t> syns;
 
-  for (const auto& bin : bin_sequence.AccumulateBins(bin_sequence.bin_size())) {
+  for (const auto& bin :
+       bin_sequence.AccumulateBins(bin_sequence.bin_size(), bin_cache)) {
     syns.emplace_back(bin.flows_enter);
   }
 
@@ -132,9 +133,10 @@ static void HandleDefault(
     std::unique_ptr<ctr::BinSequence> from_start =
         bin_sequence->CutFromStart(round_duration);
 
-    uint64_t flow_count = FlowCountFromBinsSequence(*from_start);
-    ctr::AggregateHistory init_history =
-        from_start->GenerateHistory(poll_period, flow_count);
+    uint64_t flow_count =
+        FlowCountFromBinsSequence(*from_start, device_factory.bin_cache());
+    ctr::AggregateHistory init_history = from_start->GenerateHistory(
+        poll_period, flow_count, device_factory.bin_cache());
 
     nc::htsim::MatchRuleKey key_for_aggregate =
         network_container->AddAggregate(id, init_history);

@@ -41,9 +41,10 @@ int main(int argc, char** argv) {
   nc::net::GraphStorage graph(builder);
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
+  ctr::PcapDataBinCache bin_cache;
   ctr::BinSequenceGenerator bin_sequence_generator(
-      trace_store.AllTraces(),
-      {milliseconds(0), seconds(10), seconds(20), seconds(30)}, FLAGS_seed);
+      trace_store.AllTraces(), {milliseconds(0), seconds(20)}, FLAGS_seed,
+      &bin_cache);
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
@@ -71,7 +72,8 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      nc::net::Bandwidth mean_rate = bin_sequence_candidate->MeanRate();
+      nc::net::Bandwidth mean_rate =
+          bin_sequence_candidate->MeanRate(&bin_cache);
       if (mean_rate > top_mean) {
         top_mean = mean_rate;
         bin_sequence = std::move(bin_sequence_candidate);
@@ -80,7 +82,7 @@ int main(int argc, char** argv) {
 
     CHECK(bin_sequence);
     ctr::PcapTraceFitStore::AddToStore(demand, *bin_sequence,
-                                       FLAGS_out_fit_store);
+                                       FLAGS_out_fit_store, &bin_cache);
 
     LOG(INFO) << "Bin sequence " << ++i << " / "
               << demand_matrix->elements().size();

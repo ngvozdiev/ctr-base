@@ -45,8 +45,9 @@ static std::vector<BinList> GetAllBins(
   std::vector<BinList> all_bins;
   for (PcapDataTrace* trace : traces) {
     BinSequence bin_sequence(trace->TracesAndSlices(trace->AllSlices()));
+    PcapDataBinCache cache;
     std::vector<TrimmedPcapDataTraceBin> bins =
-        bin_sequence.AccumulateBins(bin_size);
+        bin_sequence.AccumulateBins(bin_size, &cache);
 
     BinList bins_for_trace;
     bins_for_trace.reserve(bins.size());
