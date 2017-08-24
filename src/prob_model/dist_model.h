@@ -75,9 +75,9 @@ class Distribution {
   // Convolves a number of distributions and returns their sum. The resulting
   // distribution will have 'resolution' levels. If the last argument is not
   // null will populate it with timing data.
-  static Distribution Sum(const std::vector<const Distribution*>& distributions,
-                          size_t resolution, FFTRunner* fft_runner,
-                          ConvolutionTimingData* timing_data);
+  static std::unique_ptr<Distribution> Sum(
+      const std::vector<Distribution*>& distributions, size_t resolution,
+      FFTRunner* fft_runner, ConvolutionTimingData* timing_data);
 
   Distribution(const std::vector<double>& probabilities, uint64_t base);
 
@@ -91,7 +91,7 @@ class Distribution {
 
   // Bins this distribution. Only valid if the current bin size is 1. Should
   // have cumulative probabilities cached.
-  Distribution Bin(size_t new_bin_size) const;
+  std::unique_ptr<Distribution> Bin(size_t new_bin_size);
 
   // Returns the probabilities as a map.
   std::map<uint64_t, double> GetProbabilities() const;
@@ -114,10 +114,10 @@ class Distribution {
     return probabilities_;
   }
 
+ private:
   // Caches cumulative probabilities. Should be called before attempting to bin.
   void CacheCumulativeProbabilities();
 
- private:
   Distribution(uint64_t base, uint64_t bin_size, uint64_t max_element);
 
   std::vector<double> probabilities_;
@@ -127,6 +127,11 @@ class Distribution {
 
   // A cumulative sum of probabilities.
   std::vector<double> probabilities_cumulative_;
+
+  // Protected the cumulative probabilities.
+  std::mutex cumulative_probs_mu_;
+
+  DISALLOW_COPY_AND_ASSIGN(Distribution);
 };
 
 // A single query --- when summing up a set of aggregates, can they fit within a
@@ -260,11 +265,11 @@ class ProbModel {
   // The rate that should (most of the time) fit the traffic.
   nc::net::Bandwidth OptimalRate(const ProbModelQuery& query,
                                  FFTRunner* fft_runner,
-                                 ProbModelTimingData* timing_data) const;
+                                 ProbModelTimingData* timing_data);
 
   // Performs a single query.
   ProbModelReply SingleQuery(const ProbModelQuery& query, FFTRunner* fft_runner,
-                             ProbModelTimingData* timing_data) const;
+                             ProbModelTimingData* timing_data);
 
   struct AggregateState {
     AggregateState(const AggregateHistory* history, size_t quantization);

@@ -29,6 +29,7 @@
 namespace ctr {
 
 constexpr size_t PcapDataTrace::kFlowCacheSize;
+constexpr size_t PcapDataBinCache::kCacheLineBinCount;
 
 void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
   bytes += other.bytes;

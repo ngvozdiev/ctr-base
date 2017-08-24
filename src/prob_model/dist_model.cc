@@ -117,12 +117,13 @@ Distribution::Distribution(uint64_t base, uint64_t bin_size,
                            uint64_t max_element)
     : base_(base), bin_size_(bin_size), max_element_(max_element) {}
 
-Distribution Distribution::Bin(size_t new_bin_size) const {
+std::unique_ptr<Distribution> Distribution::Bin(size_t new_bin_size) {
   CHECK(bin_size_ == 1);
-  CHECK(!probabilities_cumulative_.empty());
-  Distribution new_dist(base_, new_bin_size, max_element_);
+  CacheCumulativeProbabilities();
+  auto new_dist = std::unique_ptr<Distribution>(
+      new Distribution(base_, new_bin_size, max_element_));
 
-  std::vector<double>& new_probabilities = new_dist.probabilities_;
+  std::vector<double>& new_probabilities = new_dist->probabilities_;
   size_t est_count = probabilities_.size() / new_bin_size + 1;
   new_probabilities.resize(est_count, 0);
 
@@ -238,6 +239,11 @@ std::vector<uint64_t> Distribution::Sample(size_t count,
 }
 
 void Distribution::CacheCumulativeProbabilities() {
+  std::unique_lock<std::mutex> lock(cumulative_probs_mu_);
+  if (!probabilities_cumulative_.empty()) {
+    return;
+  }
+
   probabilities_cumulative_.resize(probabilities_.size());
   double total = 0;
   for (size_t i = 0; i < probabilities_.size(); ++i) {
@@ -246,8 +252,8 @@ void Distribution::CacheCumulativeProbabilities() {
   }
 }
 
-Distribution Distribution::Sum(
-    const std::vector<const Distribution*>& distributions, size_t resolution,
+std::unique_ptr<Distribution> Distribution::Sum(
+    const std::vector<Distribution*>& distributions, size_t resolution,
     FFTRunner* fft_runner, ConvolutionTimingData* timing_data) {
   using namespace std::chrono;
 
@@ -268,11 +274,11 @@ Distribution Distribution::Sum(
 
   std::vector<Complex> current_product;
   size_t bin_size = (max_value - min_value) / (resolution - 1) + 1;
-  for (const Distribution* distribution : distributions) {
+  for (Distribution* distribution : distributions) {
     if (timing_data != nullptr) {
       start = high_resolution_clock::now();
     }
-    Distribution binned = distribution->Bin(bin_size);
+    auto binned = distribution->Bin(bin_size);
     if (timing_data != nullptr) {
       end = high_resolution_clock::now();
       total_bin += duration_cast<microseconds>(end - start);
@@ -282,7 +288,7 @@ Distribution Distribution::Sum(
       start = high_resolution_clock::now();
     }
     const std::vector<Complex>& fft =
-        fft_runner->ComputeForward(binned.probabilities_raw());
+        fft_runner->ComputeForward(binned->probabilities_raw());
     if (timing_data != nullptr) {
       end = high_resolution_clock::now();
       total_fft += duration_cast<microseconds>(end - start);
@@ -299,14 +305,15 @@ Distribution Distribution::Sum(
     }
   }
 
-  Distribution new_dist(min_value, bin_size, max_value);
+  auto new_dist = std::unique_ptr<Distribution>(
+      new Distribution(min_value, bin_size, max_value));
   if (timing_data != nullptr) {
     timing_data->binning = total_bin;
     timing_data->fft = total_fft;
 
     start = high_resolution_clock::now();
   }
-  new_dist.probabilities_ = fft_runner->ComputeBackward(current_product);
+  new_dist->probabilities_ = fft_runner->ComputeBackward(current_product);
   if (timing_data != nullptr) {
     end = high_resolution_clock::now();
     timing_data->ifft = duration_cast<microseconds>(end - start);
@@ -329,9 +336,7 @@ static std::vector<uint64_t> GetQuantizedValues(const AggregateHistory& history,
 ProbModel::AggregateState::AggregateState(const AggregateHistory* history,
                                           size_t quantization)
     : history(history),
-      distribution(GetQuantizedValues(*history, quantization, 1.0)) {
-  distribution.CacheCumulativeProbabilities();
-}
+      distribution(GetQuantizedValues(*history, quantization, 1.0)) {}
 
 void ProbModel::AddAggregate(const AggregateId& aggregate_id,
                              const AggregateHistory* history) {
@@ -422,13 +427,13 @@ std::chrono::milliseconds ProbModel::SimulateQueue(
   return max_time_to_drain;
 }
 
-nc::net::Bandwidth ProbModel::OptimalRate(
-    const ProbModelQuery& query, FFTRunner* fft_runner,
-    ProbModelTimingData* timing_data) const {
+nc::net::Bandwidth ProbModel::OptimalRate(const ProbModelQuery& query,
+                                          FFTRunner* fft_runner,
+                                          ProbModelTimingData* timing_data) {
   using namespace std::chrono;
 
   std::vector<std::unique_ptr<Distribution>> partial_splits;
-  std::vector<const Distribution*> to_sum;
+  std::vector<Distribution*> to_sum;
 
   high_resolution_clock::time_point start;
   high_resolution_clock::time_point end;
@@ -438,7 +443,7 @@ nc::net::Bandwidth ProbModel::OptimalRate(
     const AggregateId& aggregate_id = aggregate_and_fraction.first;
     double fraction = aggregate_and_fraction.second;
 
-    const AggregateState& aggregate_state =
+    AggregateState& aggregate_state =
         nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
     if (fraction != 1) {
       // This will be slow -- the distribution in aggregate_state is the one
@@ -453,7 +458,6 @@ nc::net::Bandwidth ProbModel::OptimalRate(
       const AggregateHistory& history = *aggregate_state.history;
       auto new_dist = nc::make_unique<Distribution>(
           GetQuantizedValues(history, config_.initial_quantization, fraction));
-      new_dist->CacheCumulativeProbabilities();
 
       to_sum.emplace_back(new_dist.get());
       partial_splits.emplace_back(std::move(new_dist));
@@ -472,10 +476,10 @@ nc::net::Bandwidth ProbModel::OptimalRate(
     timing_data->split_aggregates = split_total;
   }
 
-  Distribution sum = Distribution::Sum(
+  auto sum = Distribution::Sum(
       to_sum, config_.distribution_levels, fft_runner,
       timing_data == nullptr ? nullptr : &timing_data->convolution_timing);
-  double bytes_per_bin = sum.Percentile(1 - config_.exceed_probability);
+  double bytes_per_bin = sum->Percentile(1 - config_.exceed_probability);
 
   milliseconds bin_size = GetBinSize(query);
   double bins_per_second = 1000.0 / bin_size.count();
@@ -485,7 +489,7 @@ nc::net::Bandwidth ProbModel::OptimalRate(
 
 ProbModelReply ProbModel::SingleQuery(const ProbModelQuery& query,
                                       FFTRunner* fft_runner,
-                                      ProbModelTimingData* timing_data) const {
+                                      ProbModelTimingData* timing_data) {
   using namespace std::chrono;
   high_resolution_clock::time_point start_outer;
   high_resolution_clock::time_point end_outer;

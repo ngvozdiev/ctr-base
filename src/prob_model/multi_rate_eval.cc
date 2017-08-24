@@ -159,11 +159,11 @@ static void ParseBatch(const std::vector<PcapDataTrace*>& traces,
     // Update the rates of the multi-queue and run it for the next 'duration'.
     event_queue.RunAndStopIn(duration);
 
-    std::map<nc::net::Bandwidth, Distribution> distributions =
+    std::map<nc::net::Bandwidth, std::unique_ptr<Distribution>> distributions =
         multi_queue->GetDistributions();
     for (const auto& rate_and_distribution : distributions) {
       nc::net::Bandwidth rate = rate_and_distribution.first;
-      const Distribution& distribution = rate_and_distribution.second;
+      const Distribution& distribution = *(rate_and_distribution.second);
 
       std::vector<nc::viz::NpyArray::StringOrNumeric> row = {
           batch_num, traces.size(), step_num, rate.Mbps(), rate == mean_rate};

@@ -49,7 +49,7 @@ void ServiceRateHelper::PacketAdded(uint16_t pkt_bytes) {
   }
 }
 
-Distribution ServiceRateHelper::GetDistribution() const {
+std::unique_ptr<Distribution> ServiceRateHelper::GetDistribution() const {
   uint64_t total = std::accumulate(queue_size_counts_.begin(),
                                    queue_size_counts_.end(), 0ul);
   std::vector<double> probabilities(queue_size_counts_.size(), 0.0);
@@ -57,7 +57,7 @@ Distribution ServiceRateHelper::GetDistribution() const {
     probabilities[i] = queue_size_counts_[i] / static_cast<double>(total);
   }
 
-  return {probabilities, 0ul};
+  return nc::make_unique<Distribution>(probabilities, 0ul);
 }
 
 MultiRateFIFOQueue::MultiRateFIFOQueue(
@@ -79,9 +79,9 @@ void MultiRateFIFOQueue::HandlePacket(nc::htsim::PacketPtr pkt) {
   }
 }
 
-std::map<nc::net::Bandwidth, Distribution>
+std::map<nc::net::Bandwidth, std::unique_ptr<Distribution>>
 MultiRateFIFOQueue::GetDistributions() const {
-  std::map<nc::net::Bandwidth, Distribution> out;
+  std::map<nc::net::Bandwidth, std::unique_ptr<Distribution>> out;
   for (const auto& queue : helpers_) {
     out.emplace(queue->GetRate(), queue->GetDistribution());
   }

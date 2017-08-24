@@ -34,7 +34,7 @@ class ServiceRateHelper : public nc::EventConsumer {
 
   void PacketAdded(uint16_t pkt_bytes);
 
-  Distribution GetDistribution() const;
+  std::unique_ptr<Distribution> GetDistribution() const;
 
   nc::net::Bandwidth GetRate() const { return rate_; }
 
@@ -83,7 +83,8 @@ class MultiRateFIFOQueue : public nc::htsim::PacketHandler {
 
   void HandlePacket(nc::htsim::PacketPtr pkt) override;
 
-  std::map<nc::net::Bandwidth, Distribution> GetDistributions() const;
+  std::map<nc::net::Bandwidth, std::unique_ptr<Distribution>> GetDistributions()
+      const;
 
   void Kill();
 

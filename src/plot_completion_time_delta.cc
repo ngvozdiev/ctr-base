@@ -25,18 +25,31 @@ DEFINE_string(metric, "tcp_source_completion_times",
               "The completion times metric.");
 DEFINE_bool(absolute, false,
             "If true will plot CDFs of absolute completion times, if false "
-            "will plot CDFs of CTs relative to those of the shortest path");
+            "will plot CDFs of CTs relative to those of the shortest path.");
+DEFINE_uint64(grace_period_sec, 60,
+              "Will ignore completion times that are generated within the "
+              "first this many seconds.");
 
 using namespace nc;
 using namespace nc::metrics::parser;
 
 using DataVector = std::vector<std::pair<uint64_t, double>>;
 
+// Will assume that the timestamps are in picoseconds.
+static constexpr uint64_t kTimestampMultiplier = 1000000000000UL;
+
 static std::vector<std::chrono::milliseconds> GetDeltas(
     const DataVector& sp_data, const DataVector& other_data) {
+  uint64_t threshold_timestamp = kTimestampMultiplier * FLAGS_grace_period_sec;
+
   size_t min_data_size = std::min(sp_data.size(), other_data.size());
   std::vector<std::chrono::milliseconds> out;
   for (size_t i = 0; i < min_data_size; ++i) {
+    uint64_t time = std::max(other_data[i].first, sp_data[i].first);
+    if (time < threshold_timestamp) {
+      continue;
+    }
+
     if (other_data[i].second < sp_data[i].second) {
       LOG(ERROR) << other_data[i].first << " vs " << sp_data[i].first << " "
                  << (i + 1) << "/" << min_data_size << " SP completion time "
