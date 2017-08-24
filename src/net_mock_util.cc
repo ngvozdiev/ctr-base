@@ -72,6 +72,8 @@ DEFINE_bool(pin_max, false,
             "If true will disable the controller's probability model-based "
             "scaling of aggregates before optimization. All aggregates will "
             "take their max level.");
+DEFINE_double(exceed_probability, 0.001,
+              "Probability convolution to exceed rate");
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -297,10 +299,12 @@ int main(int argc, char** argv) {
       FLAGS_simulate_initial_handshake;
 
   nc::ThresholdEnforcerPolicy te_policy;
-  ctr::TLDRConfig tldr_config(te_policy, {}, nc::htsim::kWildIPAddress,
-                              nc::htsim::kWildIPAddress, controller_ip,
-                              round_duration, poll_period, 100,
-                              FLAGS_disable_fast_optimization_requests);
+  ctr::ProbModelConfig prob_model_config;
+  prob_model_config.exceed_probability = FLAGS_exceed_probability;
+  ctr::TLDRConfig tldr_config(
+      te_policy, prob_model_config, nc::htsim::kWildIPAddress,
+      nc::htsim::kWildIPAddress, controller_ip, round_duration, poll_period,
+      100, FLAGS_disable_fast_optimization_requests);
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &event_queue);
 
