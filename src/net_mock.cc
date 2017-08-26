@@ -1,3 +1,4 @@
+#include "gflags/gflags.h"
 #include "net_mock.h"
 
 #include <algorithm>
@@ -13,6 +14,8 @@
 #include "metrics/metrics.h"
 
 namespace ctr {
+
+DEFINE_bool(precise_splits, false, "If true all splits will be precise");
 
 void MockSimDevice::HandleStateUpdate(
     const nc::htsim::SSCPAddOrUpdate& update) {
@@ -37,8 +40,12 @@ void MockSimDevice::HandleStateUpdate(
     fractions.emplace_back(fraction);
   }
 
-  std::vector<std::unique_ptr<BinSequence>> sub_sequences =
-      state->initial_bin_sequence->SplitOrDie(fractions);
+  std::vector<std::unique_ptr<BinSequence>> sub_sequences;
+  if (FLAGS_precise_splits) {
+    sub_sequences = state->initial_bin_sequence->PreciseSplitOrDie(fractions);
+  } else {
+    sub_sequences = state->initial_bin_sequence->SplitOrDie(fractions);
+  }
   CHECK(sub_sequences.size() == fractions.size());
 
   // Each action in the rule is a separate path.

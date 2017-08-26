@@ -40,6 +40,16 @@ void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
   }
 }
 
+void TrimmedPcapDataTraceBin::CombineWithFraction(
+    const TrimmedPcapDataTraceBin& other, double fraction) {
+  bytes += other.bytes * fraction;
+  uint16_t prev = flows_enter;
+  flows_enter += other.flows_enter * fraction;
+  if (flows_enter < prev) {
+    flows_enter = std::numeric_limits<uint16_t>::max();
+  }
+}
+
 struct TCPFlowRecord {
   TCPFlowRecord(size_t bytes, uint8_t ttl, bool forward)
       : forward(forward),
@@ -707,11 +717,12 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() const {
     TraceSliceIndex slice = trace_and_slice.slice;
     size_t end_bin = trace_and_slice.start_bin + count;
 
-    trace->BinsFromDisk(slice, trace_and_slice.start_bin, end_bin,
-                        [&bytes, &packets](const PBBin& bin_pb) {
-                          bytes += bin_pb.byte_count();
-                          packets += bin_pb.packet_count();
-                        });
+    trace->BinsFromDisk(
+        slice, trace_and_slice.start_bin, end_bin,
+        [&bytes, &packets, &trace_and_slice](const PBBin& bin_pb) {
+          bytes += bin_pb.byte_count() * trace_and_slice.precise_split;
+          packets += bin_pb.packet_count() * trace_and_slice.precise_split;
+        });
   }
 
   return {bytes, packets};
@@ -725,6 +736,7 @@ nc::net::Bandwidth BinSequence::MaxRate(PcapDataBinCache* cache) const {
   for (const TraceAndSlice& trace_and_slice : traces_) {
     const PcapDataTrace* trace = trace_and_slice.trace;
     TraceSliceIndex slice = trace_and_slice.slice;
+    double fraction = trace_and_slice.precise_split;
     size_t end_bin = trace_and_slice.start_bin + count;
 
     std::vector<TrimmedPcapDataTraceBin>::const_iterator from;
@@ -733,7 +745,7 @@ nc::net::Bandwidth BinSequence::MaxRate(PcapDataBinCache* cache) const {
         cache->Bins(trace, slice, trace_and_slice.start_bin, end_bin);
 
     while (from != to) {
-      uint32_t bytes_in_bin = from->bytes;
+      uint32_t bytes_in_bin = from->bytes * fraction;
       max_bytes = std::max(max_bytes, bytes_in_bin);
       ++from;
     }
@@ -748,6 +760,8 @@ nc::net::Bandwidth BinSequence::MaxRate(PcapDataBinCache* cache) const {
 PBBinSequence BinSequence::ToProtobuf() const {
   PBBinSequence out;
   for (const TraceAndSlice& trace_and_slice : traces_) {
+    CHECK(trace_and_slice.precise_split == 1.0);
+
     PBTraceAndSlice* trace_and_slice_pb = out.add_traces_and_slices();
     *trace_and_slice_pb->mutable_id() =
         trace_and_slice.trace->id().ToProtobuf();
@@ -829,6 +843,24 @@ std::vector<std::unique_ptr<BinSequence>> BinSequence::SplitOrDie(
   return out;
 }
 
+std::vector<std::unique_ptr<BinSequence>> BinSequence::PreciseSplitOrDie(
+    const std::vector<double>& fractions) const {
+  double total = std::accumulate(fractions.begin(), fractions.end(), 0.0);
+  CHECK(total <= 1);
+  std::vector<std::unique_ptr<BinSequence>> out;
+
+  for (double fraction : fractions) {
+    std::vector<TraceAndSlice> new_traces = traces_;
+    for (auto& trace_and_slice : new_traces) {
+      trace_and_slice.precise_split *= fraction;
+    }
+    CHECK(!new_traces.empty());
+    out.emplace_back(nc::make_unique<BinSequence>(new_traces));
+  }
+
+  return out;
+}
+
 std::unique_ptr<BinSequence> BinSequence::CutFromStart(
     size_t offset_from_start) const {
   size_t count = bin_count();
@@ -879,6 +911,7 @@ nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
   for (const TraceAndSlice& trace_and_slice : traces_) {
     const PcapDataTrace* trace = trace_and_slice.trace;
     TraceSliceIndex slice = trace_and_slice.slice;
+    double fraction = trace_and_slice.precise_split;
     size_t end_bin = trace_and_slice.start_bin + count;
 
     std::vector<TrimmedPcapDataTraceBin>::const_iterator from;
@@ -888,7 +921,7 @@ nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
 
     while (from != to) {
       uint32_t bytes_in_bin = from->bytes;
-      total_bytes += bytes_in_bin;
+      total_bytes += bytes_in_bin * fraction;
       ++from;
     }
   }
@@ -908,6 +941,7 @@ std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     const PcapDataTrace* trace = trace_and_slice.trace;
     TraceSliceIndex slice = trace_and_slice.slice;
     size_t start_bin = trace_and_slice.start_bin;
+    double fraction = trace_and_slice.precise_split;
     size_t end_bin = trace_and_slice.start_bin + count;
 
     std::vector<TrimmedPcapDataTraceBin>::const_iterator from;
@@ -915,8 +949,14 @@ std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     std::tie(from, to) = cache->Bins(trace, slice, start_bin, end_bin);
     CHECK(std::distance(from, to) == static_cast<ssize_t>(count));
 
-    for (size_t i = 0; i < count; ++i) {
-      out[i].Combine(*std::next(from, i));
+    if (fraction == 1) {
+      for (size_t i = 0; i < count; ++i) {
+        out[i].Combine(*std::next(from, i));
+      }
+    } else {
+      for (size_t i = 0; i < count; ++i) {
+        out[i].CombineWithFraction(*std::next(from, i), fraction);
+      }
     }
   }
 
@@ -958,8 +998,8 @@ std::vector<BinSequence::TraceAndSlice> PcapDataTrace::TracesAndSlices(
 
   std::vector<BinSequence::TraceAndSlice> traces_and_slices;
   for (TraceSliceIndex slice : slices) {
-    traces_and_slices.push_back(
-        {this, slice, bin_offset, trace_pb_.bin_count()});
+    traces_and_slices.emplace_back(this, slice, bin_offset,
+                                   trace_pb_.bin_count(), 1.0);
   }
 
   return traces_and_slices;
@@ -1015,7 +1055,7 @@ std::unique_ptr<BinSequence> PcapTraceStore::BinSequenceFromProtobufOrDie(
     CHECK(to <= trace_ptr->ToProtobuf().bin_count())
         << to << " vs " << trace_ptr->ToProtobuf().bin_count();
 
-    traces_and_slices.push_back({trace_ptr, slice, from, to});
+    traces_and_slices.emplace_back(trace_ptr, slice, from, to, 1.0);
   }
 
   return nc::make_unique<BinSequence>(traces_and_slices);

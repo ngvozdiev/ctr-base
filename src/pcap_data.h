@@ -90,6 +90,9 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
     CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint16_t>::max());
   }
 
+  void CombineWithFraction(const TrimmedPcapDataTraceBin& other,
+                           double fraction);
+
   // Like above, but does not take a fraction.
   void Combine(const TrimmedPcapDataTraceBin& other);
 
@@ -112,10 +115,21 @@ using TraceSliceMap = nc::PerfectHashMap<uint32_t, TraceSliceTag, Value>;
 class BinSequence {
  public:
   struct TraceAndSlice {
+    TraceAndSlice(const PcapDataTrace* trace, TraceSliceIndex slice,
+                  size_t start_bin, size_t end_bin, double precise_split)
+        : trace(trace),
+          slice(slice),
+          start_bin(start_bin),
+          end_bin(end_bin),
+          precise_split(precise_split) {}
+
     const PcapDataTrace* trace;
     TraceSliceIndex slice;
     size_t start_bin;
     size_t end_bin;
+
+    // Will assume all bins are from 'trace' * precise_split.
+    double precise_split;
   };
 
   BinSequence(const std::vector<TraceAndSlice>& traces);
@@ -148,6 +162,9 @@ class BinSequence {
   // there are sub-sequences. The sum of 'fractions' should be 1. Splitting is
   // deterministic and depends on the order of traces_.
   std::vector<std::unique_ptr<BinSequence>> SplitOrDie(
+      const std::vector<double>& fractions) const;
+
+  std::vector<std::unique_ptr<BinSequence>> PreciseSplitOrDie(
       const std::vector<double>& fractions) const;
 
   // Simluates how this sequence of bins would fit through a queue of given
