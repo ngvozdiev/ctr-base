@@ -4,6 +4,7 @@
 #include <limits>
 #include <vector>
 #include <thread>
+#include <fcntl.h>
 #include "metrics_test_util.h"
 #include "metrics_parser.h"
 
@@ -108,15 +109,20 @@ static void ProcessEntriesFromFile(
     const std::string& file, std::function<void(const PBMetricEntry&)> f) {
   using namespace google::protobuf;
 
-  parser::InputStream input_stream(file);
+  int fd = open(file.c_str(), O_RDONLY);
+  CHECK(fd > 0);
+  google::protobuf::io::FileInputStream input_stream(fd);
+
   uint32_t manifest_index;
   PBMetricEntry entry;
   while (true) {
-    if (!input_stream.ReadDelimitedHeaderFrom(&manifest_index)) {
+    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
+    if (!metrics::parser::ReadDelimitedHeaderFrom(&manifest_index,
+                                                  &coded_stream)) {
       break;
     }
 
-    CHECK(input_stream.ReadDelimitedFrom(&entry) == true);
+    CHECK(metrics::parser::ReadDelimitedFrom(&entry, &coded_stream) == true);
     f(entry);
   }
 }

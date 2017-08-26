@@ -99,8 +99,8 @@ void ParseEntryFromProtobuf<BytesBlob>(const PBMetricEntry& entry,
   out->value = entry.bytes_value();
 }
 
-static bool ReadDelimitedHeaderFrom(
-    uint32_t* manifest_index, google::protobuf::io::CodedInputStream* input) {
+bool ReadDelimitedHeaderFrom(uint32_t* manifest_index,
+                             google::protobuf::io::CodedInputStream* input) {
   // Read the manifest.
   if (!input->ReadVarint32(manifest_index)) {
     return false;
@@ -118,8 +118,8 @@ static bool SkipMessage(google::protobuf::io::CodedInputStream* input) {
   return input->Skip(size);
 }
 
-static bool ReadDelimitedFrom(PBMetricEntry* message,
-                              google::protobuf::io::CodedInputStream* input) {
+bool ReadDelimitedFrom(PBMetricEntry* message,
+                       google::protobuf::io::CodedInputStream* input) {
   // Read the size.
   uint32_t size;
   if (!input->ReadVarint32(&size)) {

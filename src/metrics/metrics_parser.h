@@ -550,6 +550,12 @@ std::string DataSummaryToString(
     const std::map<std::pair<std::string, std::string>,
                    std::vector<std::pair<uint64_t, double>>>& id_to_data);
 
+bool ReadDelimitedHeaderFrom(uint32_t* manifest_index,
+                             google::protobuf::io::CodedInputStream* input);
+
+bool ReadDelimitedFrom(PBMetricEntry* message,
+                       google::protobuf::io::CodedInputStream* input);
+
 }  // namespace parser
 }  // namsepace metrics
 }  // namsepace ncode
