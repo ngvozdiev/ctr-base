@@ -238,6 +238,9 @@ class TLDR : public ::nc::htsim::PacketHandler, public ::nc::EventConsumer {
   // Time the last triggered update happened. Used to avoid swamping the
   // controller with tons of triggered updates.
   nc::EventQueueTime last_trigered_update_;
+
+  // Estimates whether or not traffic will fit.
+  ProbModel prob_model_;
 };
 
 }  // namespace tldr

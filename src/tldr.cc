@@ -104,11 +104,11 @@ bool TLDR::LikelyToGoOverCapacity(
     return false;
   }
 
-  ProbModel prob_model(tldr_config_.prob_model_config);
-  prob_model.AddAggregate(aggregate_id, &most_recent_history);
+  prob_model_.ClearAggregates();
+  prob_model_.AddAggregate(aggregate_id, &most_recent_history);
   for (const auto& id_and_history :
        most_recent_competing_aggregate_histories_) {
-    prob_model.AddAggregate(id_and_history.first, &id_and_history.second);
+    prob_model_.AddAggregate(id_and_history.first, &id_and_history.second);
   }
 
   std::vector<ProbModelQuery> queries;
@@ -127,9 +127,17 @@ bool TLDR::LikelyToGoOverCapacity(
     query.aggregates.emplace_back(aggregate_id, fraction_on_path);
   }
 
-  std::vector<ProbModelReply> replies = prob_model.Query(queries);
-  for (const auto& reply : replies) {
+  std::vector<ProbModelReply> replies = prob_model_.Query(queries);
+  for (size_t i = 0; i < replies.size(); ++i) {
+    const auto& reply = replies[i];
+    const AggregatesAndCapacity& competing_aggregates =
+        most_recent_update_state.competing_aggregates[i];
     if (!reply.fit) {
+      LOG(ERROR) << "Unable to fit " << aggregate_id.ToString(*graph_)
+                 << " queue " << reply.max_simulated_queue_size.count()
+                 << "ms, rate " << reply.optimal_rate.Mbps() << "Mbps vs "
+                 << competing_aggregates.capacity.Mbps() << "Mbps";
+
       return true;
     }
   }
@@ -502,7 +510,8 @@ TLDR::TLDR(const std::string& id, const TLDRConfig& config,
       device_poll_period_(event_queue->ToTime(tldr_config_.switch_poll_period)),
       device_poll_count_(0),
       round_id_gen_(0),
-      last_trigered_update_(nc::EventQueueTime::ZeroTime()) {
+      last_trigered_update_(nc::EventQueueTime::ZeroTime()),
+      prob_model_(tldr_config_.prob_model_config) {
   size_t round_count = tldr_config_.round_len.count();
   size_t poll_period_count = tldr_config_.switch_poll_period.count();
   device_polls_in_round_ = round_count / poll_period_count;

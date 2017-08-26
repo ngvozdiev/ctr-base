@@ -47,6 +47,9 @@ std::map<AggregateId, AggregateHistory> MeanEstimator::EstimateNext(
       out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
                   std::make_tuple(history.SubtractRate(
                       nc::net::Bandwidth::FromMBitsPerSecond(-delta_mbps))));
+    } else {
+      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
+                  std::make_tuple(history));
     }
   }
   return out;

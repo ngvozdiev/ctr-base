@@ -236,6 +236,8 @@ class ProbModel {
   void AddAggregate(const AggregateId& aggregate_id,
                     const AggregateHistory* history);
 
+  void ClearAggregates();
+
   // Answers to multiple queries. Item i in the return vector corresponds to
   // query i in 'queries'. If the last argument is not null, will populate it
   // with timing data for each query.
@@ -247,10 +249,12 @@ class ProbModel {
   // Number of threads to process queries on.
   static constexpr size_t kParallelThreads = 4;
 
+  // Returns the max and the min bins.
+  std::pair<double, double> MaxMinBins(const ProbModelQuery& query) const;
+
   // Sums up the bins from the query. Also populates the last argument with the
   // total of all max values of all histories of aggregates in the query.
-  std::vector<uint64_t> SumUpBins(const ProbModelQuery& query, double* max_sum,
-                                  double* min_sum) const;
+  std::vector<uint64_t> SumUpBins(const ProbModelQuery& query) const;
 
   // Returns the common bin size for all aggregates in the query.
   std::chrono::milliseconds GetBinSize(const ProbModelQuery& query) const;
@@ -271,11 +275,26 @@ class ProbModel {
   ProbModelReply SingleQuery(const ProbModelQuery& query, FFTRunner* fft_runner,
                              ProbModelTimingData* timing_data);
 
-  struct AggregateState {
+  class AggregateState {
+   public:
     AggregateState(const AggregateHistory* history, size_t quantization);
 
-    const AggregateHistory* history;
-    Distribution distribution;
+    Distribution* distribution();
+
+    const AggregateHistory* history() const { return history_; }
+
+   private:
+    // The history.
+    const AggregateHistory* history_;
+
+    // The distribution, created on demand.
+    std::unique_ptr<Distribution> distribution_;
+
+    // Quantization for the distribution.
+    size_t quantization_;
+
+    // Protects the distribution.
+    std::mutex distribution_mu_;
   };
 
   // Configuration

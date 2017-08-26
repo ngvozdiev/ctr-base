@@ -335,8 +335,18 @@ static std::vector<uint64_t> GetQuantizedValues(const AggregateHistory& history,
 
 ProbModel::AggregateState::AggregateState(const AggregateHistory* history,
                                           size_t quantization)
-    : history(history),
-      distribution(GetQuantizedValues(*history, quantization, 1.0)) {}
+    : history_(history), quantization_(quantization) {}
+
+Distribution* ProbModel::AggregateState::distribution() {
+  std::lock_guard<std::mutex> lock(distribution_mu_);
+  if (distribution_) {
+    return distribution_.get();
+  }
+
+  distribution_ = nc::make_unique<Distribution>(
+      GetQuantizedValues(*history_, quantization_, 1.0));
+  return distribution_.get();
+}
 
 void ProbModel::AddAggregate(const AggregateId& aggregate_id,
                              const AggregateHistory* history) {
@@ -344,6 +354,8 @@ void ProbModel::AddAggregate(const AggregateId& aggregate_id,
       std::piecewise_construct, std::forward_as_tuple(aggregate_id),
       std::forward_as_tuple(history, config_.initial_quantization));
 }
+
+void ProbModel::ClearAggregates() { aggregate_states_.clear(); }
 
 std::chrono::milliseconds ProbModel::GetBinSize(
     const ProbModelQuery& query) const {
@@ -355,7 +367,7 @@ std::chrono::milliseconds ProbModel::GetBinSize(
 
     const AggregateState& aggregate_state =
         nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
-    const AggregateHistory* history = aggregate_state.history;
+    const AggregateHistory* history = aggregate_state.history();
 
     if (bin_size == milliseconds::max()) {
       bin_size = history->bin_size();
@@ -370,19 +382,16 @@ std::chrono::milliseconds ProbModel::GetBinSize(
   return bin_size;
 }
 
-std::vector<uint64_t> ProbModel::SumUpBins(const ProbModelQuery& query,
-                                           double* max_sum,
-                                           double* min_sum) const {
-  std::vector<uint64_t> bins_total;
-
-  *max_sum = 0;
-  *min_sum = 0;
+std::pair<double, double> ProbModel::MaxMinBins(
+    const ProbModelQuery& query) const {
+  double max_sum = 0;
+  double min_sum = 0;
   for (const auto& aggregate_and_fraction : query.aggregates) {
     const AggregateId& aggregate_id = aggregate_and_fraction.first;
     double fraction = aggregate_and_fraction.second;
     const AggregateState& aggregate_state =
         nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
-    const AggregateHistory* history = aggregate_state.history;
+    const AggregateHistory* history = aggregate_state.history();
 
     double max_bin = 0;
     double min_bin = std::numeric_limits<double>::max();
@@ -391,13 +400,31 @@ std::vector<uint64_t> ProbModel::SumUpBins(const ProbModelQuery& query,
       double bin_scaled = bins[i] * fraction;
       max_bin = std::max(max_bin, bin_scaled);
       min_bin = std::min(min_bin, bin_scaled);
+    }
 
+    max_sum += max_bin;
+    min_sum += min_bin;
+  }
+
+  return {max_sum, min_sum};
+}
+
+std::vector<uint64_t> ProbModel::SumUpBins(const ProbModelQuery& query) const {
+  std::vector<uint64_t> bins_total;
+
+  for (const auto& aggregate_and_fraction : query.aggregates) {
+    const AggregateId& aggregate_id = aggregate_and_fraction.first;
+    double fraction = aggregate_and_fraction.second;
+    const AggregateState& aggregate_state =
+        nc::FindOrDieNoPrint(aggregate_states_, aggregate_id);
+    const AggregateHistory* history = aggregate_state.history();
+
+    const std::vector<uint64_t>& bins = history->bins();
+    for (size_t i = 0; i < bins.size(); ++i) {
+      double bin_scaled = bins[i] * fraction;
       bins_total.resize(std::max(i + 1, bins_total.size()), 0);
       bins_total[i] += bin_scaled;
     }
-
-    *max_sum += max_bin;
-    *min_sum += min_bin;
   }
 
   return bins_total;
@@ -455,7 +482,7 @@ nc::net::Bandwidth ProbModel::OptimalRate(const ProbModelQuery& query,
         start = high_resolution_clock::now();
       }
 
-      const AggregateHistory& history = *aggregate_state.history;
+      const AggregateHistory& history = *aggregate_state.history();
       auto new_dist = nc::make_unique<Distribution>(
           GetQuantizedValues(history, config_.initial_quantization, fraction));
 
@@ -468,7 +495,7 @@ nc::net::Bandwidth ProbModel::OptimalRate(const ProbModelQuery& query,
       }
 
     } else {
-      to_sum.emplace_back(&aggregate_state.distribution);
+      to_sum.emplace_back(aggregate_state.distribution());
     }
   }
 
@@ -507,8 +534,7 @@ ProbModelReply ProbModel::SingleQuery(const ProbModelQuery& query,
 
   double max_sum_bin;
   double min_sum_bin;
-  std::vector<uint64_t> bins_summed =
-      SumUpBins(query, &max_sum_bin, &min_sum_bin);
+  std::tie(max_sum_bin, min_sum_bin) = MaxMinBins(query);
 
   // max_sum_bin now contains the worst possible value a bin can have -- if all
   // peaks of the distributions of all aggregates are in sync. If this fits we
@@ -534,6 +560,7 @@ ProbModelReply ProbModel::SingleQuery(const ProbModelQuery& query,
       start = high_resolution_clock::now();
     }
 
+    std::vector<uint64_t> bins_summed = SumUpBins(query);
     max_queue_size = SimulateQueue(query, bins_summed, rate_bytes_per_bin);
     if (timing_data != nullptr) {
       end = high_resolution_clock::now();

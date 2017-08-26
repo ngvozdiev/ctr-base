@@ -215,6 +215,7 @@ RoutingSystemUpdateResult RoutingSystem::Update(
   // timestep.
   std::map<AggregateId, AggregateHistory> next_history =
       estimator_.EstimateNext(history);
+  CHECK(next_history.size() == history.size());
 
   // The initial input will assign all aggregates to their mean level.
   std::map<AggregateId, DemandAndFlowCount> input =
@@ -234,6 +235,7 @@ RoutingSystemUpdateResult RoutingSystem::Update(
   while (true) {
     TrafficMatrix tm(graph_, input);
     output = optimizer_->Optimize(tm);
+    CHECK(output->demands().size() == tm.demands().size());
     ++i_count;
 
     if (config_.pin_mean || config_.pin_max) {
@@ -500,6 +502,7 @@ std::map<AggregateId, DemandAndFlowCount> RoutingSystem::GetInitialInput(
 
     nc::net::Bandwidth init_rate =
         config_.pin_max ? history.max_rate() : history.mean_rate();
+    init_rate = std::max(init_rate, nc::net::Bandwidth::FromKBitsPerSecond(10.0));
     out[aggregate_id] = {init_rate, history.flow_count()};
   }
 

@@ -67,6 +67,9 @@ target_link_libraries(metrics ${PROTOBUF_LIBRARIES} ncode gflags)
 add_library(metrics_parser src/metrics/metrics_parser.cc ${PROTO_METRICS_SRCS} ${METRICS_HEADER_FILES})
 target_link_libraries(metrics_parser ${PROTOBUF_LIBRARIES} ncode)
 
+add_library(geo_lib src/geo/geo.cc src/geo/geo.h)
+target_link_libraries(geo_lib ncode)
+
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
 set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/pcap_data.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h src/routing_system.h src/net_mock.h src/tldr.h src/controller.h src/net_instrument.h)
 add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/pcap_data.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc src/mean_est/mean_est.cc src/routing_system.cc src/net_mock.cc src/controller.cc src/tldr.cc src/net_instrument.cc)
@@ -102,13 +105,12 @@ if (NOT CTR_BASE_DISABLE_TESTS)
 
    add_test_exec(metrics_test src/metrics/metrics_test.cc metrics metrics_parser metrics_test_util)
    add_test_exec(metrics_parser_test src/metrics/metrics_parser_test.cc metrics metrics_parser metrics_test_util)
+
+   add_test_exec(geo_test src/geo/geo_test.cc geo_lib)
 endif()
 
 add_executable(metrics_explore src/metrics/metrics_explore.cc)
 target_link_libraries(metrics_explore metrics_parser gflags)
-
-# add_executable(tm_gen_util src/tm_gen_util.cc)
-# target_link_libraries(tm_gen_util ctr_base gflags)
 
 add_executable(tm_util src/tm_util.cc)
 target_link_libraries(tm_util ctr_base gflags)
@@ -133,3 +135,7 @@ target_link_libraries(flow_track_lib ncode gflags_nothreads)
 
 add_executable(flow_track src/flow_track_main.cc)
 target_link_libraries(flow_track flow_track_lib)
+
+add_executable(geo_main src/geo/geo_main.cc)
+target_link_libraries(geo_main geo_lib gflags)
+
