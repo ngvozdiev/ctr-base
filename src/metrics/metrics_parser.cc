@@ -99,69 +99,56 @@ void ParseEntryFromProtobuf<BytesBlob>(const PBMetricEntry& entry,
   out->value = entry.bytes_value();
 }
 
-InputStream::InputStream(const std::string& file) {
-  fd_ = open(file.c_str(), O_RDONLY);
-  CHECK(fd_ > 0) << "Bad input file " << file << ": " << strerror(errno);
-  file_input_ = make_unique<google::protobuf::io::FileInputStream>(fd_);
-  input_ =
-      make_unique<google::protobuf::io::CodedInputStream>(file_input_.get());
-  input_->SetTotalBytesLimit(std::numeric_limits<int>::max(),
-                             std::numeric_limits<int>::max());
-}
-
-InputStream::~InputStream() {
-  // close streams
-  input_.reset();
-  file_input_->Close();
-  file_input_.reset();
-  close(fd_);
-}
-
-bool InputStream::ReadDelimitedHeaderFrom(uint32_t* manifest_index) {
+static bool ReadDelimitedHeaderFrom(
+    uint32_t* manifest_index, google::protobuf::io::CodedInputStream* input) {
   // Read the manifest.
-  if (!input_->ReadVarint32(manifest_index)) {
+  if (!input->ReadVarint32(manifest_index)) {
     return false;
   }
   return true;
 }
 
-bool InputStream::SkipMessage() {
+static bool SkipMessage(google::protobuf::io::CodedInputStream* input) {
   // Read the size.
   uint32_t size;
-  if (!input_->ReadVarint32(&size)) {
+  if (!input->ReadVarint32(&size)) {
     return false;
   }
 
-  return input_->Skip(size);
+  return input->Skip(size);
 }
 
-bool InputStream::ReadDelimitedFrom(PBMetricEntry* message) {
+static bool ReadDelimitedFrom(PBMetricEntry* message,
+                              google::protobuf::io::CodedInputStream* input) {
   // Read the size.
   uint32_t size;
-  if (!input_->ReadVarint32(&size)) {
+  if (!input->ReadVarint32(&size)) {
     return false;
   }
 
   // Tell the stream not to read beyond that size.
-  google::protobuf::io::CodedInputStream::Limit limit = input_->PushLimit(size);
+  google::protobuf::io::CodedInputStream::Limit limit = input->PushLimit(size);
 
   // Parse the message.
-  if (!message->MergeFromCodedStream(input_.get())) {
+  if (!message->MergeFromCodedStream(input)) {
     return false;
   }
 
-  if (!input_->ConsumedEntireMessage()) {
+  if (!input->ConsumedEntireMessage()) {
     return false;
   }
 
   // Release the limit.
-  input_->PopLimit(limit);
+  input->PopLimit(limit);
 
   return true;
 }
 
 void MetricsParser::Parse() {
-  InputStream input_stream(metrics_file_);
+  int fd = open(metrics_file_.c_str(), O_RDONLY);
+  CHECK(fd > 0) << "Bad input file " << metrics_file_ << ": "
+                << strerror(errno);
+  google::protobuf::io::FileInputStream input_stream(fd);
 
   // This vector contains a map from the indices of manifests seen so far to the
   // list of processors that are interested in those manifests.
@@ -173,7 +160,8 @@ void MetricsParser::Parse() {
   uint32_t manifest_index;
   PBMetricEntry entry;
   while (true) {
-    if (!input_stream.ReadDelimitedHeaderFrom(&manifest_index)) {
+    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
+    if (!ReadDelimitedHeaderFrom(&manifest_index, &coded_stream)) {
       break;
     }
 
@@ -183,7 +171,7 @@ void MetricsParser::Parse() {
       // be added to the back of manifest_index_to_processors and all interested
       // processors will be added to it.
 
-      if (!input_stream.ReadDelimitedFrom(&entry)) {
+      if (!ReadDelimitedFrom(&entry, &coded_stream)) {
         LOG(INFO) << "Unable to read in manifest entry";
         break;
       }
@@ -213,7 +201,7 @@ void MetricsParser::Parse() {
         manifest_index_to_processors[manifest_index];
     if (interested_processors.empty()) {
       // No one is interested
-      if (!input_stream.SkipMessage()) {
+      if (!SkipMessage(&coded_stream)) {
         LOG(INFO) << "Unable to skip entry";
         break;
       }
@@ -221,7 +209,7 @@ void MetricsParser::Parse() {
     }
 
     // Have to read in the entire entry.
-    if (!input_stream.ReadDelimitedFrom(&entry)) {
+    if (!ReadDelimitedFrom(&entry, &coded_stream)) {
       LOG(INFO) << "Unable to read entry";
     }
 
@@ -232,6 +220,9 @@ void MetricsParser::Parse() {
 
     entry.Clear();
   }
+
+  input_stream.Close();
+  close(fd);
 }
 
 static bool IsNumeric(const WrappedEntry& wrapped_entry) {
@@ -269,7 +260,10 @@ void WrappedEntry::ChildEntry(bool numeric, double value) {
 }
 
 Manifest MetricsParser::ParseManifest() const {
-  InputStream input_stream(metrics_file_);
+  int fd = open(metrics_file_.c_str(), O_RDONLY);
+  CHECK(fd > 0) << "Bad input file " << metrics_file_ << ": "
+                << strerror(errno);
+  google::protobuf::io::FileInputStream input_stream(fd);
 
   // Manifest entries.
   std::vector<std::unique_ptr<WrappedEntry>> all_entries;
@@ -277,13 +271,14 @@ Manifest MetricsParser::ParseManifest() const {
   uint32_t manifest_index;
   PBMetricEntry entry;
   while (true) {
-    if (!input_stream.ReadDelimitedHeaderFrom(&manifest_index)) {
+    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
+    if (!ReadDelimitedHeaderFrom(&manifest_index, &coded_stream)) {
       break;
     }
 
     if (manifest_index == MetricBase::kManifestEntryMetaIndex) {
       // The following entry contains a manifest entry.
-      CHECK(input_stream.ReadDelimitedFrom(&entry))
+      CHECK(ReadDelimitedFrom(&entry, &coded_stream))
           << "Unable to read in manifest entry";
       CHECK(entry.has_manifest_entry())
           << "Wrong manifest index for manifest entry";
@@ -302,14 +297,14 @@ Manifest MetricsParser::ParseManifest() const {
       bool numeric;
       double value = 0.0;
       if ((numeric = IsNumeric(wrapped_entry))) {
-        if (!input_stream.ReadDelimitedFrom(&entry)) {
+        if (!ReadDelimitedFrom(&entry, &coded_stream)) {
           LOG(ERROR) << "Unable to read entry";
           break;
         }
         value = ExtractNumericValueOrDie(wrapped_entry.manifest_entry().type(),
                                          entry);
       } else {
-        if (!input_stream.SkipMessage()) {
+        if (!SkipMessage(&coded_stream)) {
           LOG(ERROR) << "Unable to skip entry";
           break;
         }

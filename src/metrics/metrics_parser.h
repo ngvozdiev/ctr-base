@@ -55,37 +55,6 @@ template <>
 void ParseEntryFromProtobuf<BytesBlob>(const PBMetricEntry& entry,
                                        Entry<BytesBlob>* out);
 
-class InputStream {
- public:
-  InputStream(const std::string& file);
-
-  ~InputStream();
-
-  // Reads the header from a stream. This is usually followed by
-  // ReadDelimitedFrom if the client thinks the manifest index is interesting or
-  // calling SkipMessage and calling again if it's not.
-  bool ReadDelimitedHeaderFrom(uint32_t* manifest_index);
-
-  // If called after ReadDelimitedHeaderFrom will skip to the next message.
-  bool SkipMessage();
-
-  // Reads a protobuf from a stream. Should be called after
-  // ReadDelimitedHeaderFrom.
-  bool ReadDelimitedFrom(PBMetricEntry* message);
-
- private:
-  // File descriptor. Closed on destruction.
-  int fd_;
-
-  // File input stream. Owned by this object.
-  std::unique_ptr<google::protobuf::io::FileInputStream> file_input_;
-
-  // Coded input stream.
-  std::unique_ptr<google::protobuf::io::CodedInputStream> input_;
-
-  DISALLOW_COPY_AND_ASSIGN(InputStream);
-};
-
 // Returns a human-readable string that described the fields in the entry.
 std::string GetFieldString(const PBManifestEntry& entry);
 
