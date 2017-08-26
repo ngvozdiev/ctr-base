@@ -238,10 +238,6 @@ RoutingSystemUpdateResult RoutingSystem::Update(
     CHECK(output->demands().size() == tm.demands().size());
     ++i_count;
 
-    if (config_.pin_mean || config_.pin_max) {
-      break;
-    }
-
     // After optimizing we should check to see which aggregates go over links
     // that do not fit.
     std::set<AggregateId> aggregates_no_fit;
@@ -500,9 +496,9 @@ std::map<AggregateId, DemandAndFlowCount> RoutingSystem::GetInitialInput(
     const AggregateId& aggregate_id = aggregate_and_history.first;
     const AggregateHistory& history = aggregate_and_history.second;
 
-    nc::net::Bandwidth init_rate =
-        config_.pin_max ? history.max_rate() : history.mean_rate();
-    init_rate = std::max(init_rate, nc::net::Bandwidth::FromKBitsPerSecond(10.0));
+    nc::net::Bandwidth init_rate = history.mean_rate();
+    init_rate =
+        std::max(init_rate, nc::net::Bandwidth::FromKBitsPerSecond(10.0));
     out[aggregate_id] = {init_rate, history.flow_count()};
   }
 

@@ -1,4 +1,5 @@
 #include "tldr.h"
+#include "gflags/gflags.h"
 
 #include <type_traits>
 
@@ -7,6 +8,9 @@
 #include "ncode_common/src/map_util.h"
 #include "ncode_common/src/strutil.h"
 #include "metrics/metrics.h"
+
+DEFINE_bool(enable_triggered_optimization, true,
+            "If true will trigger optimizations out of period.");
 
 namespace ctr {
 
@@ -171,7 +175,7 @@ void TLDR::HandleStatsReplyNoFlowCounts(
         nc::FindOrDieNoPrint(id_to_aggregate_state_, aggregate_id);
     aggregate_state.binner->AddBin(bytes_matched);
 
-    if (tldr_config_.disable_fast_optimization_requests) {
+    if (!FLAGS_enable_triggered_optimization) {
       continue;
     }
 

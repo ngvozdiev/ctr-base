@@ -54,17 +54,6 @@ DEFINE_uint64(decrease_end_ms, 60 * 1000 * 25,
               "When to stop decreasing traffic");
 DEFINE_string(opt, "CTR", "The optimizer to use");
 DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
-DEFINE_bool(
-    disable_fast_optimization_requests, false,
-    "If true will disable fast optimization requests to the controller.");
-DEFINE_bool(pin_mean, false,
-            "If true will disable the controller's probability model-based "
-            "scaling of aggregates before optimization. All aggregates will "
-            "take their mean level.");
-DEFINE_bool(pin_max, false,
-            "If true will disable the controller's probability model-based "
-            "scaling of aggregates before optimization. All aggregates will "
-            "take their max level.");
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_uint64(history_bin_size_ms, 100, "How big each history bin is");
 DEFINE_bool(simulate_initial_handshake, true,
@@ -236,8 +225,6 @@ int main(int argc, char** argv) {
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.05, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
-  routing_system_config.pin_max = FLAGS_pin_max;
-  routing_system_config.pin_mean = FLAGS_pin_mean;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 
@@ -264,8 +251,7 @@ int main(int argc, char** argv) {
   nc::ThresholdEnforcerPolicy te_policy;
   ctr::TLDRConfig tldr_config(te_policy, {}, nc::htsim::kWildIPAddress,
                               nc::htsim::kWildIPAddress, controller_ip,
-                              round_duration, poll_period, 100,
-                              FLAGS_disable_fast_optimization_requests);
+                              round_duration, poll_period, 100);
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &event_queue);
 

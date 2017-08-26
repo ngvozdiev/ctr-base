@@ -61,17 +61,6 @@ DEFINE_bool(simulate_initial_handshake, true,
 DEFINE_uint64(tcp_tracer_flow_max_count, 50,
               "How many tracer TCP flows to add to the largest-volume "
               "aggregate. Other aggregates' flow count is proportional.");
-DEFINE_bool(
-    disable_fast_optimization_requests, false,
-    "If true will disable fast optimization requests to the controller.");
-DEFINE_bool(pin_mean, false,
-            "If true will disable the controller's probability model-based "
-            "scaling of aggregates before optimization. All aggregates will "
-            "take their mean level.");
-DEFINE_bool(pin_max, false,
-            "If true will disable the controller's probability model-based "
-            "scaling of aggregates before optimization. All aggregates will "
-            "take their max level.");
 DEFINE_double(exceed_probability, 0.001,
               "Probability convolution to exceed rate");
 
@@ -272,8 +261,6 @@ int main(int argc, char** argv) {
   ctr::MeanScaleEstimatorFactory estimator_factory(
       {1.05, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
-  routing_system_config.pin_max = FLAGS_pin_max;
-  routing_system_config.pin_mean = FLAGS_pin_mean;
   routing_system_config.prob_model_config = prob_model_config;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
@@ -303,10 +290,10 @@ int main(int argc, char** argv) {
       FLAGS_simulate_initial_handshake;
 
   nc::ThresholdEnforcerPolicy te_policy;
-  ctr::TLDRConfig tldr_config(
-      te_policy, prob_model_config, nc::htsim::kWildIPAddress,
-      nc::htsim::kWildIPAddress, controller_ip, round_duration, poll_period,
-      100, FLAGS_disable_fast_optimization_requests);
+  ctr::TLDRConfig tldr_config(te_policy, prob_model_config,
+                              nc::htsim::kWildIPAddress,
+                              nc::htsim::kWildIPAddress, controller_ip,
+                              round_duration, poll_period, 100);
   ctr::controller::NetworkContainer network_container(
       containter_config, tldr_config, &graph, &controller, &event_queue);
 
