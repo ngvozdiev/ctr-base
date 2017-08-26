@@ -11,6 +11,9 @@
 
 DEFINE_bool(enable_triggered_optimization, true,
             "If true will trigger optimizations out of period.");
+DEFINE_uint64(triggered_optimization_cooldown_ms, 100,
+              "How long to wait after triggering an optimization before being "
+              "able to trigger another one.");
 
 namespace ctr {
 
@@ -201,7 +204,8 @@ void TLDR::HandleStatsReplyNoFlowCounts(
   nc::EventQueueTime now = event_queue()->CurrentTime();
   CHECK(last_trigered_update_ < now);
   nc::EventQueueTime delta = now - last_trigered_update_;
-  if (delta > event_queue()->ToTime(std::chrono::milliseconds(100)) &&
+  if (delta > event_queue()->ToTime(std::chrono::milliseconds(
+                  FLAGS_triggered_optimization_cooldown_ms)) &&
       need_update) {
     LOG(ERROR) << "Will trigger update at " << id();
     auto msg = nc::GetFreeList<TLDRTriggerReoptimize>().New(
