@@ -51,7 +51,7 @@ DEFINE_double(link_delay_scale, 1.3, "By how much to scale all links' delay");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_string(opt, "CTR", "The optimizer to use");
 DEFINE_bool(disable_rto, false, "If true will disable TCP's rto mechanism");
-DEFINE_uint64(duration_sec, 90, "For how long to run (in simulated time)");
+DEFINE_uint64(duration_ms, 90000, "For how long to run (in simulated time)");
 DEFINE_uint64(
     tcp_initial_cwnd_pkts, 4,
     "How many packets should there be in the inital congestion window");
@@ -172,7 +172,7 @@ static void HandleDefault(
                                     network_container->flow_group_tcp_sources(),
                                     milliseconds(10), event_queue);
   device_factory.Init();
-  event_queue->RunAndStopIn(seconds(FLAGS_duration_sec));
+  event_queue->RunAndStopIn(milliseconds(FLAGS_duration_ms));
 }
 
 int main(int argc, char** argv) {

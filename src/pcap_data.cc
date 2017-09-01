@@ -596,10 +596,10 @@ PcapDataBinCache::Bins(const PcapDataTrace* trace, TraceSliceIndex slice,
   }
 
   size_t to_bring_in = std::max(kCacheLineBinCount, range);
-  LOG(INFO) << "Miss " << start_bin << " -> " << end_bin << " slice " << slice
-            << " current from " << cached_trace.starting_bin << " to "
-            << last_cached_bin << " will bring in " << to_bring_in << " trace "
-            << trace->id().ToString() << " " << CacheStats();
+  //LOG(INFO) << "Miss " << start_bin << " -> " << end_bin << " slice " << slice
+  //          << " current from " << cached_trace.starting_bin << " to "
+  //          << last_cached_bin << " will bring in " << to_bring_in << " trace "
+  //         << trace->id().ToString() << " " << CacheStats();
 
   bins.clear();
   bins.reserve(to_bring_in);

@@ -8,6 +8,9 @@
 #include "metrics_test_util.h"
 #include "metrics_parser.h"
 
+#include <google/protobuf/io/zero_copy_stream.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <google/protobuf/io/coded_stream.h>
 #include "gtest/gtest.h"
 #include "ncode_common/src/substitute.h"
 
