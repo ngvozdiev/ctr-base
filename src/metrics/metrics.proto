@@ -36,7 +36,6 @@ message PBManifestEntry {
     STRING = 4;  // A string value.
     BOOL = 5;  // A boolean.
     BYTES = 6;  // A generic collection of bytes.
-    DISTRIBUTION = 7; // Information about a series of values.
   }
 
   // The type of values the metric associated with this manifest entry

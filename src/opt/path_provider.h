@@ -16,36 +16,15 @@ class PathProvider {
  public:
   PathProvider(const nc::net::GraphStorage* graph) : graph_(graph) {}
 
-  // Returns the K shortest paths computed so far for an aggregate. Empty if
-  // NextShortestPathOrNull has not been called yet.
-  const std::vector<const nc::net::Walk*>& KShorestPaths(
-      const AggregateId& aggregate);
+  // Returns the K shortest paths for an aggregate.
+  std::vector<const nc::net::Walk*> KShorestPaths(const AggregateId& aggregate,
+                                                  size_t k);
 
   // Adds paths in K shortest order until a path is added that avoids a set of
   // links or max_count is reached. Paths are added starting at start_k.
   std::vector<const nc::net::Walk*> KShortestUntilAvoidingPath(
       const AggregateId& aggregate, const nc::net::GraphLinkSet& to_avoid,
-      size_t start_k, size_t max_count) {
-    std::vector<const nc::net::Walk*> out;
-
-    Generator* generator = FindOrCreateGenerator(aggregate);
-    size_t i = start_k;
-    while (out.size() != max_count) {
-      const nc::net::Walk* next_path = generator->KthShortestPathOrNull(i++);
-      if (next_path == nullptr) {
-        return {};
-      }
-
-      out.emplace_back(next_path);
-      if (next_path->ContainsAny(to_avoid)) {
-        continue;
-      }
-
-      break;
-    }
-
-    return out;
-  }
+      size_t start_k, size_t max_count);
 
   // Returns a path that avoids the given set of links.
   const nc::net::Walk* AvoidingPathOrNull(

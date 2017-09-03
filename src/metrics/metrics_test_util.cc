@@ -10,9 +10,9 @@ namespace nc {
 namespace metrics {
 namespace test {
 
-MetricFixtureBase::MetricFixtureBase(bool one_file_per_metric) {
+MetricFixtureBase::MetricFixtureBase() {
   metric_manager_ = make_unique<MetricManager>();
-  metric_manager_->SetOutput(kTestOutput, one_file_per_metric);
+  metric_manager_->SetOutput(kTestOutput);
   timestamp_provider_ = metric_manager_->timestamp_provider();
 }
 

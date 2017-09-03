@@ -54,7 +54,7 @@ class MinMaxProblem : public nc::lp::SingleCommodityFlowProblem {
         also_minimize_delay_(also_minimize_delay),
         capacity_multiplier_(capacity_multiplier) {}
 
-  double Solve(
+  void Solve(
       std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths) {
     using namespace nc::lp;
 
@@ -114,14 +114,10 @@ class MinMaxProblem : public nc::lp::SingleCommodityFlowProblem {
     // Solve the problem.
     problem.SetMatrix(problem_matrix);
     std::unique_ptr<Solution> solution = problem.Solve();
-    bool solution_found = (solution->type() == nc::lp::OPTIMAL ||
-                           solution->type() == nc::lp::FEASIBLE);
-    if (!solution_found) {
-      return std::numeric_limits<double>::max();
-    }
+    CHECK(solution->type() == nc::lp::OPTIMAL ||
+          solution->type() == nc::lp::FEASIBLE);
 
     *paths = RecoverPathsFromSolution(link_to_variables, *solution);
-    return solution->ObjectiveValue();
   }
 
   bool also_minimize_delay_;
@@ -170,6 +166,146 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     }
 
     out->AddRouteAndFraction(aggregate_id, routes_for_aggregate);
+  }
+
+  return out;
+}
+
+struct MMPathAndAggregate {
+  MMPathAndAggregate(nc::lp::VariableIndex variable, const nc::net::Walk* path,
+                     const AggregateId& aggregate, nc::net::Bandwidth demand)
+      : variable(variable), path(path), aggregate(aggregate), demand(demand) {}
+
+  nc::lp::VariableIndex variable;
+  const nc::net::Walk* path;
+  AggregateId aggregate;
+  nc::net::Bandwidth demand;
+};
+
+std::unique_ptr<RoutingConfiguration> MinMaxPathBasedOptimizer::Optimize(
+    const TrafficMatrix& tm) {
+  using namespace nc::lp;
+
+  // Will build a mapping from a graph link to all paths that traverse that
+  // link. For convenience each path is also paired with its aggregate.
+  std::map<nc::net::GraphLinkIndex, std::vector<MMPathAndAggregate>>
+      link_to_paths;
+
+  // The main LP.
+  Problem problem(MINIMIZE);
+
+  // The matrix of variable coefficients.
+  std::vector<ProblemMatrixElement> problem_matrix;
+  const nc::net::GraphStorage* graph = path_provider_->graph();
+
+  size_t num_paths = 0;
+  for (const auto& id_and_demand : tm.demands()) {
+    // Each aggregate is an IE pair.
+    const AggregateId& id = id_and_demand.first;
+    const DemandAndFlowCount& demand_and_flow_count = id_and_demand.second;
+
+    // A per-aggregate constraint to make the variables that belong to each
+    // aggregate sum up to 1.
+    ConstraintIndex per_aggregate_constraint = problem.AddConstraint();
+    problem.SetConstraintRange(per_aggregate_constraint, 1.0, 1.0);
+
+    std::vector<const nc::net::Walk*> paths =
+        path_provider_->KShorestPaths(id, k_);
+    CHECK(!paths.empty());
+    for (const nc::net::Walk* path : paths) {
+      // Each path in each aggregate will have a variable associated with it.
+      VariableIndex variable = problem.AddVariable();
+      problem.SetVariableRange(variable, 0, Problem::kInifinity);
+      problem_matrix.emplace_back(per_aggregate_constraint, variable, 1.0);
+
+      for (nc::net::GraphLinkIndex link : path->links()) {
+        link_to_paths[link].emplace_back(variable, path, id,
+                                         demand_and_flow_count.first);
+      }
+      ++num_paths;
+    }
+  }
+
+  // There will be one max utilization variable.
+  VariableIndex max_utilization_var = problem.AddVariable();
+  problem.SetVariableRange(max_utilization_var, 0, Problem::kInifinity);
+  problem.SetObjectiveCoefficient(max_utilization_var, 100000.0);
+
+  // Will add per-link constraints.
+  for (const auto& link_and_path : link_to_paths) {
+    nc::net::GraphLinkIndex link_index = link_and_path.first;
+    const nc::net::GraphLink* link = graph->GetLink(link_index);
+
+    // All utilization variables will be less than max utilization.
+    ConstraintIndex utilization_var_constraint = problem.AddConstraint();
+    problem.SetConstraintRange(utilization_var_constraint,
+                               Problem::kNegativeInifinity, 0);
+    problem_matrix.emplace_back(utilization_var_constraint, max_utilization_var,
+                                -1.0);
+
+    VariableIndex link_utilization_var = problem.AddVariable();
+    problem.SetVariableRange(link_utilization_var, 0, Problem::kInifinity);
+    problem_matrix.emplace_back(utilization_var_constraint,
+                                link_utilization_var, 1.0);
+
+    ConstraintIndex constraint = problem.AddConstraint();
+    problem.SetConstraintRange(constraint, 0, 0);
+
+    double link_capacity = link->bandwidth().Mbps() * capacity_multiplier_;
+    problem_matrix.emplace_back(constraint, link_utilization_var,
+                                -link_capacity);
+
+    for (const MMPathAndAggregate& path_and_aggregate : link_and_path.second) {
+      VariableIndex variable = path_and_aggregate.variable;
+      nc::net::Bandwidth demand = path_and_aggregate.demand;
+
+      // The coefficient for the column is the total volume of the aggregate.
+      double value = demand.Mbps();
+      problem_matrix.emplace_back(constraint, variable, value);
+    }
+
+    double link_weight =
+        std::chrono::duration<double, std::milli>(link->delay()).count();
+    if (also_minimize_delay_) {
+      problem.SetObjectiveCoefficient(link_utilization_var, link_weight);
+    } else {
+      problem.SetObjectiveCoefficient(link_utilization_var, -link_weight);
+    }
+  }
+
+  // Solve the problem.
+  problem.SetMatrix(problem_matrix);
+  problem.DumpToFile("out.lp");
+  std::unique_ptr<Solution> solution = problem.Solve();
+  CHECK(solution->type() == OPTIMAL || solution->type() == FEASIBLE);
+
+  // Recover the solution and return it.
+  std::map<AggregateId, std::vector<RouteAndFraction>> routes_and_fractions;
+  std::set<const nc::net::Walk*> paths_added;
+  for (const auto& link_and_path : link_to_paths) {
+    for (const MMPathAndAggregate& path_and_aggregate : link_and_path.second) {
+      const AggregateId& id = path_and_aggregate.aggregate;
+      const nc::net::Walk* path = path_and_aggregate.path;
+
+      if (nc::ContainsKey(paths_added, path)) {
+        continue;
+      }
+      paths_added.insert(path);
+
+      VariableIndex variable = path_and_aggregate.variable;
+      double fraction = std::max(0.0, solution->VariableValue(variable));
+      if (fraction == 0) {
+        continue;
+      }
+
+      routes_and_fractions[id].emplace_back(path, fraction);
+    }
+  }
+
+  auto out = nc::make_unique<RoutingConfiguration>(tm);
+  for (const auto& id_and_route_and_fraction : routes_and_fractions) {
+    const AggregateId& id = id_and_route_and_fraction.first;
+    out->AddRouteAndFraction(id, id_and_route_and_fraction.second);
   }
 
   return out;

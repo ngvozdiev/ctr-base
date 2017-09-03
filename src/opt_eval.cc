@@ -325,6 +325,7 @@ static void RunOptimizers(const std::string& topology_file,
   CTROptimizer ctr_optimizer_no_flow_counts(&path_provider, 1.0, false, true);
   MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
   MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
+  MinMaxPathBasedOptimizer minmax_ksp_optimizer(&path_provider, 1.0, true, 10);
   B4Optimizer b4_flow_count_optimizer(&path_provider, true, 1.0);
 
   auto ctr_start = high_resolution_clock::now();
@@ -360,6 +361,14 @@ static void RunOptimizers(const std::string& topology_file,
   {
     std::unique_lock<std::mutex> lock(global_mutex);
     RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMaxLD",
+                        *routing);
+  }
+
+  routing = minmax_ksp_optimizer.Optimize(*tm);
+
+  {
+    std::unique_lock<std::mutex> lock(global_mutex);
+    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMaxK10",
                         *routing);
   }
 
@@ -408,6 +417,12 @@ using TopologyAndMatrix = std::tuple<std::string, std::string, double>;
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
+
+  // Will switch off timestamps.
+  auto timestamp_provider =
+      ::nc::make_unique<nc::metrics::NullTimestampProvider>();
+  nc::metrics::DefaultMetricManager()->set_timestamp_provider(
+      std::move(timestamp_provider));
 
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());

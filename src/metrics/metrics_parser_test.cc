@@ -18,7 +18,7 @@ using DoubleProcessor = QueryCallbackProcessor<double, PBManifestEntry::DOUBLE>;
 
 TEST_F(MetricFixture, DoubleParser) {
   auto* metric = metric_manager_->GetUnsafeMetric<double, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
   for (size_t i = 0; i < 1000000; ++i) {
     handle->AddValue(i);
@@ -30,7 +30,7 @@ TEST_F(MetricFixture, DoubleParser) {
       const Entry<double>& entry, const PBManifestEntry& manifest_entry,
       uint32_t manifest_index) {
     ASSERT_EQ(0ul, manifest_index);
-    ASSERT_EQ(kMetricComonentId, manifest_entry.id());
+    ASSERT_EQ(kMetricId, manifest_entry.id());
     all_values.emplace_back(entry.value);
   };
 
@@ -49,7 +49,7 @@ TEST_F(MetricFixture, DoubleParser) {
 
 TEST_F(MetricFixture, ExternalNoMetrics) {
   auto* metric = metric_manager_->GetUnsafeMetric<uint64_t, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
   for (size_t i = 0; i < 1000000; ++i) {
     handle->AddValue(i);
@@ -72,7 +72,7 @@ TEST_F(MetricFixture, ExternalNoMetrics) {
 
 TEST_F(MetricFixture, External) {
   auto* metric = metric_manager_->GetUnsafeMetric<uint64_t, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
   for (size_t i = 0; i < 1000000; ++i) {
     handle->AddValue(i);
@@ -80,8 +80,8 @@ TEST_F(MetricFixture, External) {
   metric_manager_.reset();
 
   NumericMetricsResultHandle* result_handle =
-      MetricsParserParse(kTestOutput, kMetricComonentId, kMetricFieldStrValue,
-                         0, std::numeric_limits<uint64_t>::max(), 0);
+      MetricsParserParse(kTestOutput, kMetricId, kMetricFieldStrValue, 0,
+                         std::numeric_limits<uint64_t>::max(), 0);
   ASSERT_NE(nullptr, result_handle);
   ASSERT_TRUE(result_handle->Advance());
 
@@ -105,8 +105,7 @@ TEST_F(MetricFixture, External) {
 TEST_F(MetricFixture, BytesManifestSummary) {
   auto* metric =
       metric_manager_->GetUnsafeMetric<BytesBlob, std::string, uint64_t>(
-          kMetricComonentId, kMetricDesc, kMetricFieldOneDesc,
-          kMetricFieldTwoDesc);
+          kMetricId, kMetricDesc, kMetricFieldOneDesc, kMetricFieldTwoDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue, 0);
 
   std::string v1 = "AA";
@@ -120,14 +119,14 @@ TEST_F(MetricFixture, BytesManifestSummary) {
   MetricsParser parser(kTestOutput);
   std::string manifest_summary = parser.ParseManifest().FullToString();
 
-  ASSERT_NE(std::string::npos, manifest_summary.find(kMetricComonentId));
+  ASSERT_NE(std::string::npos, manifest_summary.find(kMetricId));
   ASSERT_NE(std::string::npos, manifest_summary.find(kMetricFieldOneDesc));
   ASSERT_NE(std::string::npos, manifest_summary.find(std::to_string(1000000)));
 }
 
 TEST_F(MetricFixture, ExternalBytes) {
   auto* metric = metric_manager_->GetUnsafeMetric<BytesBlob, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
 
   std::string v1 = "AA";
@@ -197,7 +196,7 @@ TEST_F(MetricFixture, ExternalBytes) {
 
 TEST_F(MetricFixture, ExternalTimestampLimits) {
   auto* metric = metric_manager_->GetUnsafeMetric<uint64_t, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
   for (size_t i = 0; i < 1000000; ++i) {
     handle->AddValue(i);
@@ -240,7 +239,7 @@ TEST_F(MetricFixture, ExternalTimestampLimits) {
 
 TEST_F(MetricFixture, ExternalMultiFieldsMatched) {
   auto* metric = metric_manager_->GetUnsafeMetric<uint64_t, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle_one = metric->GetHandle(kMetricFieldStrValue);
   auto* handle_two = metric->GetHandle(kMetricAnotherFieldStrValue);
   for (size_t i = 0; i < 1000000; ++i) {
@@ -276,8 +275,8 @@ TEST_F(MetricFixture, ExternalMultiFieldsMatched) {
   MetricsParserResultHandleFree(result_handle);
 
   ASSERT_EQ(2ul, values_map.size());
-  auto key_one = std::make_pair(kMetricComonentId, kMetricFieldStrValue);
-  auto key_two = std::make_pair(kMetricComonentId, kMetricAnotherFieldStrValue);
+  auto key_one = std::make_pair(kMetricId, kMetricFieldStrValue);
+  auto key_two = std::make_pair(kMetricId, kMetricAnotherFieldStrValue);
 
   ASSERT_TRUE(ContainsKey(values_map, key_one));
   ASSERT_TRUE(ContainsKey(values_map, key_two));

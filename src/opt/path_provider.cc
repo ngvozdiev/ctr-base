@@ -29,10 +29,45 @@ PathProvider::Generator* PathProvider::FindOrCreateGenerator(
   return raw_ptr;
 }
 
-const std::vector<const nc::net::Walk*>& PathProvider::KShorestPaths(
-    const AggregateId& aggregate) {
+std::vector<const nc::net::Walk*> PathProvider::KShortestUntilAvoidingPath(
+    const AggregateId& aggregate, const nc::net::GraphLinkSet& to_avoid,
+    size_t start_k, size_t max_count) {
+  std::vector<const nc::net::Walk*> out;
+
+  Generator* generator = FindOrCreateGenerator(aggregate);
+  size_t i = start_k;
+  while (out.size() != max_count) {
+    const nc::net::Walk* next_path = generator->KthShortestPathOrNull(i++);
+    if (next_path == nullptr) {
+      return {};
+    }
+
+    out.emplace_back(next_path);
+    if (next_path->ContainsAny(to_avoid)) {
+      continue;
+    }
+
+    break;
+  }
+
+  return out;
+}
+
+std::vector<const nc::net::Walk*> PathProvider::KShorestPaths(
+    const AggregateId& aggregate, size_t k) {
   PathProvider::Generator* generator = FindOrCreateGenerator(aggregate);
-  return generator->k_paths();
+
+  std::vector<const nc::net::Walk*> out;
+  for (size_t i = 0; i < k; ++i) {
+    const nc::net::Walk* next_path = generator->KthShortestPathOrNull(i);
+    if (next_path == nullptr) {
+      break;
+    }
+
+    out.emplace_back(next_path);
+  }
+
+  return out;
 }
 
 const nc::net::Walk* PathProvider::AvoidingPathOrNull(

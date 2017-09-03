@@ -465,13 +465,10 @@ class MetricManager {
 
   void PollAllMetrics();
 
-  size_t NextIndex();
-
-  // Sets the output. Should only be called once. If the second argument is
-  // false all entries will be logged to the file 'output'. If the second
-  // argument is true each metric will have a separate file, named after the
-  // metric id. Those files will be stored in a directory 'output'.
-  void SetOutput(const std::string& output, bool per_metric_files);
+  // Sets the output. Should only be called once. Each metric will have a
+  // separate file, named after the metric id. Those files will be stored in a
+  // directory 'output'.
+  void SetOutput(const std::string& output);
 
   template <typename EntryType, bool ThreadSafe, typename... FieldTypes,
             typename... DescTypes>
@@ -528,7 +525,6 @@ class MetricManager {
     for (const auto& metric : all_metrics_) {
       metric->ClearAllHandles();
     }
-    current_index_ = std::numeric_limits<size_t>::max();
   }
 
   void set_timestamp_provider(
@@ -536,8 +532,6 @@ class MetricManager {
     Clear();
     timestamp_provider_ = std::move(timestamp_provider);
   }
-
-  OutputStream* OutputStreamOrNull() { return output_stream_.get(); }
 
  private:
   template <typename FieldType, typename... FieldTypes>
@@ -555,19 +549,11 @@ class MetricManager {
     return;
   }
 
-  // The current index that will be incremented and returned by NextIndex. Only
-  // used if there is a single output file. If there are per-metric files each
-  // metric will have its own index space.
-  size_t current_index_;
-
   // A class that knows how to provide timestamps.
   std::unique_ptr<TimestampProviderInterface> timestamp_provider_;
 
   // All metrics are stored here.
   std::vector<std::unique_ptr<MetricBase>> all_metrics_;
-
-  // Output for the master metric log. Only set if there is a single log file.
-  std::unique_ptr<OutputStream> output_stream_;
 
   // Output directory where the per-metric logs are kept. Only non-empty if
   // there are per-metric logs (output_stream_ is null).
@@ -753,6 +739,21 @@ class DefaultMetricManagerPoller : public EventConsumer {
 
  private:
   std::chrono::milliseconds period_;
+};
+
+// A timestamp provider that always returns 0, effectively switching off
+// timestamps.
+class NullTimestampProvider : public TimestampProviderInterface {
+  static constexpr const char* kPicoseconds = "picoseconds";
+
+  uint64_t GetTimestamp() const override { return 0; }
+
+  const char* TimestampUnits() const override { return kPicoseconds; }
+
+  std::string TimestampToString(uint64_t timestamp) const override {
+    CHECK(timestamp == 0);
+    return "0";
+  }
 };
 
 // A timestamp provider that is based off an event queue.

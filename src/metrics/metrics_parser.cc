@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -22,6 +23,20 @@ namespace nc {
 namespace metrics {
 namespace parser {
 
+using WrappedEntryMap =
+    std::map<std::string, std::vector<std::unique_ptr<WrappedEntry>>>;
+
+static constexpr char kMetricIdColumnName[] = "Metric Id";
+static constexpr char kTypeColumnName[] = "Type";
+static constexpr char kFieldsColumnName[] = "Fields";
+static constexpr char kSetsCountColumnName[] = "Sets of fields";
+static constexpr char kEmptySetsCountColumnName[] = "Empty sets";
+static constexpr char kValuesCountColumnName[] = "Values";
+static constexpr char kMinTimeColumnName[] = "Min time";
+static constexpr char kMaxTimeColumnName[] = "Max time";
+static constexpr char kPercentilesColumnName[] = "Percentiles";
+static constexpr char kNoFields[] = "NO FIELDS";
+
 static std::string SingleFieldToString(const PBMetricField& field) {
   switch (field.type()) {
     case PBMetricField::BOOL:
@@ -37,6 +52,182 @@ static std::string SingleFieldToString(const PBMetricField& field) {
                  << PBMetricField_Type_Name(field.type());
   }
   return "";
+}
+
+static bool SkipMessage(google::protobuf::io::CodedInputStream* input) {
+  // Read the size.
+  uint32_t size;
+  if (!input->ReadVarint32(&size)) {
+    return false;
+  }
+
+  return input->Skip(size);
+}
+
+static void ParseSingleFile(const std::string& file,
+                            const std::vector<MetricProcessor*>& processors) {
+  int fd = open(file.c_str(), O_RDONLY);
+  CHECK(fd > 0) << "Bad input file " << file << ": " << strerror(errno);
+  google::protobuf::io::FileInputStream input_stream(fd);
+
+  // This vector contains a map from the indices of manifests seen so far to the
+  // list of processors that are interested in those manifests.
+  std::vector<std::vector<MetricProcessor*>> manifest_index_to_processors;
+
+  // Manifest entries.
+  std::vector<std::unique_ptr<PBManifestEntry>> manifest_entries;
+
+  uint32_t manifest_index;
+  PBMetricEntry entry;
+  while (true) {
+    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
+    if (!ReadDelimitedHeaderFrom(&manifest_index, &coded_stream)) {
+      break;
+    }
+
+    if (manifest_index == MetricBase::kManifestEntryMetaIndex) {
+      // The following entry contains a manifest entry. Will read it in and pass
+      // it to all processors to see if anyone is interested. A new vector will
+      // be added to the back of manifest_index_to_processors and all interested
+      // processors will be added to it.
+
+      if (!ReadDelimitedFrom(&entry, &coded_stream)) {
+        LOG(INFO) << "Unable to read in manifest entry";
+        break;
+      }
+
+      CHECK(entry.has_manifest_entry())
+          << "Wrong manifest index for manifest entry";
+
+      std::vector<MetricProcessor*> interested;
+      for (MetricProcessor* processor : processors) {
+        if (processor->InterestedInFields(
+                entry.manifest_entry(), manifest_index_to_processors.size())) {
+          interested.emplace_back(processor);
+        }
+      }
+
+      manifest_index_to_processors.emplace_back(interested);
+      auto manifest_entry_ptr =
+          std::unique_ptr<PBManifestEntry>(entry.release_manifest_entry());
+      manifest_entries.emplace_back(std::move(manifest_entry_ptr));
+      continue;
+    }
+
+    CHECK(manifest_index <= manifest_index_to_processors.size())
+        << "Unknown manifest index";
+
+    const std::vector<MetricProcessor*>& interested_processors =
+        manifest_index_to_processors[manifest_index];
+    if (interested_processors.empty()) {
+      // No one is interested
+      if (!SkipMessage(&coded_stream)) {
+        LOG(INFO) << "Unable to skip entry";
+        break;
+      }
+      continue;
+    }
+
+    // Have to read in the entire entry.
+    if (!ReadDelimitedFrom(&entry, &coded_stream)) {
+      LOG(INFO) << "Unable to read entry";
+    }
+
+    for (MetricProcessor* processor : interested_processors) {
+      processor->ProcessEntry(entry, *manifest_entries[manifest_index],
+                              manifest_index);
+    }
+
+    entry.Clear();
+  }
+
+  input_stream.Close();
+  close(fd);
+}
+
+static bool IsNumeric(const WrappedEntry& wrapped_entry) {
+  PBManifestEntry::Type type = wrapped_entry.manifest_entry().type();
+  return type == PBManifestEntry::DOUBLE || type == PBManifestEntry::UINT32 ||
+         type == PBManifestEntry::UINT64;
+}
+
+static double ExtractNumericValueOrDie(PBManifestEntry::Type type,
+                                       const PBMetricEntry& entry) {
+  if (type == PBManifestEntry::DOUBLE) {
+    return entry.double_value();
+  }
+
+  if (type == PBManifestEntry::UINT32) {
+    return entry.uint32_value();
+  }
+
+  if (type == PBManifestEntry::UINT64) {
+    return entry.uint64_value();
+  }
+
+  LOG(FATAL) << "No numeric value in entry";
+  return 0;
+}
+
+static void ParseManifestFromSingleFile(const std::string& metrics_file,
+                                        WrappedEntryMap* out) {
+  int fd = open(metrics_file.c_str(), O_RDONLY);
+  CHECK(fd > 0) << "Bad input file " << metrics_file << ": " << strerror(errno);
+  google::protobuf::io::FileInputStream input_stream(fd);
+
+  // Manifest entries.
+  std::vector<std::unique_ptr<WrappedEntry>> all_entries;
+
+  uint32_t manifest_index;
+  PBMetricEntry entry;
+  while (true) {
+    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
+    if (!ReadDelimitedHeaderFrom(&manifest_index, &coded_stream)) {
+      break;
+    }
+
+    if (manifest_index == MetricBase::kManifestEntryMetaIndex) {
+      // The following entry contains a manifest entry.
+      CHECK(ReadDelimitedFrom(&entry, &coded_stream))
+          << "Unable to read in manifest entry";
+      CHECK(entry.has_manifest_entry())
+          << "Wrong manifest index for manifest entry";
+
+      auto manifest_entry_ptr =
+          std::unique_ptr<PBManifestEntry>(entry.release_manifest_entry());
+      auto new_entry_ptr = nc::make_unique<WrappedEntry>(
+          all_entries.size(), std::move(manifest_entry_ptr));
+      all_entries.emplace_back(std::move(new_entry_ptr));
+    } else {
+      CHECK(manifest_index < all_entries.size())
+          << "Unknown manifest index " << manifest_index
+          << " only know indices up to " << all_entries.size();
+      WrappedEntry& wrapped_entry = *(all_entries[manifest_index]);
+
+      bool numeric;
+      double value = 0.0;
+      if ((numeric = IsNumeric(wrapped_entry))) {
+        if (!ReadDelimitedFrom(&entry, &coded_stream)) {
+          LOG(ERROR) << "Unable to read entry";
+          break;
+        }
+        value = ExtractNumericValueOrDie(wrapped_entry.manifest_entry().type(),
+                                         entry);
+      } else {
+        if (!SkipMessage(&coded_stream)) {
+          LOG(ERROR) << "Unable to skip entry";
+          break;
+        }
+      }
+
+      wrapped_entry.ChildEntry(numeric, value);
+    }
+  }
+
+  for (auto& wrapped_entry : all_entries) {
+    const std::string& id = wrapped_entry->manifest_entry().id();
+    (*out)[id].emplace_back(std::move(wrapped_entry));
+  }
 }
 
 std::string GetFieldString(const PBManifestEntry& entry) {
@@ -108,16 +299,6 @@ bool ReadDelimitedHeaderFrom(uint32_t* manifest_index,
   return true;
 }
 
-static bool SkipMessage(google::protobuf::io::CodedInputStream* input) {
-  // Read the size.
-  uint32_t size;
-  if (!input->ReadVarint32(&size)) {
-    return false;
-  }
-
-  return input->Skip(size);
-}
-
 bool ReadDelimitedFrom(PBMetricEntry* message,
                        google::protobuf::io::CodedInputStream* input) {
   // Read the size.
@@ -144,111 +325,6 @@ bool ReadDelimitedFrom(PBMetricEntry* message,
   return true;
 }
 
-void MetricsParser::Parse() {
-  int fd = open(metrics_file_.c_str(), O_RDONLY);
-  CHECK(fd > 0) << "Bad input file " << metrics_file_ << ": "
-                << strerror(errno);
-  google::protobuf::io::FileInputStream input_stream(fd);
-
-  // This vector contains a map from the indices of manifests seen so far to the
-  // list of processors that are interested in those manifests.
-  std::vector<std::vector<MetricProcessor*>> manifest_index_to_processors;
-
-  // Manifest entries.
-  std::vector<std::unique_ptr<PBManifestEntry>> manifest_entries;
-
-  uint32_t manifest_index;
-  PBMetricEntry entry;
-  while (true) {
-    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
-    if (!ReadDelimitedHeaderFrom(&manifest_index, &coded_stream)) {
-      break;
-    }
-
-    if (manifest_index == MetricBase::kManifestEntryMetaIndex) {
-      // The following entry contains a manifest entry. Will read it in and pass
-      // it to all processors to see if anyone is interested. A new vector will
-      // be added to the back of manifest_index_to_processors and all interested
-      // processors will be added to it.
-
-      if (!ReadDelimitedFrom(&entry, &coded_stream)) {
-        LOG(INFO) << "Unable to read in manifest entry";
-        break;
-      }
-
-      CHECK(entry.has_manifest_entry())
-          << "Wrong manifest index for manifest entry";
-
-      std::vector<MetricProcessor*> interested;
-      for (const auto& processor : processors_) {
-        if (processor->InterestedIn(entry.manifest_entry(),
-                                    manifest_index_to_processors.size())) {
-          interested.emplace_back(processor.get());
-        }
-      }
-
-      manifest_index_to_processors.emplace_back(interested);
-      auto manifest_entry_ptr =
-          std::unique_ptr<PBManifestEntry>(entry.release_manifest_entry());
-      manifest_entries.emplace_back(std::move(manifest_entry_ptr));
-      continue;
-    }
-
-    CHECK(manifest_index <= manifest_index_to_processors.size())
-        << "Unknown manifest index";
-
-    const std::vector<MetricProcessor*>& interested_processors =
-        manifest_index_to_processors[manifest_index];
-    if (interested_processors.empty()) {
-      // No one is interested
-      if (!SkipMessage(&coded_stream)) {
-        LOG(INFO) << "Unable to skip entry";
-        break;
-      }
-      continue;
-    }
-
-    // Have to read in the entire entry.
-    if (!ReadDelimitedFrom(&entry, &coded_stream)) {
-      LOG(INFO) << "Unable to read entry";
-    }
-
-    for (MetricProcessor* processor : interested_processors) {
-      processor->ProcessEntry(entry, *manifest_entries[manifest_index],
-                              manifest_index);
-    }
-
-    entry.Clear();
-  }
-
-  input_stream.Close();
-  close(fd);
-}
-
-static bool IsNumeric(const WrappedEntry& wrapped_entry) {
-  PBManifestEntry::Type type = wrapped_entry.manifest_entry().type();
-  return type == PBManifestEntry::DOUBLE || type == PBManifestEntry::UINT32 ||
-         type == PBManifestEntry::UINT64;
-}
-
-static double ExtractNumericValueOrDie(PBManifestEntry::Type type,
-                                       const PBMetricEntry& entry) {
-  if (type == PBManifestEntry::DOUBLE) {
-    return entry.double_value();
-  }
-
-  if (type == PBManifestEntry::UINT32) {
-    return entry.uint32_value();
-  }
-
-  if (type == PBManifestEntry::UINT64) {
-    return entry.uint64_value();
-  }
-
-  LOG(FATAL) << "No numeric value in entry";
-  return 0;
-}
-
 void WrappedEntry::ChildEntry(bool numeric, double value) {
   ++num_entries_;
   if (numeric) {
@@ -260,80 +336,31 @@ void WrappedEntry::ChildEntry(bool numeric, double value) {
 }
 
 Manifest MetricsParser::ParseManifest() const {
-  int fd = open(metrics_file_.c_str(), O_RDONLY);
-  CHECK(fd > 0) << "Bad input file " << metrics_file_ << ": "
-                << strerror(errno);
-  google::protobuf::io::FileInputStream input_stream(fd);
-
-  // Manifest entries.
-  std::vector<std::unique_ptr<WrappedEntry>> all_entries;
-
-  uint32_t manifest_index;
-  PBMetricEntry entry;
-  while (true) {
-    google::protobuf::io::CodedInputStream coded_stream(&input_stream);
-    if (!ReadDelimitedHeaderFrom(&manifest_index, &coded_stream)) {
-      break;
-    }
-
-    if (manifest_index == MetricBase::kManifestEntryMetaIndex) {
-      // The following entry contains a manifest entry.
-      CHECK(ReadDelimitedFrom(&entry, &coded_stream))
-          << "Unable to read in manifest entry";
-      CHECK(entry.has_manifest_entry())
-          << "Wrong manifest index for manifest entry";
-
-      auto manifest_entry_ptr =
-          std::unique_ptr<PBManifestEntry>(entry.release_manifest_entry());
-      auto new_entry_ptr = nc::make_unique<WrappedEntry>(
-          all_entries.size(), std::move(manifest_entry_ptr));
-      all_entries.emplace_back(std::move(new_entry_ptr));
-    } else {
-      CHECK(manifest_index < all_entries.size())
-          << "Unknown manifest index " << manifest_index
-          << " only know indices up to " << all_entries.size();
-      WrappedEntry& wrapped_entry = *(all_entries[manifest_index]);
-
-      bool numeric;
-      double value = 0.0;
-      if ((numeric = IsNumeric(wrapped_entry))) {
-        if (!ReadDelimitedFrom(&entry, &coded_stream)) {
-          LOG(ERROR) << "Unable to read entry";
-          break;
-        }
-        value = ExtractNumericValueOrDie(wrapped_entry.manifest_entry().type(),
-                                         entry);
-      } else {
-        if (!SkipMessage(&coded_stream)) {
-          LOG(ERROR) << "Unable to skip entry";
-          break;
-        }
-      }
-
-      wrapped_entry.ChildEntry(numeric, value);
-    }
+  WrappedEntryMap entry_map;
+  for (const std::string& file : metric_files_) {
+    ParseManifestFromSingleFile(StrCat(metric_dir_, "/", file), &entry_map);
   }
 
-  std::map<std::string, std::vector<std::unique_ptr<WrappedEntry>>>
-      id_to_manifest;
-  for (auto& wrapped_entry : all_entries) {
-    const std::string& id = wrapped_entry->manifest_entry().id();
-    id_to_manifest[id].emplace_back(std::move(wrapped_entry));
-  }
-
-  return {std::move(id_to_manifest)};
+  return {std::move(entry_map)};
 }
 
-static constexpr char kMetricIdColumnName[] = "Metric Id";
-static constexpr char kTypeColumnName[] = "Type";
-static constexpr char kFieldsColumnName[] = "Fields";
-static constexpr char kSetsCountColumnName[] = "Sets of fields";
-static constexpr char kEmptySetsCountColumnName[] = "Empty sets";
-static constexpr char kValuesCountColumnName[] = "Values";
-static constexpr char kMinTimeColumnName[] = "Min time";
-static constexpr char kMaxTimeColumnName[] = "Max time";
-static constexpr char kPercentilesColumnName[] = "Percentiles";
-static constexpr char kNoFields[] = "NO FIELDS";
+void MetricsParser::Parse() {
+  std::map<std::string, std::vector<MetricProcessor*>> interested;
+  for (const std::string& file : metric_files_) {
+    for (const auto& processor : processors_) {
+      if (processor->InterestedInMetric(file)) {
+        interested[file].emplace_back(processor.get());
+      }
+    }
+  }
+
+  for (auto& file_and_processors : interested) {
+    const std::string& file = file_and_processors.first;
+    const std::vector<MetricProcessor*>& interested_processors =
+        file_and_processors.second;
+    ParseSingleFile(StrCat(metric_dir_, "/", file), interested_processors);
+  }
+}
 
 class AsciiTable {
  public:
@@ -489,8 +516,22 @@ uint64_t Manifest::TotalEntryCount() const {
   return total;
 }
 
-MetricsParser::MetricsParser(const std::string& metrics_file)
-    : metrics_file_(metrics_file) {}
+static std::vector<std::string> GetContents(const std::string& directory) {
+  DIR* dirp = opendir(directory.c_str());
+  CHECK(dirp != nullptr);
+  std::vector<std::string> out;
+
+  dirent* dp;
+  while ((dp = readdir(dirp)) != NULL) {
+    out.emplace_back(dp->d_name, dp->d_namlen);
+  }
+
+  CHECK(closedir(dirp) == 0);
+  return out;
+}
+
+MetricsParser::MetricsParser(const std::string& metrics_dir)
+    : metric_dir_(metrics_dir), metric_files_(GetContents(metrics_dir)) {}
 
 void NumericMetricsResultHandle::CopyInto(uint64_t* timestamps_out,
                                           double* values_out) {
@@ -554,75 +595,6 @@ SimpleParseNumericData(const std::string& metrics_file,
         << "Duplicate id/fields string: " << metric_id << "/" << fields;
     std::vector<std::pair<uint64_t, double>>& vector = out[{metric_id, fields}];
     vector = std::move(result_handle->MutableValues());
-  }
-
-  return out;
-}
-
-std::map<std::pair<std::string, std::string>,
-         std::vector<std::pair<uint64_t, double>>>
-SimpleParseNumericData(const std::string& metrics_file,
-                       const std::set<uint32_t> ids, uint64_t min_timestamp,
-                       uint64_t max_timestamp, uint64_t limiting_timestamp) {
-  using DoubleProcessor = IdCallbackProcessor<double, PBManifestEntry::DOUBLE>;
-  using Uint32Processor =
-      IdCallbackProcessor<uint32_t, PBManifestEntry::UINT32>;
-  using Uint64Processor =
-      IdCallbackProcessor<uint64_t, PBManifestEntry::UINT64>;
-
-  auto handle = make_unique<NumericMetricsResultHandle>();
-  DoubleProcessor::Callback double_callback = [&handle, min_timestamp,
-                                               max_timestamp,
-                                               limiting_timestamp](
-      const Entry<double>& entry, const PBManifestEntry& manifest_entry,
-      uint32_t manifest_index) {
-    if (entry.timestamp < max_timestamp && entry.timestamp >= min_timestamp) {
-      handle->Update(entry.timestamp, entry.value, manifest_index,
-                     manifest_entry, limiting_timestamp);
-    }
-  };
-
-  Uint32Processor::Callback uint32_callback = [&handle, min_timestamp,
-                                               max_timestamp,
-                                               limiting_timestamp](
-      const Entry<uint32_t>& entry, const PBManifestEntry& manifest_entry,
-      uint32_t manifest_index) {
-    if (entry.timestamp < max_timestamp && entry.timestamp >= min_timestamp) {
-      handle->Update(entry.timestamp, static_cast<double>(entry.value),
-                     manifest_index, manifest_entry, limiting_timestamp);
-    }
-  };
-
-  Uint64Processor::Callback uint64_callback = [&handle, min_timestamp,
-                                               max_timestamp,
-                                               limiting_timestamp](
-      const Entry<uint64_t>& entry, const PBManifestEntry& manifest_entry,
-      int32_t manifest_index) {
-    if (entry.timestamp < max_timestamp && entry.timestamp >= min_timestamp) {
-      handle->Update(entry.timestamp, static_cast<double>(entry.value),
-                     manifest_index, manifest_entry, limiting_timestamp);
-    }
-  };
-
-  auto double_processor = make_unique<DoubleProcessor>(ids, double_callback);
-  auto uint32_processor = make_unique<Uint32Processor>(ids, uint32_callback);
-  auto uint64_processor = make_unique<Uint64Processor>(ids, uint64_callback);
-
-  MetricsParser parser(metrics_file);
-  parser.AddProcessor(std::move(double_processor));
-  parser.AddProcessor(std::move(uint32_processor));
-  parser.AddProcessor(std::move(uint64_processor));
-
-  parser.Parse();
-  handle->Sort();
-
-  std::map<std::pair<std::string, std::string>,
-           std::vector<std::pair<uint64_t, double>>> out;
-  while (handle->Advance()) {
-    std::string metric_id = handle->MetricString();
-    std::string fields = handle->FieldString();
-    std::vector<std::pair<uint64_t, double>>& vector = out[{metric_id, fields}];
-    vector = std::move(handle->MutableValues());
   }
 
   return out;

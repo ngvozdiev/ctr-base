@@ -36,8 +36,8 @@ TEST(Entry, Equality) {
 
 // A metric with no fields.
 TEST_F(MetricFixture, MetricNoFields) {
-  auto* metric = metric_manager_->GetUnsafeMetric<uint64_t>(kMetricComonentId,
-                                                            kMetricDesc);
+  auto* metric =
+      metric_manager_->GetUnsafeMetric<uint64_t>(kMetricId, kMetricDesc);
   auto* handle_one = metric->GetHandle();
   auto* handle_two = metric->GetHandle();
 
@@ -48,7 +48,7 @@ TEST_F(MetricFixture, MetricNoFields) {
   ASSERT_EQ(1ul, index_to_manifest_entry.size());
 
   const PBManifestEntry& manifest_entry = *index_to_manifest_entry[0];
-  ASSERT_EQ(kMetricComonentId, manifest_entry.id());
+  ASSERT_EQ(kMetricId, manifest_entry.id());
   ASSERT_EQ(kMetricDesc, manifest_entry.description());
   ASSERT_EQ(PBManifestEntry::UINT64, manifest_entry.type());
   ASSERT_EQ(0, manifest_entry.fields_size());
@@ -59,8 +59,7 @@ TEST_F(MetricFixture, MetricNoFields) {
 TEST_F(MetricFixture, SingleHandle) {
   auto* metric =
       metric_manager_->GetUnsafeMetric<uint64_t, std::string, uint64_t>(
-          kMetricComonentId, kMetricDesc, kMetricFieldOneDesc,
-          kMetricFieldTwoDesc);
+          kMetricId, kMetricDesc, kMetricFieldOneDesc, kMetricFieldTwoDesc);
   metric->GetHandle(kMetricFieldStrValue, kMetricFieldIntValue);
 
   std::map<size_t, std::unique_ptr<PBManifestEntry>> index_to_manifest_entry =
@@ -68,7 +67,7 @@ TEST_F(MetricFixture, SingleHandle) {
   ASSERT_EQ(1ul, index_to_manifest_entry.size());
 
   const PBManifestEntry& manifest_entry = *index_to_manifest_entry[0];
-  ASSERT_EQ(kMetricComonentId, manifest_entry.id());
+  ASSERT_EQ(kMetricId, manifest_entry.id());
   ASSERT_EQ(kMetricDesc, manifest_entry.description());
   ASSERT_EQ(PBManifestEntry::UINT64, manifest_entry.type());
   ASSERT_EQ(2, manifest_entry.fields_size());
@@ -80,7 +79,7 @@ TEST_F(MetricFixture, SingleHandle) {
 
 TEST_F(MetricFixture, SingleQuery) {
   auto* metric =
-      metric_manager_->GetUnsafeMetric<double>(kMetricComonentId, kMetricDesc);
+      metric_manager_->GetUnsafeMetric<double>(kMetricId, kMetricDesc);
   auto* handle = metric->GetHandle();
   handle->AddValue(5.0);
 
@@ -94,8 +93,7 @@ TEST_F(MetricFixture, SingleQuery) {
 TEST_F(MetricFixture, MultiQuery) {
   auto* metric =
       metric_manager_->GetUnsafeMetric<double, std::string, uint64_t>(
-          kMetricComonentId, kMetricDesc, kMetricFieldOneDesc,
-          kMetricFieldTwoDesc);
+          kMetricId, kMetricDesc, kMetricFieldOneDesc, kMetricFieldTwoDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue, kMetricFieldIntValue);
 
   for (size_t i = 0; i < 10; ++i) {
@@ -108,9 +106,11 @@ TEST_F(MetricFixture, MultiQuery) {
   ASSERT_GE(timestamp_provider_->GetTimestamp(), entry.timestamp);
 }
 
-static void ProcessEntriesFromFile(
-    const std::string& file, std::function<void(const PBMetricEntry&)> f) {
+static void ProcessEntriesFromDir(const std::string& metrics_dir,
+                                  const std::string& metric_file,
+                                  std::function<void(const PBMetricEntry&)> f) {
   using namespace google::protobuf;
+  std::string file = nc::StrCat(metrics_dir, "/", metric_file);
 
   int fd = open(file.c_str(), O_RDONLY);
   CHECK(fd > 0);
@@ -131,9 +131,8 @@ static void ProcessEntriesFromFile(
 }
 
 TEST_F(MetricFixture, FileOutput) {
-  std::string metric_file = std::string(kTestOutput);
   auto* metric = metric_manager_->GetUnsafeMetric<double, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
 
   for (size_t i = 0; i < 1000000; ++i) {
@@ -145,10 +144,10 @@ TEST_F(MetricFixture, FileOutput) {
   // The file should contain 1M entries.
   std::vector<PBMetricEntry> all_entries;
   all_entries.reserve(1000000);
-  ProcessEntriesFromFile(metric_file,
-                         [&all_entries](const PBMetricEntry& entry) {
-                           all_entries.emplace_back(entry);
-                         });
+  ProcessEntriesFromDir(kTestOutput, kMetricId,
+                        [&all_entries](const PBMetricEntry& entry) {
+                          all_entries.emplace_back(entry);
+                        });
 
   // 1M + 1 for the manifest entry.
   ASSERT_EQ(1000001ul, all_entries.size());
@@ -165,9 +164,8 @@ TEST_F(MetricFixture, FileOutput) {
 }
 
 TEST_F(MetricFixture, FileOutputCallback) {
-  std::string metric_file = std::string(kTestOutput);
   auto* metric = metric_manager_->GetUnsafeMetric<double, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
 
   size_t i = 0;
   metric->GetHandle([&i] {
@@ -184,10 +182,10 @@ TEST_F(MetricFixture, FileOutputCallback) {
   // The file should contain 1M entries.
   std::vector<PBMetricEntry> all_entries;
   all_entries.reserve(1000000);
-  ProcessEntriesFromFile(metric_file,
-                         [&all_entries](const PBMetricEntry& entry) {
-                           all_entries.emplace_back(entry);
-                         });
+  ProcessEntriesFromDir(kTestOutput, kMetricId,
+                        [&all_entries](const PBMetricEntry& entry) {
+                          all_entries.emplace_back(entry);
+                        });
 
   // 1M + 1 for the manifest entry.
   ASSERT_EQ(1000001ul, all_entries.size());
@@ -196,7 +194,7 @@ TEST_F(MetricFixture, FileOutputCallback) {
 TEST_F(MetricFixture, BytesBlob) {
   std::string metric_file = std::string(kTestOutput);
   auto* metric = metric_manager_->GetUnsafeMetric<BytesBlob, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
 
   std::string value = "1234567890";
@@ -208,10 +206,10 @@ TEST_F(MetricFixture, BytesBlob) {
   metric_manager_.reset();
 
   std::vector<PBMetricEntry> all_entries;
-  ProcessEntriesFromFile(metric_file,
-                         [&all_entries](const PBMetricEntry& entry) {
-                           all_entries.emplace_back(entry);
-                         });
+  ProcessEntriesFromDir(kTestOutput, kMetricId,
+                        [&all_entries](const PBMetricEntry& entry) {
+                          all_entries.emplace_back(entry);
+                        });
 
   ASSERT_EQ(2ul, all_entries.size());
   const PBMetricEntry& entry = all_entries[1];
@@ -219,9 +217,8 @@ TEST_F(MetricFixture, BytesBlob) {
 }
 
 TEST_F(MetricFixture, MultiThreadWriteToHandle) {
-  std::string metric_file = std::string(kTestOutput);
   auto* metric = metric_manager_->GetThreadSafeMetric<double, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   auto* handle = metric->GetHandle(kMetricFieldStrValue);
 
   // Writing to the same handle from different threads should preserve the
@@ -245,9 +242,10 @@ TEST_F(MetricFixture, MultiThreadWriteToHandle) {
 
   // The file should contain 2M entries, with 2 copies for each value.
   std::map<double, int> values;
-  ProcessEntriesFromFile(metric_file, [&values](const PBMetricEntry& entry) {
-    values[entry.double_value()] += 1;
-  });
+  ProcessEntriesFromDir(kTestOutput, kMetricId,
+                        [&values](const PBMetricEntry& entry) {
+                          values[entry.double_value()] += 1;
+                        });
 
   ASSERT_EQ(1000001ul, values.size());
   for (size_t i = 1; i < 1000001; ++i) {
@@ -259,7 +257,7 @@ TEST_F(MetricFixture, MultiThreadWriteToHandle) {
 TEST_F(MetricFixture, MultiThreadGetHandle) {
   std::string metric_file = std::string(kTestOutput);
   auto* metric = metric_manager_->GetThreadSafeMetric<double, std::string>(
-      kMetricComonentId, kMetricDesc, kMetricFieldOneDesc);
+      kMetricId, kMetricDesc, kMetricFieldOneDesc);
   std::array<std::vector<MetricHandle<double, true>*>, 2> ptr_storage;
 
   // Writing to the same handle from different threads should preserve the
@@ -290,7 +288,7 @@ TEST_F(MetricFixture, MultiThreadGetHandle) {
   }
 }
 
-TEST_F(SingleFilePerMetricFixture, PerMetricFileOutput) {
+TEST_F(MetricFixture, PerMetricFileOutput) {
   std::string metric_id_one = "metric_one";
   std::string metric_id_two = "metric_two";
 
@@ -307,17 +305,16 @@ TEST_F(SingleFilePerMetricFixture, PerMetricFileOutput) {
 
   metric_manager_.reset();
 
-  std::string file_one = StrCat(kTestOutput, "/", metric_id_one);
-  std::string file_two = StrCat(kTestOutput, "/", metric_id_two);
-
   std::vector<PBMetricEntry> entries_one;
   std::vector<PBMetricEntry> entries_two;
-  ProcessEntriesFromFile(file_one, [&entries_one](const PBMetricEntry& entry) {
-    entries_one.emplace_back(entry);
-  });
-  ProcessEntriesFromFile(file_two, [&entries_two](const PBMetricEntry& entry) {
-    entries_two.emplace_back(entry);
-  });
+  ProcessEntriesFromDir(kTestOutput, metric_id_one,
+                        [&entries_one](const PBMetricEntry& entry) {
+                          entries_one.emplace_back(entry);
+                        });
+  ProcessEntriesFromDir(kTestOutput, metric_id_two,
+                        [&entries_two](const PBMetricEntry& entry) {
+                          entries_two.emplace_back(entry);
+                        });
 
   ASSERT_EQ(2ul, entries_one.size());
   ASSERT_EQ(2ul, entries_two.size());

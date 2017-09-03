@@ -66,10 +66,13 @@ class MetricProcessor {
 
   virtual ~MetricProcessor() {}
 
-  // Returns true if this processor is interested in the metric identified by
-  // the manifest entry.
-  virtual bool InterestedIn(const PBManifestEntry& manifest_entry,
-                            uint32_t manifest_index) = 0;
+  // Returns true if this processor is interested in the metric with given id.
+  virtual bool InterestedInMetric(const std::string& metric_id) = 0;
+
+  // Returns true if this processor is interested in the set of fields
+  // identified by the manifest entry (and index).
+  virtual bool InterestedInFields(const PBManifestEntry& manifest_entry,
+                                  uint32_t manifest_index) = 0;
 
   // Processes an entry. This entry will come from one of the metrics that the
   // processor expressed interest in.
@@ -121,14 +124,14 @@ class QueryCallbackProcessor : public CallbackProcessor<T> {
         metric_regex_(metric_regex_string, std::regex_constants::icase),
         fields_regex_(fields_regex_string, std::regex_constants::icase) {}
 
-  bool InterestedIn(const PBManifestEntry& manifest_entry,
-                    uint32_t manifest_index) override {
+  bool InterestedInMetric(const std::string& metric_id) override {
+    return std::regex_search(metric_id, metric_regex_);
+  }
+
+  bool InterestedInFields(const PBManifestEntry& manifest_entry,
+                          uint32_t manifest_index) override {
     Unused(manifest_index);
     if (manifest_entry.type() != EntryType) {
-      return false;
-    }
-
-    if (!std::regex_search(manifest_entry.id(), metric_regex_)) {
       return false;
     }
 
@@ -143,27 +146,6 @@ class QueryCallbackProcessor : public CallbackProcessor<T> {
 
   // The fields of the metric will be matched against this.
   std::regex fields_regex_;
-};
-
-// A callback processor that can be used if the manifest ids are known ahead of
-// time.
-template <typename T, PBManifestEntry::Type EntryType>
-class IdCallbackProcessor : public CallbackProcessor<T> {
- public:
-  IdCallbackProcessor(const std::set<uint32_t>& manifest_indices,
-                      typename CallbackProcessor<T>::Callback callback)
-      : CallbackProcessor<T>(callback), manifest_indices_(manifest_indices) {}
-
-  bool InterestedIn(const PBManifestEntry& manifest_entry,
-                    uint32_t manifest_index) override {
-    if (manifest_entry.type() != EntryType) {
-      return false;
-    }
-    return ContainsKey(manifest_indices_, manifest_index);
-  }
-
- private:
-  std::set<uint32_t> manifest_indices_;
 };
 
 // Combination of a manifest entry and the number of entries that belong to it
@@ -231,25 +213,28 @@ class Manifest {
 // A class that can parse entries stored in a protobuf file.
 class MetricsParser {
  public:
-  MetricsParser(const std::string& metrics_file);
+  MetricsParser(const std::string& metrics_dir);
 
   // Adds a new processor to the parser.
   void AddProcessor(std::unique_ptr<MetricProcessor> processor_ptr) {
     processors_.push_back(std::move(processor_ptr));
   }
 
-  // Parses the metrics file, passing entries to the processors that are
-  // interested in them.
+  // Parses all files in the metrics dir, passing entries to the processors that
+  // are interested in them.
   void Parse();
 
-  // Parses the metrics file, returning information about the metrics contained
-  // in it.
+  // Parses all metrics files.
   Manifest ParseManifest() const;
 
   void ClearProcessors() { processors_.clear(); }
 
  private:
-  const std::string metrics_file_;
+  // Directory where metric files are.
+  std::string metric_dir_;
+
+  // The metric files.
+  std::vector<std::string> metric_files_;
 
   // When a processor is added this class takes ownership and stores it here.
   std::vector<std::unique_ptr<MetricProcessor>> processors_;
@@ -401,18 +386,11 @@ class BytesMetricsResultHandle : public MetricsResultHandleBase<std::string> {
 // use from C++ code.
 std::map<std::pair<std::string, std::string>,
          std::vector<std::pair<uint64_t, double>>>
-SimpleParseNumericData(const std::string& metrics_file,
+SimpleParseNumericData(const std::string& metrics_dir,
                        const std::string& metric_regex,
                        const std::string& fields_to_match,
                        uint64_t min_timestamp, uint64_t max_timestamp,
                        uint64_t limiting_timestamp);
-
-// Like above, but used when the manifest ids are known ahead of time.
-std::map<std::pair<std::string, std::string>,
-         std::vector<std::pair<uint64_t, double>>>
-SimpleParseNumericData(const std::string& metrics_file,
-                       const std::set<uint32_t> ids, uint64_t min_timestamp,
-                       uint64_t max_timestamp, uint64_t limiting_timestamp);
 
 // Will expose the parser functionality for things that are not C++
 // (e.g. Python).
@@ -421,7 +399,7 @@ extern "C" {
 // Returns a string summary of the manifest.
 char* MetricsParserManifestSummary(const char* metrics_file);
 
-// Parses the given metrics file, looking for sets of fields that match
+// Parses the given metrics dir, looking for sets of fields that match
 // 'fields_to_match' and belong to the metric(s) identified by 'metric_regex'.
 // Returns a handle that can be used to read the results. The handle must be
 // freed by MetricsParserResultHandleFree. Only values with timestamps more than
@@ -429,7 +407,7 @@ char* MetricsParserManifestSummary(const char* metrics_file);
 // the limititing_timestamp argument is non-0 each set of fields will only
 // contain one value -- the one that has a timestamp that is the closest to (but
 // does not exceed) the limiting_timestamp argument.
-NumericMetricsResultHandle* MetricsParserParse(const char* metrics_file,
+NumericMetricsResultHandle* MetricsParserParse(const char* metrics_dir,
                                                const char* metric_regex,
                                                const char* fields_to_match,
                                                uint64_t min_timestamp,

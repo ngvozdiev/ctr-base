@@ -17,9 +17,7 @@
 #include "ncode_common/src/strutil.h"
 
 DEFINE_string(metrics_output, "metrics.out",
-              "File where the metrics will be stored");
-DEFINE_bool(per_metric_file, false,
-            "Whether to store a single file per metric");
+              "Directory where the metrics will be stored");
 
 namespace nc {
 namespace metrics {
@@ -27,41 +25,53 @@ namespace metrics {
 template <>
 void SaveEntryToProtobuf<uint64_t>(const Entry<uint64_t>& entry,
                                    PBMetricEntry* out) {
-  out->set_timestamp(entry.timestamp);
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
   out->set_uint64_value(entry.value);
 }
 
 template <>
 void SaveEntryToProtobuf<uint32_t>(const Entry<uint32_t>& entry,
                                    PBMetricEntry* out) {
-  out->set_timestamp(entry.timestamp);
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
   out->set_uint32_value(entry.value);
 }
 
 template <>
 void SaveEntryToProtobuf<bool>(const Entry<bool>& entry, PBMetricEntry* out) {
-  out->set_timestamp(entry.timestamp);
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
   out->set_bool_value(entry.value);
 }
 
 template <>
 void SaveEntryToProtobuf<double>(const Entry<double>& entry,
                                  PBMetricEntry* out) {
-  out->set_timestamp(entry.timestamp);
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
   out->set_double_value(entry.value);
 }
 
 template <>
 void SaveEntryToProtobuf<std::string>(const Entry<std::string>& entry,
                                       PBMetricEntry* out) {
-  out->set_timestamp(entry.timestamp);
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
   out->set_string_value(entry.value);
 }
 
 template <>
 void SaveEntryToProtobuf<BytesBlob>(const Entry<BytesBlob>& entry,
                                     PBMetricEntry* out) {
-  out->set_timestamp(entry.timestamp);
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
   *out->mutable_bytes_value() = entry.value;
 }
 
@@ -140,18 +150,11 @@ void PopulateManifestEntryField(PBMetricField* field,
 }
 
 MetricManager::MetricManager()
-    : current_index_(std::numeric_limits<size_t>::max()),
-      timestamp_provider_(make_unique<DefaultTimestampProvider>()) {}
+    : timestamp_provider_(make_unique<DefaultTimestampProvider>()) {}
 
-size_t MetricManager::NextIndex() {
+void MetricManager::SetOutput(const std::string& output) {
   std::lock_guard<std::mutex> lock(mu_);
-  return ++current_index_;
-}
-
-void MetricManager::SetOutput(const std::string& output,
-                              bool per_metric_files) {
-  std::lock_guard<std::mutex> lock(mu_);
-  if (output_stream_ || !output_directory_.empty()) {
+  if (!output_directory_.empty()) {
     LOG(ERROR) << "Output already set. Will ignore";
     return;
   }
@@ -162,16 +165,12 @@ void MetricManager::SetOutput(const std::string& output,
     CHECK(!metric->stream_locked());
   }
 
-  if (per_metric_files) {
-    File::RecursivelyCreateDir(output, 0700);
-    output_directory_ = output;
-    for (const auto& metric : all_metrics_) {
-      std::string local_output = StrCat(output_directory_, "/", metric->id());
-      auto local_output_stream = make_unique<OutputStream>(local_output);
-      metric->SetLocalOutputStream(std::move(local_output_stream));
-    }
-  } else {
-    output_stream_ = make_unique<OutputStream>(output);
+  File::RecursivelyCreateDir(output, 0700);
+  output_directory_ = output;
+  for (const auto& metric : all_metrics_) {
+    std::string local_output = StrCat(output_directory_, "/", metric->id());
+    auto local_output_stream = make_unique<OutputStream>(local_output);
+    metric->SetLocalOutputStream(std::move(local_output_stream));
   }
 }
 
@@ -201,21 +200,10 @@ OutputStream* MetricBase::OutputStreamOrNull() {
     return local_output_stream_.get();
   }
 
-  OutputStream* output_stream = parent_manager_->OutputStreamOrNull();
-  if (output_stream != nullptr) {
-    return output_stream;
-  }
-
   return nullptr;
 }
 
-size_t MetricBase::NextIndex() {
-  if (local_output_stream_) {
-    return ++local_current_index_;
-  }
-
-  return parent_manager_->NextIndex();
-}
+size_t MetricBase::NextIndex() { return ++local_current_index_; }
 
 MetricHandleBase::MetricHandleBase(bool has_callback, MetricBase* parent_metric)
     : has_callback_(has_callback),
@@ -247,7 +235,7 @@ MetricManager* DefaultMetricManager() {
 
 void InitMetrics() {
   MetricManager* manager = DefaultMetricManager();
-  manager->SetOutput(FLAGS_metrics_output, FLAGS_per_metric_file);
+  manager->SetOutput(FLAGS_metrics_output);
 }
 
 void PopulateManifestEntryType(PBManifestEntry* out, uint64_t* dummy) {
