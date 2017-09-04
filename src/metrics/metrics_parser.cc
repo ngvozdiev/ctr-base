@@ -571,8 +571,8 @@ uint64_t BytesMetricsResultHandle::BufferSize(size_t i) {
 
 std::map<std::pair<std::string, std::string>,
          std::vector<std::pair<uint64_t, double>>>
-SimpleParseNumericData(const std::string& metrics_file,
-                       const std::string& metric_regix,
+SimpleParseNumericData(const std::string& metrics_dir,
+                       const std::string& metric_regex,
                        const std::string& fields_to_match,
                        uint64_t min_timestamp, uint64_t max_timestamp,
                        uint64_t limiting_timestamp) {
@@ -581,7 +581,7 @@ SimpleParseNumericData(const std::string& metrics_file,
 
   auto result_handle =
       std::unique_ptr<NumericMetricsResultHandle>(MetricsParserParse(
-          metrics_file.c_str(), metric_regix.c_str(), fields_to_match.c_str(),
+          metrics_dir.c_str(), metric_regex.c_str(), fields_to_match.c_str(),
           min_timestamp, max_timestamp, limiting_timestamp));
   if (!result_handle) {
     return out;
@@ -595,6 +595,36 @@ SimpleParseNumericData(const std::string& metrics_file,
         << "Duplicate id/fields string: " << metric_id << "/" << fields;
     std::vector<std::pair<uint64_t, double>>& vector = out[{metric_id, fields}];
     vector = std::move(result_handle->MutableValues());
+  }
+
+  return out;
+}
+
+std::map<std::pair<std::string, std::string>, std::vector<double>>
+SimpleParseNumericDataNoTimestamps(const std::string& metrics_dir,
+                                   const std::string& metric_regex,
+                                   const std::string& fields_to_match) {
+  std::map<std::pair<std::string, std::string>, std::vector<double>> out;
+
+  auto result_handle =
+      std::unique_ptr<NumericMetricsResultHandle>(MetricsParserParse(
+          metrics_dir.c_str(), metric_regex.c_str(), fields_to_match.c_str(), 0,
+          std::numeric_limits<uint64_t>::max(), 0));
+  if (!result_handle) {
+    return out;
+  }
+
+  while (result_handle->Advance()) {
+    std::string metric_id = result_handle->MetricString();
+    std::string fields = result_handle->FieldString();
+    std::pair<std::string, std::string> key = {metric_id, fields};
+    CHECK(!nc::ContainsKey(out, key))
+        << "Duplicate id/fields string: " << metric_id << "/" << fields;
+    std::vector<double>& vector = out[{metric_id, fields}];
+    for (const std::pair<uint64_t, double>& v :
+         result_handle->MutableValues()) {
+      vector.emplace_back(v.second);
+    }
   }
 
   return out;

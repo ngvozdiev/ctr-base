@@ -392,6 +392,12 @@ SimpleParseNumericData(const std::string& metrics_dir,
                        uint64_t min_timestamp, uint64_t max_timestamp,
                        uint64_t limiting_timestamp);
 
+// Same as above, but returns no timestamps.
+std::map<std::pair<std::string, std::string>, std::vector<double>>
+SimpleParseNumericDataNoTimestamps(const std::string& metrics_dir,
+                                   const std::string& metric_regex,
+                                   const std::string& fields_to_match);
+
 // Will expose the parser functionality for things that are not C++
 // (e.g. Python).
 extern "C" {
