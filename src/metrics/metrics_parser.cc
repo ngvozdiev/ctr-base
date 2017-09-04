@@ -523,7 +523,7 @@ static std::vector<std::string> GetContents(const std::string& directory) {
 
   dirent* dp;
   while ((dp = readdir(dirp)) != NULL) {
-    out.emplace_back(dp->d_name, dp->d_namlen);
+    out.emplace_back(dp->d_name);
   }
 
   CHECK(closedir(dirp) == 0);
