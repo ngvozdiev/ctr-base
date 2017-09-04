@@ -77,6 +77,7 @@ bool CTROptimizer::AddFreePaths(
 
   for (const AggregateId& aggregate_id : aggregates_ordered) {
     std::vector<PathPtr>& paths_in_output = path_map_[aggregate_id];
+
     if (paths_in_output.size()) {
       // If the longest path has free capacity over all of its
       // links, then we will skip adding additional paths to this
@@ -88,7 +89,7 @@ bool CTROptimizer::AddFreePaths(
 
     if (total_path_count > hard_path_limit_) {
       if (!hard_limit_exceeded_printed) {
-        //        LOG(INFO) << "Hard limit " << hard_path_limit_ << "exceeded ";
+        LOG(INFO) << "Hard limit " << hard_path_limit_ << "exceeded ";
         hard_limit_exceeded_printed = true;
       }
 
@@ -123,26 +124,30 @@ bool CTROptimizer::AddFreePaths(
       // avoids the links.
       PathPtr path = path_provider_->AvoidingPathOrNull(aggregate_id,
                                                         links_with_no_capacity);
-
-      // There is no path that avoids the links, and we cannot add any more
-      // paths to the aggregate. Nothing to do.
-      if (path == nullptr) {
+      if (path != nullptr) {
+        InsertInPaths(&paths_in_output, *path, &free_paths_added);
+        //        if (FLAGS_debug_ctr) {
+        //          CLOG(INFO, YELLOW) << "Added path (i) "
+        //                             << path->ToStringNoPorts(*graph_);
+        //        }
+        total_path_count += paths_in_output.size();
         continue;
       }
 
-      InsertInPaths(&paths_in_output, *path, &free_paths_added);
-      //      if (FLAGS_debug_ctr) {
-      //        CLOG(INFO, YELLOW) << "Added path (i) "
-      //                           << path->ToStringNoPorts(*graph_);
-      //      }
-      total_path_count += paths_in_output.size();
-      continue;
+      // There is no path that avoids the links, and we cannot add any more
+      // paths to the aggregate. Will add as many paths as we can from the list
+      // of k shortest.
+      size_t start_k_index = ksp_indices_[aggregate_id];
+      paths_up_to_free = path_provider_->KShorestPaths(
+          aggregate_id, start_k_index, remaining_paths);
+      if (paths_up_to_free.empty()) {
+        continue;
+      }
     }
 
     if (total_path_count > soft_path_limit_) {
       if (!soft_limit_exceeded_printed) {
-        //        LOG(INFO) << "Soft limit " << soft_path_limit_ << " exceeded
-        //        ";
+        LOG(INFO) << "Soft limit " << soft_path_limit_ << " exceeded";
         soft_limit_exceeded_printed = true;
       }
 

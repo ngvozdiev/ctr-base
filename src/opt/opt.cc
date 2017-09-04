@@ -210,7 +210,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxPathBasedOptimizer::Optimize(
     problem.SetConstraintRange(per_aggregate_constraint, 1.0, 1.0);
 
     std::vector<const nc::net::Walk*> paths =
-        path_provider_->KShorestPaths(id, k_);
+        path_provider_->KShorestPaths(id, 0, k_);
     CHECK(!paths.empty());
     for (const nc::net::Walk* path : paths) {
       // Each path in each aggregate will have a variable associated with it.

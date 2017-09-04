@@ -54,12 +54,13 @@ std::vector<const nc::net::Walk*> PathProvider::KShortestUntilAvoidingPath(
 }
 
 std::vector<const nc::net::Walk*> PathProvider::KShorestPaths(
-    const AggregateId& aggregate, size_t k) {
+    const AggregateId& aggregate, size_t start_k, size_t max_count) {
   PathProvider::Generator* generator = FindOrCreateGenerator(aggregate);
 
   std::vector<const nc::net::Walk*> out;
-  for (size_t i = 0; i < k; ++i) {
-    const nc::net::Walk* next_path = generator->KthShortestPathOrNull(i);
+  size_t i = start_k;
+  while (out.size() != max_count) {
+    const nc::net::Walk* next_path = generator->KthShortestPathOrNull(i++);
     if (next_path == nullptr) {
       break;
     }

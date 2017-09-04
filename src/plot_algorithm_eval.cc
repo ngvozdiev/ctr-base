@@ -21,13 +21,13 @@
 
 DEFINE_string(metric_file, "", "The metrics file.");
 DEFINE_string(focus_on, "", "A field to plot absolute values of.");
-DEFINE_string(optimizers, "MinMax,MinMaxLD,CTRNFC,B4,CTR",
+DEFINE_string(optimizers, "MinMax,MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
               "Comma-separated list of optimizers");
 
 static constexpr char kPathStretchRelMetric[] = "opt_path_stretch_rel";
 static constexpr char kPathStretchAbsMetric[] = "opt_path_stretch_ms";
-static constexpr char kPathKIndexMetric[] = "opt_path_k_index";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
+static constexpr char kPathPenaltyMetric[] = "opt_path_unmet_demand_bps";
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr size_t kDiscreteMultiplier = 1000;
 static constexpr size_t kPercentilesCount = 10000;
@@ -40,7 +40,9 @@ using namespace nc::metrics::parser;
 
 // Returns the percentiles of the distribution of a per-path value.
 static std::vector<double> Parse(const DataMap& path_counts_data,
-                                 const DataMap& per_path_data) {
+                                 const DataMap& per_path_data,
+                                 const DataMap& per_path_penalty,
+                                 double penalty) {
   nc::DiscreteDistribution<uint64_t> dist;
 
   for (const auto& key_and_data : per_path_data) {
@@ -57,14 +59,31 @@ static std::vector<double> Parse(const DataMap& path_counts_data,
       continue;
     }
 
+    // Path penalties, a fixed penalty will be applied for all values for which
+    // the penalty is > 1.
+    const DataVector* path_penalties = nc::FindOrNull(
+        per_path_penalty, {kPathPenaltyMetric, metric_and_fields.second});
+
     // The two data vectors should have the same number of elements---one for
     // each path with either the data or the flow count on the path.
     CHECK(path_counts->size() == path_data.size())
         << metric_and_fields.second << " " << path_counts->size() << " vs "
         << path_data.size();
+    if (path_penalties != nullptr) {
+      CHECK(path_penalties->size() == path_data.size());
+    }
+
     for (size_t i = 0; i < path_counts->size(); ++i) {
+      double extra_penalty = 0;
+      if (path_penalties != nullptr) {
+        double p = (*path_penalties)[i].second;
+        if (p > 1.0) {
+          extra_penalty += penalty;
+        }
+      }
+
       // Have to discretize the value.
-      double value = path_data[i].second;
+      double value = path_data[i].second + extra_penalty;
       uint64_t value_discrete =
           static_cast<uint64_t>(kDiscreteMultiplier * value);
 
@@ -124,7 +143,6 @@ static std::vector<double> ParseSingle(const DataVector& path_counts,
 
 struct Result {
   nc::viz::DataSeries2D path_stretch_rel_data;
-  nc::viz::DataSeries2D path_k_index_data;
   nc::viz::DataSeries2D aggregate_path_count;
 };
 
@@ -139,27 +157,21 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
   LOG(INFO) << "Done";
 
   auto result_ptr = nc::make_unique<Result>();
-  std::vector<std::pair<std::string, nc::viz::DataSeries2D*>> to_process = {
-      {kPathStretchRelMetric, &result_ptr->path_stretch_rel_data},
-      {kPathKIndexMetric, &result_ptr->path_k_index_data}};
+  LOG(INFO) << "Parsing metric " << kPathStretchRelMetric << " fields "
+            << fields_regex;
+  DataMap per_path_data = SimpleParseNumericData(
+      FLAGS_metric_file, kPathStretchRelMetric, fields_regex, 0, kMaxUint, 0);
+  DataMap per_path_penalty = SimpleParseNumericData(
+      FLAGS_metric_file, kPathPenaltyMetric, fields_regex, 0, kMaxUint, 0);
 
-  for (const auto& metric_and_data_ptr : to_process) {
-    const std::string& metric = metric_and_data_ptr.first;
-    nc::viz::DataSeries2D* data_ptr = metric_and_data_ptr.second;
-
-    LOG(INFO) << "Parsing metric " << metric << " fields " << fields_regex;
-    DataMap per_path_data = SimpleParseNumericData(
-        FLAGS_metric_file, metric, fields_regex, 0, kMaxUint, 0);
-
-    // Will plot the percentiles to get a CDF.
-    std::vector<double> percentiles = Parse(path_counts, per_path_data);
-    for (size_t i = 0; i < percentiles.size(); ++i) {
-      double p = percentiles[i];
-      data_ptr->data.emplace_back(p, i);
-    }
-
-    data_ptr->label = optimizer;
+  // Will plot the percentiles to get a CDF.
+  std::vector<double> percentiles =
+      Parse(path_counts, per_path_data, per_path_penalty, 100.0);
+  for (size_t i = 0; i < percentiles.size(); ++i) {
+    double p = percentiles[i];
+    result_ptr->path_stretch_rel_data.data.emplace_back(p, i);
   }
+  result_ptr->path_stretch_rel_data.label = optimizer;
 
   std::vector<double> per_aggregate_path_counts;
   DataMap per_aggregate_data =
@@ -171,8 +183,7 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
       per_aggregate_path_counts.emplace_back(datapoint.second);
     }
   }
-  std::vector<double> percentiles =
-      nc::Percentiles(&per_aggregate_path_counts, kPercentilesCount);
+  percentiles = nc::Percentiles(&per_aggregate_path_counts, kPercentilesCount);
   for (size_t i = 0; i < percentiles.size(); ++i) {
     double p = percentiles[i];
     result_ptr->aggregate_path_count.data.emplace_back(p, i);
@@ -266,7 +277,6 @@ int main(int argc, char** argv) {
             return HandleSingleOptimizer(opt);
           }, optimizers.size());
 
-  PLOT("path_k_index_out", result_ptrs[i]->path_k_index_data);
   PLOT("path_rel_stretch_out", result_ptrs[i]->path_stretch_rel_data);
   PLOT("aggregate_path_count_out", result_ptrs[i]->aggregate_path_count);
 

@@ -18,7 +18,8 @@ class PathProvider {
 
   // Returns the K shortest paths for an aggregate.
   std::vector<const nc::net::Walk*> KShorestPaths(const AggregateId& aggregate,
-                                                  size_t k);
+                                                  size_t start_k,
+                                                  size_t max_count);
 
   // Adds paths in K shortest order until a path is added that avoids a set of
   // links or max_count is reached. Paths are added starting at start_k.
