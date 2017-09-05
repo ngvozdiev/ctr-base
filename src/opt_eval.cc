@@ -49,6 +49,12 @@ static auto* path_stretch_ms =
             "How far away from the shortest path a path is (absolute)",
             "Topology", "Traffic matrix", "Optimizer");
 
+static auto* path_sp_delay_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_path_sp_delay_ms", "Delay of the shortest path", "Topology",
+            "Traffic matrix", "Optimizer");
+
 static auto* path_stretch_rel =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string, std::string>(
@@ -142,6 +148,7 @@ static void RecordRoutingConfig(const std::string& topology,
       model.per_flow_bandwidth_map();
 
   auto* path_stretch_handle = path_stretch_ms->GetHandle(topology, tm, opt);
+  auto* path_sp_delay_handle = path_sp_delay_ms->GetHandle(topology, tm, opt);
   auto* path_flow_count_handle = path_flow_count->GetHandle(topology, tm, opt);
   auto* path_stretch_rel_handle =
       path_stretch_rel->GetHandle(topology, tm, opt);
@@ -187,6 +194,7 @@ static void RecordRoutingConfig(const std::string& topology,
           static_cast<double>(path_delay_ms.count()) / sp_delay_ms.count();
       milliseconds delta = path_delay_ms - sp_delay_ms;
 
+      path_sp_delay_handle->AddValue(path_delay_ms.count());
       path_stretch_handle->AddValue(delta.count());
       path_flow_count_handle->AddValue(fraction * total_num_flows);
       path_stretch_rel_handle->AddValue(delta_rel);

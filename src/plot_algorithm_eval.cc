@@ -19,7 +19,7 @@
 #include "ncode_common/src/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
-DEFINE_string(metric_file, "", "The metrics file.");
+DEFINE_string(metric_dir, "", "The metrics directory.");
 DEFINE_string(focus_on, "", "A field to plot absolute values of.");
 DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
               "Comma-separated list of optimizers");
@@ -29,8 +29,8 @@ DEFINE_bool(ignore_trivial, true,
 
 static constexpr char kPathStretchRelMetric[] = "opt_path_stretch_rel";
 static constexpr char kPathStretchAbsMetric[] = "opt_path_stretch_ms";
+static constexpr char kPathDelayMetric[] = "opt_path_sp_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
-static constexpr char kPathUnmetDemandMetric[] = "opt_path_unmet_demand_bps";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr size_t kDiscreteMultiplier = 1000;
@@ -40,6 +40,28 @@ using DataVector = std::vector<double>;
 using DataMap = const std::map<std::pair<std::string, std::string>, DataVector>;
 
 using namespace nc::metrics::parser;
+
+struct OptimizerTMState {
+  // Identifies the TM.
+  std::string id;
+
+  std::vector<float> path_stretch;
+  std::vector<uint32_t> path_stretch_abs_ms;
+  std::vector<uint32_t> path_sp_delay_ms;
+  std::vector<uint32_t> path_flow_count;
+  std::vector<uint32_t> aggregate_path_count;
+  std::vector<double> link_utilization;
+};
+
+class OptimizerParser : public MetricProcessor {
+  bool InterestedInFields(const nc::metrics::PBManifestEntry& manifest_entry,
+                          uint32_t manifest_index) override {
+    manifest_entry.
+  }
+
+ private:
+  std::string opt;
+};
 
 // Returns the set of fields for which all aggregates use only one path.
 static std::set<std::string> FieldsWithSinglePath(
@@ -64,6 +86,44 @@ static std::set<std::string> FieldsWithSinglePath(
     if (all_ones) {
       out.emplace(metric_and_fields.second);
     }
+  }
+
+  return out;
+}
+
+static std::vector<double> GetPathRatios(const std::set<std::string>& to_ignore,
+                                         const DataMap& flow_counts_data,
+                                         const DataMap& path_stretch_abs_data,
+                                         const DataMap& path_sp_delay_data) {
+  std::vector<double> out;
+  for (const auto& key_and_data : flow_counts_data) {
+    const std::pair<std::string, std::string>& metric_and_fields =
+        key_and_data.first;
+    const std::string& fields = metric_and_fields.second;
+    if (nc::ContainsKey(to_ignore, fields)) {
+      continue;
+    }
+
+    const DataVector& flow_counts = key_and_data.second;
+    const DataVector& path_stretch_abs = nc::FindOrDieNoPrint(
+        path_stretch_abs_data, {kPathStretchAbsMetric, fields});
+    const DataVector& path_sp_delay =
+        nc::FindOrDieNoPrint(path_sp_delay_data, {kPathDelayMetric, fields});
+    CHECK(flow_counts.size() == path_stretch_abs.size());
+    CHECK(flow_counts.size() == path_sp_delay.size());
+
+    double total_sp_delay = 0;
+    double total_delay = 0;
+    for (size_t i = 0; i < flow_counts.size(); ++i) {
+      double abs_stretch = path_stretch_abs[i];
+      double sp_delay = path_sp_delay[i];
+
+      total_sp_delay += sp_delay * flow_counts[i];
+      total_delay += (sp_delay + abs_stretch) * flow_counts[i];
+    }
+
+    double change = (total_delay - total_sp_delay) / total_sp_delay;
+    out.emplace_back(change);
   }
 
   return out;
@@ -167,9 +227,9 @@ static std::vector<double> ParseSingle(const DataVector& path_counts,
 
 struct Result {
   nc::viz::DataSeries2D path_stretch_rel_data;
-  nc::viz::DataSeries2D path_unmet_demand_data;
   nc::viz::DataSeries1D path_stretch_max_rel_data;
   nc::viz::DataSeries1D link_utilization_data;
+  nc::viz::DataSeries1D ratios_data;
   nc::viz::DataSeries2D aggregate_path_count;
 };
 
@@ -203,19 +263,27 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
   LOG(INFO) << "Parsing metric " << kPathCountMetric << " fields "
             << fields_regex;
   DataMap flow_counts = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kPathCountMetric, fields_regex);
+      FLAGS_metric_dir, kPathCountMetric, fields_regex);
   LOG(INFO) << "Done";
 
   auto result_ptr = nc::make_unique<Result>();
-  LOG(INFO) << "Parsing metric " << kPathStretchRelMetric << " fields "
-            << fields_regex;
-  DataMap per_path_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kPathStretchRelMetric, fields_regex);
+  DataMap path_stretch_rel_data = SimpleParseNumericDataNoTimestamps(
+      FLAGS_metric_dir, kPathStretchRelMetric, fields_regex);
+  DataMap path_stretch_abs_data = SimpleParseNumericDataNoTimestamps(
+      FLAGS_metric_dir, kPathStretchAbsMetric, fields_regex);
+  DataMap path_sp_delay_data = SimpleParseNumericDataNoTimestamps(
+      FLAGS_metric_dir, kPathDelayMetric, fields_regex);
+
+  std::vector<double> ratios = GetPathRatios(
+      to_ignore, flow_counts, path_stretch_abs_data, path_sp_delay_data);
+  result_ptr->ratios_data.label = optimizer;
+  result_ptr->ratios_data.data = std::move(ratios);
 
   // Will plot the percentiles to get a CDF.
   std::vector<double> percentiles;
   std::vector<double> maxs;
-  std::tie(percentiles, maxs) = Parse(to_ignore, flow_counts, per_path_data);
+  std::tie(percentiles, maxs) =
+      Parse(to_ignore, flow_counts, path_stretch_rel_data);
   for (size_t i = 0; i < percentiles.size(); ++i) {
     double p = percentiles[i];
     result_ptr->path_stretch_rel_data.data.emplace_back(p, i);
@@ -224,19 +292,9 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
   result_ptr->path_stretch_rel_data.label = optimizer;
   result_ptr->path_stretch_max_rel_data.label = optimizer;
 
-  DataMap per_path_unmet = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kPathUnmetDemandMetric, fields_regex);
-  std::tie(percentiles, std::ignore) =
-      Parse(to_ignore, flow_counts, per_path_unmet);
-  for (size_t i = 0; i < percentiles.size(); ++i) {
-    double p = percentiles[i];
-    result_ptr->path_unmet_demand_data.data.emplace_back(p, i);
-  }
-  result_ptr->path_unmet_demand_data.label = optimizer;
-
   std::vector<double> per_aggregate_path_counts;
   DataMap per_aggregate_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kAggregatePathCountMetric, fields_regex);
+      FLAGS_metric_dir, kAggregatePathCountMetric, fields_regex);
   for (const auto& key_and_data : per_aggregate_data) {
     const std::pair<std::string, std::string>& metric_and_fields =
         key_and_data.first;
@@ -257,7 +315,7 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
   result_ptr->aggregate_path_count.label = optimizer;
 
   DataMap link_utilization_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kLinkUtilizationMetric, fields_regex);
+      FLAGS_metric_dir, kLinkUtilizationMetric, fields_regex);
   result_ptr->link_utilization_data =
       FlattenData(to_ignore, link_utilization_data, optimizer);
 
@@ -270,11 +328,11 @@ static std::unique_ptr<nc::viz::DataSeries2D> HandleFocusOn(
       nc::StrCat(".*", FLAGS_focus_on, ".*", optimizer, "$");
   LOG(INFO) << "Parsing " << kPathCountMetric << " for " << field_regex;
   DataMap path_count_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kPathCountMetric, field_regex);
+      FLAGS_metric_dir, kPathCountMetric, field_regex);
 
   LOG(INFO) << "Parsing " << kPathStretchAbsMetric << " for " << field_regex;
   DataMap path_stretch_abs_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, kPathStretchAbsMetric, field_regex);
+      FLAGS_metric_dir, kPathStretchAbsMetric, field_regex);
 
   // The two datamaps should only have one value---the fields that we are
   // focusing on.
@@ -323,7 +381,7 @@ static std::unique_ptr<nc::viz::DataSeries2D> HandleFocusOn(
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  CHECK(!FLAGS_metric_file.empty()) << "need --metric_file";
+  CHECK(!FLAGS_metric_dir.empty()) << "need --metric_file";
 
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
   if (!FLAGS_focus_on.empty()) {
@@ -341,7 +399,7 @@ int main(int argc, char** argv) {
   if (FLAGS_ignore_trivial) {
     std::string fields_regex = nc::StrCat(".*B4$");
     DataMap path_count_data = SimpleParseNumericDataNoTimestamps(
-        FLAGS_metric_file, kAggregatePathCountMetric, fields_regex);
+        FLAGS_metric_dir, kAggregatePathCountMetric, fields_regex);
     to_ignore = FieldsWithSinglePath(path_count_data);
     LOG(INFO) << "Will ignore " << to_ignore.size()
               << " cases satisfiable with one path";
@@ -351,18 +409,18 @@ int main(int argc, char** argv) {
       nc::RunInParallelWithResult<std::string, Result>(
           optimizers, [&to_ignore](const std::string& opt) {
             return HandleSingleOptimizer(to_ignore, opt);
-          }, optimizers.size());
+          }, 1);
 
   PLOT("path_rel_stretch_out", result_ptrs[i]->path_stretch_rel_data);
   PLOT("aggregate_path_count_out", result_ptrs[i]->aggregate_path_count);
-  PLOT("path_unmet_demand_out", result_ptrs[i]->path_unmet_demand_data);
   PLOT1D("path_rel_stretch_max_out", result_ptrs[i]->path_stretch_max_rel_data);
   PLOT1D("link_utilization_out", result_ptrs[i]->link_utilization_data);
+  PLOT1D("ratios_out", result_ptrs[i]->ratios_data);
 
   DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, "ctr_runtime_ms", ".*");
+      FLAGS_metric_dir, "ctr_runtime_ms", ".*");
   DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_file, "ctr_runtime_cached_ms", ".*");
+      FLAGS_metric_dir, "ctr_runtime_cached_ms", ".*");
   nc::viz::PythonGrapher grapher("runtime_out");
   grapher.PlotCDF(
       {}, {FlattenData(to_ignore, runtime_data, "Runtime (ms)"),

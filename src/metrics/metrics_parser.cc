@@ -605,7 +605,6 @@ SimpleParseNumericDataNoTimestamps(const std::string& metrics_dir,
                                    const std::string& metric_regex,
                                    const std::string& fields_to_match) {
   std::map<std::pair<std::string, std::string>, std::vector<double>> out;
-
   auto result_handle =
       std::unique_ptr<NumericMetricsResultHandle>(MetricsParserParse(
           metrics_dir.c_str(), metric_regex.c_str(), fields_to_match.c_str(), 0,
@@ -691,7 +690,6 @@ NumericMetricsResultHandle* MetricsParserParse(const char* metrics_file,
   parser.AddProcessor(std::move(uint64_processor));
 
   parser.Parse();
-  return_handle->Sort();
   return return_handle;
 }
 
@@ -722,7 +720,6 @@ BytesMetricsResultHandle* MetricsParserBytesParse(const char* metrics_file,
   parser.AddProcessor(std::move(bytes_processor));
 
   parser.Parse();
-  return_handle->Sort();
   return return_handle;
 }
 
