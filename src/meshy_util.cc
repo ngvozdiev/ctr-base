@@ -19,7 +19,7 @@
 #include "ncode_common/src/viz/web_page.h"
 
 DEFINE_string(topology_files, "", "Topology files");
-DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
+DEFINE_double(delay_scale, 1.3, "By how much to scale the delays of all links");
 
 static std::vector<std::string> GetTopologyFiles() {
   std::vector<std::string> out;
@@ -50,13 +50,28 @@ static void DumpGraphToHTML(const std::string& out,
   nc::File::WriteStringToFile(page.Construct(), out);
 }
 
+// Returns the link with max delay.
+const nc::net::GraphLink* MaxDelayLink(const nc::net::GraphStorage& graph) {
+  nc::net::Delay max_delay = nc::net::Delay::zero();
+  const nc::net::GraphLink* out = nullptr;
+  for (const auto& link_index : graph.AllLinks()) {
+    const nc::net::GraphLink* link = graph.GetLink(link_index);
+    if (link->delay() > max_delay) {
+      out = link;
+      max_delay = link->delay();
+    }
+  }
+  CHECK(out != nullptr);
+  return out;
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
-  std::vector<double> fractions;
+  std::vector<double> all_links_to_remove;
   for (const std::string& topology_file : topology_files) {
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file));
@@ -64,12 +79,20 @@ int main(int argc, char** argv) {
     builder.ScaleDelay(FLAGS_delay_scale);
     nc::net::GraphStorage graph(builder);
 
-    double common_fraction;
-    std::tie(std::ignore, common_fraction) = nc::net::CommonSPLinks(graph);
-    fractions.emplace_back(common_fraction);
+    const nc::net::GraphLink* max_delay_link = MaxDelayLink(graph);
+    if (graph.AllNodes().Count() < 10) {
+      continue;
+    }
 
-    LOG(INFO) << topology_file << " " << common_fraction << " "
-              << graph.AllNodes().Count();
+    size_t links_in_tree = graph.AllNodes().Count() - 1;
+    size_t bidirectional_links = graph.AllLinks().Count() / 2;
+    double links_to_remove = bidirectional_links - links_in_tree;
+    all_links_to_remove.emplace_back(links_to_remove / bidirectional_links);
+
+    LOG(INFO) << topology_file << " " << graph.AllNodes().Count() << " "
+              << graph.AllLinks().Count() << " max delay link "
+              << max_delay_link->ToStringNoPorts() << " delay "
+              << max_delay_link->delay().count();
 
     if (topology_files.size() == 1) {
       DumpGraphToHTML("out.html", graph);
@@ -78,9 +101,9 @@ int main(int argc, char** argv) {
 
   if (topology_files.size() > 1) {
     nc::viz::DataSeries1D data_1d;
-    data_1d.data = std::move(fractions);
+    data_1d.data = std::move(all_links_to_remove);
 
-    nc::viz::PythonGrapher python_grapher("mesy_fractions");
+    nc::viz::PythonGrapher python_grapher("meshy_ltr");
     python_grapher.PlotCDF({}, {data_1d});
   }
 }
