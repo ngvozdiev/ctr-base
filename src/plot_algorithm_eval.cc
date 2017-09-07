@@ -19,32 +19,27 @@
 #include "ncode_common/src/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
-DEFINE_string(metric_dir, "", "The metrics directory.");
-DEFINE_string(focus_on, "", "A field to plot absolute values of.");
+DEFINE_string(metrics_dir, "", "The metrics directory.");
 DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
-              "Comma-separated list of optimizers");
+              "Optimizers to plot.");
 DEFINE_bool(ignore_trivial, true,
             "Ignores topologies/TM combinations where traffic fits on the "
             "shortest path.");
 
-static constexpr char kPathStretchRelMetric[] = "opt_path_stretch_rel";
+static constexpr char kPathStretchMetric[] = "opt_path_stretch_rel";
 static constexpr char kPathStretchAbsMetric[] = "opt_path_stretch_ms";
 static constexpr char kPathDelayMetric[] = "opt_path_sp_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
+static constexpr char kTreenessMetric[] = "tm_treeness";
+static constexpr char kDiameterMetric[] = "tm_diameter_ms";
 static constexpr size_t kDiscreteMultiplier = 1000;
 static constexpr size_t kPercentilesCount = 10000;
-
-using DataVector = std::vector<double>;
-using DataMap = const std::map<std::pair<std::string, std::string>, DataVector>;
 
 using namespace nc::metrics::parser;
 
 struct OptimizerTMState {
-  // Identifies the TM.
-  std::string id;
-
   std::vector<float> path_stretch;
   std::vector<uint32_t> path_stretch_abs_ms;
   std::vector<uint32_t> path_sp_delay_ms;
@@ -53,25 +48,118 @@ struct OptimizerTMState {
   std::vector<double> link_utilization;
 };
 
-class OptimizerParser : public MetricProcessor {
+using TopologyAndTM = std::pair<std::string, std::string>;
+using TMStateMap = std::map<TopologyAndTM, std::unique_ptr<OptimizerTMState>>;
+
+using DataVector = std::vector<double>;
+using DataMap = std::map<std::pair<std::string, std::string>, DataVector>;
+
+class DataStorage {
+ public:
+  OptimizerTMState* GetTMState(const std::string& topology,
+                               const std::string& optimizer,
+                               const std::string& tm) {
+    std::unique_lock<std::mutex> lock(mu_);
+    TMStateMap& tm_state_map = data_[optimizer];
+    std::unique_ptr<OptimizerTMState>& tm_state_ptr =
+        tm_state_map[{topology, tm}];
+
+    if (!tm_state_ptr) {
+      tm_state_ptr = nc::make_unique<OptimizerTMState>();
+    }
+    return tm_state_ptr.get();
+  }
+
+  const std::map<std::string, TMStateMap>& data() const { return data_; }
+
+ private:
+  std::map<std::string, TMStateMap> data_;
+
+  // Protects 'data_'.
+  std::mutex mu_;
+};
+
+class SingleMetricProcessor : public MetricProcessor {
+ public:
+  using UpdateStateCallback = std::function<void(
+      const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state)>;
+
+  SingleMetricProcessor(const std::string& metric, DataStorage* storage,
+                        const std::set<TopologyAndTM>* to_ignore,
+                        UpdateStateCallback callback)
+      : metric_(metric),
+        callback_(callback),
+        to_ignore_(to_ignore),
+        storage_(storage) {}
+
+  bool InterestedInMetric(const std::string& metric_id) override {
+    return metric_ == metric_id;
+  }
+
   bool InterestedInFields(const nc::metrics::PBManifestEntry& manifest_entry,
                           uint32_t manifest_index) override {
-    manifest_entry.
+    // Fields are assumed to be topology,TM,optimizer.
+    CHECK(manifest_entry.fields_size() == 3);
+    CHECK(manifest_entry.fields(0).type() ==
+          nc::metrics::PBMetricField_Type_STRING);
+    CHECK(manifest_entry.fields(1).type() ==
+          nc::metrics::PBMetricField_Type_STRING);
+    CHECK(manifest_entry.fields(2).type() ==
+          nc::metrics::PBMetricField_Type_STRING);
+
+    const std::string& topology = manifest_entry.fields(0).string_value();
+    const std::string& tm = manifest_entry.fields(1).string_value();
+    const std::string& optimizer = manifest_entry.fields(2).string_value();
+
+    if (nc::ContainsKey(*to_ignore_, make_pair(topology, tm))) {
+      return false;
+    }
+
+    OptimizerTMState* tm_state = storage_->GetTMState(topology, optimizer, tm);
+
+    CHECK(!nc::ContainsKey(manifest_index_to_state_, manifest_index));
+    manifest_index_to_state_[manifest_index] = tm_state;
+    return true;
+  }
+
+  void ProcessEntry(const nc::metrics::PBMetricEntry& entry,
+                    const nc::metrics::PBManifestEntry& manifest_entry,
+                    uint32_t manifest_index) override {
+    nc::Unused(manifest_entry);
+    OptimizerTMState* tm_state =
+        nc::FindOrDie(manifest_index_to_state_, manifest_index);
+    callback_(entry, tm_state);
   }
 
  private:
-  std::string opt;
+  const std::string metric_;
+
+  UpdateStateCallback callback_;
+
+  // Combinations of TM and topology to ignore.
+  const std::set<TopologyAndTM>* to_ignore_;
+
+  // The storage that produces OptimizerTMState instances.
+  DataStorage* storage_;
+
+  // Maps from a manifest index to state.
+  std::map<uint32_t, OptimizerTMState*> manifest_index_to_state_;
 };
 
 // Returns the set of fields for which all aggregates use only one path.
-static std::set<std::string> FieldsWithSinglePath(
+static std::set<TopologyAndTM> FieldsWithSinglePath(
     const DataMap& path_count_data) {
-  std::set<std::string> out;
+  std::set<TopologyAndTM> out;
   for (const auto& key_and_data : path_count_data) {
     const std::pair<std::string, std::string>& metric_and_fields =
         key_and_data.first;
-    const DataVector& path_counts = key_and_data.second;
 
+    // Assuming the field string is <topology_file>:<tm_file>:<optimizer>
+    std::string field_string = metric_and_fields.second;
+    std::vector<std::string> split = nc::Split(field_string, ":");
+    CHECK(split.size() == 3);
+
+    const DataVector& path_counts = key_and_data.second;
     bool all_ones = true;
     for (double count : path_counts) {
       double path_count;
@@ -84,42 +172,35 @@ static std::set<std::string> FieldsWithSinglePath(
     }
 
     if (all_ones) {
-      out.emplace(metric_and_fields.second);
+      out.emplace(split[0], split[1]);
     }
   }
 
   return out;
 }
 
-static std::vector<double> GetPathRatios(const std::set<std::string>& to_ignore,
-                                         const DataMap& flow_counts_data,
-                                         const DataMap& path_stretch_abs_data,
-                                         const DataMap& path_sp_delay_data) {
+static std::vector<double> GetPathRatios(const TMStateMap& tm_state_map,
+                                         const std::string* topology) {
   std::vector<double> out;
-  for (const auto& key_and_data : flow_counts_data) {
-    const std::pair<std::string, std::string>& metric_and_fields =
-        key_and_data.first;
-    const std::string& fields = metric_and_fields.second;
-    if (nc::ContainsKey(to_ignore, fields)) {
-      continue;
-    }
+  for (const auto& key_and_data : tm_state_map) {
+    const OptimizerTMState& tm_state = *(key_and_data.second);
 
-    const DataVector& flow_counts = key_and_data.second;
-    const DataVector& path_stretch_abs = nc::FindOrDieNoPrint(
-        path_stretch_abs_data, {kPathStretchAbsMetric, fields});
-    const DataVector& path_sp_delay =
-        nc::FindOrDieNoPrint(path_sp_delay_data, {kPathDelayMetric, fields});
-    CHECK(flow_counts.size() == path_stretch_abs.size());
-    CHECK(flow_counts.size() == path_sp_delay.size());
+    if (topology != nullptr) {
+      const TopologyAndTM& topology_and_tm = key_and_data.first;
+      if (*topology != topology_and_tm.first) {
+        continue;
+      }
+    }
 
     double total_sp_delay = 0;
     double total_delay = 0;
-    for (size_t i = 0; i < flow_counts.size(); ++i) {
-      double abs_stretch = path_stretch_abs[i];
-      double sp_delay = path_sp_delay[i];
+    for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
+      double flow_count = tm_state.path_flow_count[i];
+      double abs_stretch = tm_state.path_stretch_abs_ms[i];
+      double sp_delay = tm_state.path_sp_delay_ms[i];
 
-      total_sp_delay += sp_delay * flow_counts[i];
-      total_delay += (sp_delay + abs_stretch) * flow_counts[i];
+      total_sp_delay += sp_delay * flow_count;
+      total_delay += (sp_delay + abs_stretch) * flow_count;
     }
 
     double change = (total_delay - total_sp_delay) / total_sp_delay;
@@ -129,50 +210,42 @@ static std::vector<double> GetPathRatios(const std::set<std::string>& to_ignore,
   return out;
 }
 
+static std::vector<std::pair<double, double>> GetScatterData(
+    const std::map<std::string, double>& per_topology_x,
+    const TMStateMap& tm_state_map) {
+  std::vector<std::pair<double, double>> out;
+  for (const auto& topology_and_x : per_topology_x) {
+    const std::string& topology = topology_and_x.first;
+    double x = topology_and_x.second;
+
+    std::vector<double> ys = GetPathRatios(tm_state_map, &topology);
+    for (double y : ys) {
+      out.emplace_back(x, y);
+    }
+  }
+
+  return out;
+}
+
 // Returns the percentiles of the distribution of a per-path value and the max.
-static std::pair<std::vector<double>, std::vector<double>> Parse(
-    const std::set<std::string>& to_ignore, const DataMap& path_counts_data,
-    const DataMap& per_path_data) {
+static std::pair<std::vector<double>, std::vector<double>>
+GetStretchDistribution(const TMStateMap& tm_state_map) {
   nc::DiscreteDistribution<uint64_t> dist;
   std::vector<double> maxs;
 
-  for (const auto& key_and_data : per_path_data) {
-    const std::pair<std::string, std::string>& metric_and_fields =
-        key_and_data.first;
-    if (nc::ContainsKey(to_ignore, metric_and_fields.second)) {
-      continue;
-    }
-
-    const DataVector& path_data = key_and_data.second;
-
-    // Need to get the flow counts for each path from the kPathCountMetric. The
-    // fields will be the same.
-    const DataVector* flow_counts = nc::FindOrNull(
-        path_counts_data, {kPathCountMetric, metric_and_fields.second});
-    if (flow_counts == nullptr) {
-      LOG(ERROR) << "No flow counts for " << metric_and_fields.second;
-      continue;
-    }
-
-    // The two data vectors should have the same number of elements---one for
-    // each path with either the data or the flow count on the path.
-    CHECK(flow_counts->size() == path_data.size())
-        << metric_and_fields.second << " " << flow_counts->size() << " vs "
-        << path_data.size();
+  for (const auto& key_and_data : tm_state_map) {
+    const OptimizerTMState& tm_state = *(key_and_data.second);
 
     double max = 0;
-    for (size_t i = 0; i < flow_counts->size(); ++i) {
+    for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
+      size_t flow_count = tm_state.path_flow_count[i];
+      double stretch = tm_state.path_stretch[i];
+      max = std::max(max, stretch);
+
       // Have to discretize the value.
-      double value = path_data[i];
-      max = std::max(max, value);
-
       uint64_t value_discrete =
-          static_cast<uint64_t>(kDiscreteMultiplier * value);
-
-      // The flow count should always be integer.
-      double flow_count;
-      CHECK(std::modf((*flow_counts)[i], &flow_count) == 0.0);
-      dist.Add(value_discrete, static_cast<size_t>(flow_count));
+          static_cast<uint64_t>(kDiscreteMultiplier * stretch);
+      dist.Add(value_discrete, flow_count);
     }
 
     maxs.emplace_back(max);
@@ -190,100 +263,25 @@ static std::pair<std::vector<double>, std::vector<double>> Parse(
   return {out, maxs};
 }
 
-static std::vector<double> ParseSingle(const DataVector& path_counts,
-                                       const DataVector& path_data,
-                                       double* total, double* count) {
-  CHECK(path_counts.size() == path_data.size());
-  nc::DiscreteDistribution<uint64_t> dist;
-  for (size_t i = 0; i < path_counts.size(); ++i) {
-    double value = path_data[i];
-    uint64_t value_discrete =
-        static_cast<uint64_t>(kDiscreteMultiplier * value);
-
-    double path_count;
-    CHECK(std::modf(path_counts[i], &path_count) == 0.0);
-    dist.Add(value_discrete, static_cast<size_t>(path_count));
-  }
-
-  std::vector<uint64_t> percentiles = dist.Percentiles(kPercentilesCount);
-  CHECK(percentiles.size() == kPercentilesCount + 1);
-
-  std::vector<double> out;
-  out.reserve(percentiles.size());
-  for (uint64_t discrete_value : percentiles) {
-    out.emplace_back(static_cast<double>(discrete_value) / kDiscreteMultiplier);
-  }
-
-  if (total != nullptr) {
-    *total = dist.summary_stats().sum() / kDiscreteMultiplier;
-  }
-
-  if (count != nullptr) {
-    *count = dist.summary_stats().count();
-  }
-
-  return out;
-}
-
 struct Result {
   nc::viz::DataSeries2D path_stretch_rel_data;
   nc::viz::DataSeries1D path_stretch_max_rel_data;
   nc::viz::DataSeries1D link_utilization_data;
   nc::viz::DataSeries1D ratios_data;
-  nc::viz::DataSeries2D aggregate_path_count;
+  nc::viz::DataSeries1D aggregate_path_count;
 };
 
-static nc::viz::DataSeries1D FlattenData(const std::set<std::string>& to_ignore,
-                                         const DataMap& data_map,
-                                         const std::string& label) {
-  std::vector<double> values;
-  for (const auto& key_and_value : data_map) {
-    const std::pair<std::string, std::string>& metric_and_fields =
-        key_and_value.first;
-    if (nc::ContainsKey(to_ignore, metric_and_fields.second)) {
-      continue;
-    }
-
-    for (const auto& v : key_and_value.second) {
-      values.emplace_back(v);
-    }
-  }
-
-  nc::viz::DataSeries1D data_series;
-  data_series.data = std::move(values);
-  data_series.label = label;
-
-  return data_series;
-}
-
 static std::unique_ptr<Result> HandleSingleOptimizer(
-    const std::set<std::string>& to_ignore, const std::string& optimizer) {
-  std::string fields_regex = nc::StrCat(".*", optimizer, "$");
-
-  LOG(INFO) << "Parsing metric " << kPathCountMetric << " fields "
-            << fields_regex;
-  DataMap flow_counts = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kPathCountMetric, fields_regex);
-  LOG(INFO) << "Done";
-
+    const std::string& optimizer, const TMStateMap& tm_state_map) {
   auto result_ptr = nc::make_unique<Result>();
-  DataMap path_stretch_rel_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kPathStretchRelMetric, fields_regex);
-  DataMap path_stretch_abs_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kPathStretchAbsMetric, fields_regex);
-  DataMap path_sp_delay_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kPathDelayMetric, fields_regex);
-
-  std::vector<double> ratios = GetPathRatios(
-      to_ignore, flow_counts, path_stretch_abs_data, path_sp_delay_data);
+  std::vector<double> ratios = GetPathRatios(tm_state_map, nullptr);
   result_ptr->ratios_data.label = optimizer;
   result_ptr->ratios_data.data = std::move(ratios);
 
   // Will plot the percentiles to get a CDF.
   std::vector<double> percentiles;
   std::vector<double> maxs;
-  std::tie(percentiles, maxs) =
-      Parse(to_ignore, flow_counts, path_stretch_rel_data);
+  std::tie(percentiles, maxs) = GetStretchDistribution(tm_state_map);
   for (size_t i = 0; i < percentiles.size(); ++i) {
     double p = percentiles[i];
     result_ptr->path_stretch_rel_data.data.emplace_back(p, i);
@@ -293,70 +291,26 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
   result_ptr->path_stretch_max_rel_data.label = optimizer;
 
   std::vector<double> per_aggregate_path_counts;
-  DataMap per_aggregate_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kAggregatePathCountMetric, fields_regex);
-  for (const auto& key_and_data : per_aggregate_data) {
-    const std::pair<std::string, std::string>& metric_and_fields =
-        key_and_data.first;
-    if (nc::ContainsKey(to_ignore, metric_and_fields.second)) {
-      continue;
-    }
-
-    const DataVector& path_data = key_and_data.second;
-    for (const auto& datapoint : path_data) {
-      per_aggregate_path_counts.emplace_back(datapoint);
+  for (const auto& key_and_data : tm_state_map) {
+    const OptimizerTMState& tm_state = *(key_and_data.second);
+    for (uint32_t path_count : tm_state.aggregate_path_count) {
+      per_aggregate_path_counts.emplace_back(path_count);
     }
   }
-  percentiles = nc::Percentiles(&per_aggregate_path_counts, kPercentilesCount);
-  for (size_t i = 0; i < percentiles.size(); ++i) {
-    double p = percentiles[i];
-    result_ptr->aggregate_path_count.data.emplace_back(p, i);
-  }
+  result_ptr->aggregate_path_count.data = std::move(per_aggregate_path_counts);
   result_ptr->aggregate_path_count.label = optimizer;
 
-  DataMap link_utilization_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kLinkUtilizationMetric, fields_regex);
-  result_ptr->link_utilization_data =
-      FlattenData(to_ignore, link_utilization_data, optimizer);
+  std::vector<double> link_utilizations;
+  for (const auto& key_and_data : tm_state_map) {
+    const OptimizerTMState& tm_state = *(key_and_data.second);
+    for (float link_utilization : tm_state.link_utilization) {
+      link_utilizations.emplace_back(link_utilization);
+    }
+  }
+  result_ptr->link_utilization_data.data = std::move(link_utilizations);
+  result_ptr->link_utilization_data.label = optimizer;
 
   return result_ptr;
-}
-
-static std::unique_ptr<nc::viz::DataSeries2D> HandleFocusOn(
-    const std::string& optimizer) {
-  std::string field_regex =
-      nc::StrCat(".*", FLAGS_focus_on, ".*", optimizer, "$");
-  LOG(INFO) << "Parsing " << kPathCountMetric << " for " << field_regex;
-  DataMap path_count_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kPathCountMetric, field_regex);
-
-  LOG(INFO) << "Parsing " << kPathStretchAbsMetric << " for " << field_regex;
-  DataMap path_stretch_abs_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, kPathStretchAbsMetric, field_regex);
-
-  // The two datamaps should only have one value---the fields that we are
-  // focusing on.
-  CHECK(path_count_data.size() == 1);
-  CHECK(path_stretch_abs_data.size() == 1);
-
-  const DataVector& path_count_data_vector = path_count_data.begin()->second;
-  const DataVector& path_stretch_data_vector =
-      path_stretch_abs_data.begin()->second;
-
-  double total;
-  double count;
-  std::vector<double> percentiles = ParseSingle(
-      path_count_data_vector, path_stretch_data_vector, &total, &count);
-  LOG(INFO) << "For " << optimizer << " total " << total << " count " << count;
-
-  auto to_plot = nc::make_unique<nc::viz::DataSeries2D>();
-  to_plot->label = optimizer;
-  for (size_t i = 0; i < percentiles.size(); ++i) {
-    double p = percentiles[i];
-    to_plot->data.emplace_back(p, i);
-  }
-
-  return to_plot;
 }
 
 #define PLOT(out, v)                                               \
@@ -379,50 +333,119 @@ static std::unique_ptr<nc::viz::DataSeries2D> HandleFocusOn(
     grapher.PlotCDF({}, to_plot);                                  \
   }
 
-int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  CHECK(!FLAGS_metric_dir.empty()) << "need --metric_file";
-
-  std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
-  if (!FLAGS_focus_on.empty()) {
-    std::vector<std::unique_ptr<nc::viz::DataSeries2D>> result_ptrs =
-        nc::RunInParallelWithResult<std::string, nc::viz::DataSeries2D>(
-            optimizers, [](const std::string& opt) {
-              return HandleFocusOn(opt);
-            }, optimizers.size());
-
-    PLOT("path_abs_stretch_out_focus", *result_ptrs[i]);
-    return 0;
+static void PlotScatter(const std::map<std::string, TMStateMap>& data,
+                        const std::string& metric, const std::string& prefix) {
+  std::map<std::string, double> metric_map;
+  DataMap metric_data =
+      SimpleParseNumericDataNoTimestamps(FLAGS_metrics_dir, metric, ".*");
+  for (const auto& id_and_data : metric_data) {
+    const std::string& topology = id_and_data.first.second;
+    CHECK(id_and_data.second.size() == 1);
+    metric_map[topology] = id_and_data.second.front();
   }
 
-  std::set<std::string> to_ignore;
+  for (const auto& opt_and_state_map : data) {
+    const std::string opt = opt_and_state_map.first;
+    const TMStateMap& state_map = opt_and_state_map.second;
+
+    std::vector<nc::viz::DataSeries2D> to_plot;
+    std::vector<std::pair<double, double>> xy =
+        GetScatterData(metric_map, state_map);
+    to_plot.push_back({opt, xy});
+
+    nc::viz::PythonGrapher grapher(nc::StrCat(prefix, "_scatter_", opt));
+    grapher.PlotLine({}, to_plot);
+  }
+}
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  CHECK(!FLAGS_metrics_dir.empty()) << "need --metrics_dir";
+
+  std::set<TopologyAndTM> to_ignore;
   if (FLAGS_ignore_trivial) {
     std::string fields_regex = nc::StrCat(".*B4$");
     DataMap path_count_data = SimpleParseNumericDataNoTimestamps(
-        FLAGS_metric_dir, kAggregatePathCountMetric, fields_regex);
+        FLAGS_metrics_dir, kAggregatePathCountMetric, fields_regex);
     to_ignore = FieldsWithSinglePath(path_count_data);
     LOG(INFO) << "Will ignore " << to_ignore.size()
               << " cases satisfiable with one path";
   }
 
-  std::vector<std::unique_ptr<Result>> result_ptrs =
-      nc::RunInParallelWithResult<std::string, Result>(
-          optimizers, [&to_ignore](const std::string& opt) {
-            return HandleSingleOptimizer(to_ignore, opt);
-          }, 1);
+  DataStorage data_storage;
+  auto path_stretch_processor = nc::make_unique<SingleMetricProcessor>(
+      kPathStretchMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->path_stretch.emplace_back(entry.double_value());
+      });
+
+  auto path_stretch_abs_processor = nc::make_unique<SingleMetricProcessor>(
+      kPathStretchAbsMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->path_stretch_abs_ms.emplace_back(entry.uint32_value());
+      });
+
+  auto path_delay_processor = nc::make_unique<SingleMetricProcessor>(
+      kPathDelayMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->path_sp_delay_ms.emplace_back(entry.uint32_value());
+      });
+
+  auto path_flow_count_processor = nc::make_unique<SingleMetricProcessor>(
+      kPathCountMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->path_flow_count.emplace_back(entry.uint32_value());
+      });
+
+  auto link_utilization_processor = nc::make_unique<SingleMetricProcessor>(
+      kLinkUtilizationMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->link_utilization.emplace_back(entry.double_value());
+      });
+
+  auto aggregate_path_count_processor = nc::make_unique<SingleMetricProcessor>(
+      kAggregatePathCountMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->aggregate_path_count.emplace_back(entry.uint32_value());
+      });
+
+  MetricsParser parser(FLAGS_metrics_dir);
+  parser.AddProcessor(std::move(path_stretch_processor));
+  parser.AddProcessor(std::move(path_stretch_abs_processor));
+  parser.AddProcessor(std::move(path_delay_processor));
+  parser.AddProcessor(std::move(path_flow_count_processor));
+  parser.AddProcessor(std::move(link_utilization_processor));
+  parser.AddProcessor(std::move(aggregate_path_count_processor));
+  parser.Parse();
+
+  // The data is grouped by optimizer.
+  std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
+  std::vector<std::unique_ptr<Result>> result_ptrs;
+  const std::map<std::string, TMStateMap>& data = data_storage.data();
+  for (const std::string& opt : optimizers) {
+    LOG(INFO) << "Handle " << opt;
+    const TMStateMap& state_map = nc::FindOrDie(data, opt);
+
+    auto result_ptr = HandleSingleOptimizer(opt, state_map);
+    result_ptrs.emplace_back(std::move(result_ptr));
+  }
 
   PLOT("path_rel_stretch_out", result_ptrs[i]->path_stretch_rel_data);
-  PLOT("aggregate_path_count_out", result_ptrs[i]->aggregate_path_count);
+  PLOT1D("aggregate_path_count_out", result_ptrs[i]->aggregate_path_count);
   PLOT1D("path_rel_stretch_max_out", result_ptrs[i]->path_stretch_max_rel_data);
   PLOT1D("link_utilization_out", result_ptrs[i]->link_utilization_data);
   PLOT1D("ratios_out", result_ptrs[i]->ratios_data);
 
-  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, "ctr_runtime_ms", ".*");
-  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metric_dir, "ctr_runtime_cached_ms", ".*");
-  nc::viz::PythonGrapher grapher("runtime_out");
-  grapher.PlotCDF(
-      {}, {FlattenData(to_ignore, runtime_data, "Runtime (ms)"),
-           FlattenData(to_ignore, runtime_data_cached, "Runtime cached (ms)")});
+  PlotScatter(data, kTreenessMetric, "treeness");
+  PlotScatter(data, kDiameterMetric, "diameter");
+
+  //  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
+  //      FLAGS_metrics_dir, "ctr_runtime_ms", ".*");
+  //  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
+  //      FLAGS_metrics_dir, "ctr_runtime_cached_ms", ".*");
+  //  nc::viz::PythonGrapher grapher("runtime_out");
+  //  grapher.PlotCDF(
+  //      {}, {FlattenData(to_ignore, runtime_data, "Runtime (ms)"),
+  //           FlattenData(to_ignore, runtime_data_cached, "Runtime cached
+  //           (ms)")});
 }

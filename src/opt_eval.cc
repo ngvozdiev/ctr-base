@@ -24,6 +24,8 @@
 #include "opt/oversubscription_model.h"
 #include "opt/path_provider.h"
 
+using namespace std::chrono;
+
 DEFINE_string(topology_files, "", "Topology files");
 DEFINE_string(
     tm_files, "",
@@ -34,8 +36,7 @@ DEFINE_uint64(topology_size_limit, 100000,
 DEFINE_uint64(topology_delay_limit_ms, 10,
               "Topologies with diameter less than this limit will be skipped");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
-DEFINE_string(tm_scale, "1.0",
-              "By how much to scale the traffic matrix, comma-separated");
+DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 DEFINE_bool(scale_to_make_b4_fit, true,
@@ -44,67 +45,77 @@ DEFINE_bool(scale_to_make_b4_fit, true,
 
 static auto* path_stretch_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
             "opt_path_stretch_ms",
             "How far away from the shortest path a path is (absolute)",
             "Topology", "Traffic matrix", "Optimizer");
 
 static auto* path_sp_delay_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
             "opt_path_sp_delay_ms", "Delay of the shortest path", "Topology",
             "Traffic matrix", "Optimizer");
 
 static auto* path_stretch_rel =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<double, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string>(
             "opt_path_stretch_rel",
             "How far away from the shortest path a path is (relative)",
             "Topology", "Traffic matrix", "Optimizer");
 
 static auto* path_flow_count =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
             "opt_path_flow_count", "Number of flows on each path", "Topology",
             "Traffic matrix", "Optimizer");
 
 static auto* aggregate_path_count =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint32_t, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
             "opt_path_count", "Number of paths in each aggregate", "Topology",
             "Traffic matrix", "Optimizer");
 
 static auto* link_utilization =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<double, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string>(
             "opt_link_utilization", "Per-link utilization", "Topology",
             "Traffic matrix", "Optimizer");
 
 static auto* path_unmet_demand =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint64_t, std::string, std::string, std::string>(
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string, std::string>(
             "opt_path_unmet_demand_bps",
             "How many bps of a single flow's demand are not satisfied",
             "Topology", "Traffic matrix", "Optimizer");
 
 static auto* ctr_runtime_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string>(
             "ctr_runtime_ms", "How long it took CTR to run", "Topology",
             "Traffic matrix");
 
 static auto* ctr_runtime_cached_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<uint64_t, std::string, std::string>(
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string>(
             "ctr_runtime_cached_ms", "How long it took CTR to run (cached)",
             "Topology", "Traffic matrix");
 
 static auto* tm_scale_factor =
     nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<double, std::string, std::string>(
+        -> GetThreadSafeMetric<double, std::string, std::string>(
             "tm_scale_factor",
             "By how much the TM had to be scaled to make B4 fit", "Topology",
             "Traffic matrix");
+
+static auto* tm_diameter_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<uint32_t, std::string>(
+            "tm_diameter_ms", "The diameter of the topology", "Topology");
+
+static auto* tm_treeness =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string>(
+            "tm_treeness", "How much like a tree the topology is", "Topology");
 
 namespace ctr {
 
@@ -131,8 +142,6 @@ static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
   return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
                                         demands_and_counts);
 }
-
-static std::mutex global_mutex;
 
 static void RecordRoutingConfig(const std::string& topology,
                                 const std::string& tm, const std::string& opt,
@@ -250,10 +259,7 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
       continue;
     }
 
-    {
-      std::unique_lock<std::mutex> lock(global_mutex);
-      tm_scale_factor->GetHandle(topology_string, tm_string)->AddValue(scale);
-    }
+    tm_scale_factor->GetHandle(topology_string, tm_string)->AddValue(scale);
     return routing;
   }
 
@@ -261,59 +267,35 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
   return {};
 }
 
-static void RunOptimizers(const std::string& topology_file,
-                          const std::string& tm_file, double scale) {
-  using namespace std::chrono;
-  LOG(ERROR) << "Running " << topology_file << " " << tm_file;
+struct Input {
+  Input(const std::string& topology_file, const std::string& tm_file,
+        std::unique_ptr<nc::lp::DemandMatrix> demand_matrix)
+      : topology_file(topology_file),
+        tm_file(tm_file),
+        demand_matrix(std::move(demand_matrix)) {}
 
-  std::vector<std::string> node_order;
-  nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
-      nc::File::ReadFileToStringOrDie(topology_file), &node_order);
-  builder.RemoveMultipleLinks();
-  builder.ScaleCapacity(FLAGS_link_capacity_scale);
-  builder.ScaleDelay(FLAGS_delay_scale);
-  nc::net::GraphStorage graph(builder);
+  std::string topology_file;
+  std::string tm_file;
+  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix;
+};
 
-  size_t node_count = graph.AllNodes().Count();
-  if (node_count > FLAGS_topology_size_limit) {
-    LOG(INFO) << "Skipping " << topology_file << " / " << tm_file
-              << " size limit " << FLAGS_topology_size_limit << " vs "
-              << node_count;
-    return;
-  }
-
-  nc::net::Delay diameter = graph.Stats().sp_delay_percentiles.back();
-  if (diameter < milliseconds(FLAGS_topology_delay_limit_ms)) {
-    LOG(INFO) << "Skipping " << topology_file << " / " << tm_file
-              << " delay limit " << FLAGS_topology_delay_limit_ms
-              << "ms vs diameter delay "
-              << duration_cast<milliseconds>(diameter).count() << "ms";
-    return;
-  }
-
-  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(tm_file), node_order, &graph);
-  demand_matrix = demand_matrix->Scale(scale);
-
-  std::string top_file_trimmed = nc::Split(topology_file, "/").back();
-  std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
-  tm_file_trimmed = nc::StrCat(tm_file_trimmed, "_scale_", scale);
+static void RunOptimizers(const Input& input) {
+  const std::string& top_file = input.topology_file;
+  const std::string& tm_file = input.tm_file;
+  const nc::net::GraphStorage* graph = input.demand_matrix->graph();
+  LOG(ERROR) << "Running " << top_file << " " << tm_file;
 
   // A separate PathProvider instance for B4. Want to run CTR with a fresh
   // PathProvider, but have to run B4 first.
-  PathProvider b4_path_provider(&graph);
+  PathProvider b4_path_provider(graph);
 
-  std::unique_ptr<TrafficMatrix> tm = FromDemandMatrix(*demand_matrix);
+  std::unique_ptr<TrafficMatrix> tm = FromDemandMatrix(*input.demand_matrix);
   std::unique_ptr<RoutingConfiguration> routing;
-  routing = RunB4(*tm, top_file_trimmed, tm_file_trimmed, &b4_path_provider);
+  routing = RunB4(*tm, top_file, tm_file, &b4_path_provider);
 
-  {
-    std::unique_lock<std::mutex> lock(global_mutex);
-    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "B4", *routing);
-  }
+  RecordRoutingConfig(top_file, tm_file, "B4", *routing);
 
-  PathProvider path_provider(&graph);
+  PathProvider path_provider(graph);
   CTROptimizer ctr_optimizer(&path_provider, 1.0, false, false);
   CTROptimizer ctr_optimizer_no_flow_counts(&path_provider, 1.0, false, true);
   MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
@@ -325,54 +307,30 @@ static void RunOptimizers(const std::string& topology_file,
   routing = ctr_optimizer.Optimize(*tm);
   auto ctr_duration = high_resolution_clock::now() - ctr_start;
 
-  {
-    std::unique_lock<std::mutex> lock(global_mutex);
-    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "CTR", *routing);
-  }
+  RecordRoutingConfig(top_file, tm_file, "CTR", *routing);
 
-  ctr_start = std::chrono::high_resolution_clock::now();
+  ctr_start = high_resolution_clock::now();
   ctr_optimizer.Optimize(*tm);
-  auto ctr_cached_duration =
-      std::chrono::high_resolution_clock::now() - ctr_start;
+  auto ctr_cached_duration = high_resolution_clock::now() - ctr_start;
 
   routing = ctr_optimizer_no_flow_counts.Optimize(*tm);
-
-  {
-    std::unique_lock<std::mutex> lock(global_mutex);
-    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "CTRNFC", *routing);
-  }
+  RecordRoutingConfig(top_file, tm_file, "CTRNFC", *routing);
 
   routing = minmax_optimizer.Optimize(*tm);
-
-  {
-    std::unique_lock<std::mutex> lock(global_mutex);
-    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMax", *routing);
-  }
+  RecordRoutingConfig(top_file, tm_file, "MinMax", *routing);
 
   routing = minmax_low_delay_optimizer.Optimize(*tm);
-
-  {
-    std::unique_lock<std::mutex> lock(global_mutex);
-    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMaxLD",
-                        *routing);
-  }
+  RecordRoutingConfig(top_file, tm_file, "MinMaxLD", *routing);
 
   routing = minmax_ksp_optimizer.Optimize(*tm);
-
-  {
-    std::unique_lock<std::mutex> lock(global_mutex);
-    RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "MinMaxK10",
-                        *routing);
-  }
+  RecordRoutingConfig(top_file, tm_file, "MinMaxK10", *routing);
 
   routing = b4_flow_count_optimizer.Optimize(*tm);
+  RecordRoutingConfig(top_file, tm_file, "B4FC", *routing);
 
-  std::unique_lock<std::mutex> lock(global_mutex);
-  RecordRoutingConfig(top_file_trimmed, tm_file_trimmed, "B4FC", *routing);
-
-  auto* handle = ctr_runtime_ms->GetHandle(top_file_trimmed, tm_file_trimmed);
+  auto* handle = ctr_runtime_ms->GetHandle(top_file, tm_file);
   handle->AddValue(duration_cast<milliseconds>(ctr_duration).count());
-  handle = ctr_runtime_cached_ms->GetHandle(top_file_trimmed, tm_file_trimmed);
+  handle = ctr_runtime_cached_ms->GetHandle(top_file, tm_file);
   handle->AddValue(duration_cast<milliseconds>(ctr_cached_duration).count());
 }
 
@@ -406,6 +364,13 @@ static std::vector<std::string> GetMatrixFiles(
   return nc::Glob(matrix_location);
 }
 
+static double GetTreeness(const nc::net::GraphStorage& graph) {
+  size_t links_in_tree = graph.AllNodes().Count() - 1;
+  size_t bidirectional_links = graph.AllLinks().Count() / 2;
+  double links_to_remove = bidirectional_links - links_in_tree;
+  return links_to_remove / bidirectional_links;
+}
+
 using TopologyAndMatrix = std::tuple<std::string, std::string, double>;
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -420,33 +385,65 @@ int main(int argc, char** argv) {
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
-  std::vector<std::string> scales = nc::Split(FLAGS_tm_scale, ",");
-  CHECK(!scales.empty());
+  // All graphs.
+  std::vector<std::unique_ptr<nc::net::GraphStorage>> graphs;
 
-  std::vector<TopologyAndMatrix> to_process;
-  for (const std::string& scale_str : scales) {
-    double scale;
-    CHECK(nc::safe_strtod(scale_str, &scale));
+  // Inputs to process.
+  std::vector<ctr::Input> to_process;
 
-    for (const std::string& topology_file : topology_files) {
-      std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
-      if (matrix_files.empty()) {
-        LOG(ERROR) << "No matrices for " << topology_file;
-        continue;
-      }
+  for (const std::string& topology_file : topology_files) {
+    std::vector<std::string> node_order;
+    nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
+        nc::File::ReadFileToStringOrDie(topology_file), &node_order);
+    builder.RemoveMultipleLinks();
+    builder.ScaleCapacity(FLAGS_link_capacity_scale);
+    builder.ScaleDelay(FLAGS_delay_scale);
+    auto graph = nc::make_unique<nc::net::GraphStorage>(builder);
 
-      for (const std::string& matrix_file : matrix_files) {
-        to_process.emplace_back(topology_file, matrix_file, scale);
-      }
+    size_t node_count = graph->AllNodes().Count();
+    if (node_count > FLAGS_topology_size_limit) {
+      LOG(INFO) << "Skipping " << topology_file << " / " << topology_file
+                << " size limit " << FLAGS_topology_size_limit << " vs "
+                << node_count;
+      continue;
     }
+
+    nc::net::Delay diameter = graph->Stats().sp_delay_percentiles.back();
+    if (diameter < milliseconds(FLAGS_topology_delay_limit_ms)) {
+      LOG(INFO) << "Skipping " << topology_file << " / " << topology_file
+                << " delay limit " << FLAGS_topology_delay_limit_ms
+                << "ms vs diameter delay "
+                << duration_cast<milliseconds>(diameter).count() << "ms";
+      continue;
+    }
+
+    std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
+    if (matrix_files.empty()) {
+      LOG(ERROR) << "No matrices for " << topology_file;
+      continue;
+    }
+
+    std::string top_file_trimmed = nc::Split(topology_file, "/").back();
+    for (const std::string& tm_file : matrix_files) {
+      std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
+          nc::lp::DemandMatrix::LoadRepetitaOrDie(
+              nc::File::ReadFileToStringOrDie(tm_file), node_order,
+              graph.get());
+      demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+
+      std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
+      to_process.emplace_back(top_file_trimmed, tm_file_trimmed,
+                              std::move(demand_matrix));
+    }
+
+    tm_diameter_ms->GetHandle(top_file_trimmed)
+        ->AddValue(duration_cast<milliseconds>(diameter).count());
+    tm_treeness->GetHandle(top_file_trimmed)->AddValue(GetTreeness(*graph));
+
+    graphs.emplace_back(std::move(graph));
   }
 
-  nc::RunInParallel<TopologyAndMatrix>(
-      to_process, [](const TopologyAndMatrix& topology_and_matrix) {
-        std::string topology_file, tm_file;
-        double scale;
-        std::tie(topology_file, tm_file, scale) = topology_and_matrix;
-
-        ctr::RunOptimizers(topology_file, tm_file, scale);
-      }, FLAGS_threads);
+  nc::RunInParallel<ctr::Input>(to_process, [](const ctr::Input& input) {
+    ctr::RunOptimizers(input);
+  }, FLAGS_threads);
 }

@@ -18,6 +18,7 @@
 
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/substitute.h"
+#include "ncode_common/src/thread_runner.h"
 
 namespace nc {
 namespace metrics {
@@ -354,12 +355,19 @@ void MetricsParser::Parse() {
     }
   }
 
+  using FileAndProcessors =
+      std::pair<std::string, const std::vector<MetricProcessor*>*>;
+  std::vector<FileAndProcessors> to_run;
   for (auto& file_and_processors : interested) {
     const std::string& file = file_and_processors.first;
     const std::vector<MetricProcessor*>& interested_processors =
         file_and_processors.second;
-    ParseSingleFile(StrCat(metric_dir_, "/", file), interested_processors);
+    to_run.emplace_back(StrCat(metric_dir_, "/", file), &interested_processors);
   }
+
+  RunInParallel<FileAndProcessors>(to_run, [](const FileAndProcessors& data) {
+    ParseSingleFile(data.first, *(data.second));
+  }, to_run.size());
 }
 
 class AsciiTable {
