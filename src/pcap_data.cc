@@ -1218,6 +1218,15 @@ static std::unique_ptr<BinSequence> PickOrDie(
   std::unique_ptr<BinSequence> out;
   PickRecursive(traces_and_slices, initial_window, target_rate, 0,
                 kExtraPadding + traces_and_slices.size(), &out, &rate, cache);
+  if (!out) {
+    // Even the smallest fraction of the first trace was not enough to make the
+    // aggregate fit, will use that anyway.
+    out = nc::make_unique<BinSequence>(traces_and_slices.begin(),
+                                       std::next(traces_and_slices.begin(), 1));
+    out = std::move(out->PreciseSplitOrDie({1.0 / kExtraPadding})[0]);
+    out = out->CutFromStart(initial_window);
+  }
+
   CHECK(out);
 
   return out;
