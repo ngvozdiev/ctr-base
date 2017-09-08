@@ -115,6 +115,9 @@ message PBTraceAndSlice {
 
   // End bin.
   uint64 end_bin = 4;
+
+  // What fraction of this slice should be used.
+  double fraction = 5;
 }
 
 message PBBinSequence {

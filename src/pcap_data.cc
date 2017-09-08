@@ -770,6 +770,7 @@ PBBinSequence BinSequence::ToProtobuf() const {
     trace_and_slice_pb->set_slice_index(trace_and_slice.slice);
     trace_and_slice_pb->set_start_bin(trace_and_slice.start_bin);
     trace_and_slice_pb->set_end_bin(trace_and_slice.end_bin);
+    trace_and_slice_pb->set_fraction(trace_and_slice.precise_split);
   }
 
   return out;
@@ -1050,14 +1051,17 @@ std::unique_ptr<BinSequence> PcapTraceStore::BinSequenceFromProtobufOrDie(
     TraceSliceIndex slice(trace_and_slice_pb.slice_index());
     size_t from = trace_and_slice_pb.start_bin();
     size_t to = trace_and_slice_pb.end_bin();
+    double fraction = trace_and_slice_pb.fraction();
 
     const PcapDataTrace* trace_ptr = nc::FindOrDie(traces_, id).get();
     CHECK(trace_ptr->AllSlices().Contains(slice));
     CHECK(from <= to);
     CHECK(to <= trace_ptr->ToProtobuf().bin_count())
         << to << " vs " << trace_ptr->ToProtobuf().bin_count();
+    CHECK(fraction <= 1);
+    CHECK(fraction > 0);
 
-    traces_and_slices.emplace_back(trace_ptr, slice, from, to, 1.0);
+    traces_and_slices.emplace_back(trace_ptr, slice, from, to, fraction);
   }
 
   return nc::make_unique<BinSequence>(traces_and_slices);
@@ -1172,7 +1176,7 @@ static void PickRecursive(
 
   size_t offset = from + delta;
   std::unique_ptr<BinSequence> new_sequence;
-  if (offset >= kExtraPadding) {
+  if (offset > kExtraPadding) {
     size_t delta = offset - kExtraPadding;
     new_sequence = nc::make_unique<BinSequence>(
         traces_and_slices.begin(), std::next(traces_and_slices.begin(), delta));
