@@ -32,6 +32,8 @@ static constexpr char kPathDelayMetric[] = "opt_path_sp_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
+static constexpr char kRuntimeMetric[] = "ctr_runtime_ms";
+static constexpr char kRuntimeCachedMetric[] = "ctr_runtime_cached_ms";
 static constexpr size_t kDiscreteMultiplier = 1000;
 static constexpr size_t kPercentilesCount = 10000;
 
@@ -353,6 +355,59 @@ static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
   grapher.PlotLine({}, to_plot);
 }
 
+// Returns a list of topology/tm pairs ordered by number of aggregates.
+static std::vector<std::pair<size_t, TopologyAndTM>>
+TopologiesAndTMOrderedBySize(const TMStateMap& data) {
+  std::vector<std::pair<size_t, TopologyAndTM>> out;
+  for (const auto& topology_and_tm_and_state : data) {
+    const TopologyAndTM& topology_and_tm = topology_and_tm_and_state.first;
+    const OptimizerTMState& tm_state = *(topology_and_tm_and_state.second);
+
+    size_t aggregate_count = tm_state.aggregate_path_count.size();
+    out.emplace_back(aggregate_count, topology_and_tm);
+  }
+
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
+  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
+      FLAGS_metrics_dir, kRuntimeMetric, ".*");
+  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
+      FLAGS_metrics_dir, kRuntimeCachedMetric, ".*");
+
+  const TMStateMap& state_map = nc::FindOrDie(data, "CTR");
+  std::vector<std::pair<size_t, TopologyAndTM>> runs_ordered =
+      TopologiesAndTMOrderedBySize(state_map);
+
+  std::vector<std::pair<double, double>> xy;
+  std::vector<std::pair<double, double>> xy_cached;
+  for (const auto& size_and_topology : runs_ordered) {
+    size_t size = size_and_topology.first;
+    const TopologyAndTM& topology_and_tm = size_and_topology.second;
+
+    std::string key =
+        nc::StrCat(topology_and_tm.first, ":", topology_and_tm.second);
+    const DataVector& runtime_data_vector =
+        nc::FindOrDieNoPrint(runtime_data, std::make_pair(kRuntimeMetric, key));
+    const DataVector& runtime_data_cached_vector = nc::FindOrDieNoPrint(
+        runtime_data_cached, std::make_pair(kRuntimeCachedMetric, key));
+
+    CHECK(runtime_data_vector.size() == 1);
+    CHECK(runtime_data_cached_vector.size() == 1);
+
+    xy.emplace_back(size, runtime_data_vector.front());
+    xy_cached.emplace_back(size, runtime_data_cached_vector.front());
+  }
+
+  std::vector<nc::viz::DataSeries2D> to_plot;
+  to_plot.push_back({"Regular", xy_cached});
+  to_plot.push_back({"Cold run", xy});
+  nc::viz::PythonGrapher grapher("runtime");
+  grapher.PlotLine({}, to_plot);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   CHECK(!FLAGS_metrics_dir.empty()) << "need --metrics_dir";
@@ -432,6 +487,7 @@ int main(int argc, char** argv) {
   PLOT1D("ratios_out", result_ptrs[i]->ratios_data);
 
   PlotTotalDelay(data, optimizers);
+  PlotCTRRuntime(data);
 
   //  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
   //      FLAGS_metrics_dir, "ctr_runtime_ms", ".*");

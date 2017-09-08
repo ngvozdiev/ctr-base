@@ -78,8 +78,8 @@ void SaveEntryToProtobuf<BytesBlob>(const Entry<BytesBlob>& entry,
 template <>
 Entry<double> MetricHandle<double, true>::AddValuePrivate(double value,
                                                           uint64_t time_now) {
-  CHECK(isinf(value) == 0);
-  CHECK(isnan(value) == 0);
+  CHECK(!std::isinf(value));
+  CHECK(!std::isnan(value));
 
   Entry<double> entry = {value, time_now};
   std::unique_lock<std::mutex> lock = GetLock();
@@ -96,8 +96,8 @@ Entry<double> MetricHandle<double, true>::AddValuePrivate(double value,
 template <>
 Entry<double> MetricHandle<double, false>::AddValuePrivate(double value,
                                                            uint64_t time_now) {
-  CHECK(isinf(value) == 0);
-  CHECK(isnan(value) == 0);
+  CHECK(!std::isinf(value));
+  CHECK(!std::isnan(value));
 
   Entry<double> entry = {value, time_now};
   storage_.AddValue(entry);
