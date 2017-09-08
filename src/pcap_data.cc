@@ -596,9 +596,11 @@ PcapDataBinCache::Bins(const PcapDataTrace* trace, TraceSliceIndex slice,
   }
 
   size_t to_bring_in = std::max(kCacheLineBinCount, range);
-  //LOG(INFO) << "Miss " << start_bin << " -> " << end_bin << " slice " << slice
+  // LOG(INFO) << "Miss " << start_bin << " -> " << end_bin << " slice " <<
+  // slice
   //          << " current from " << cached_trace.starting_bin << " to "
-  //          << last_cached_bin << " will bring in " << to_bring_in << " trace "
+  //          << last_cached_bin << " will bring in " << to_bring_in << " trace
+  //          "
   //         << trace->id().ToString() << " " << CacheStats();
 
   bins.clear();
@@ -1154,6 +1156,8 @@ std::unique_ptr<BinSequence> PcapTraceFitStore::GetBinSequence(
   return to_return;
 }
 
+static constexpr size_t kExtraPadding = 100;
+
 // Performs binary search to pick a offset as large as possible into
 // traces_and_slices.
 static void PickRecursive(
@@ -1167,8 +1171,17 @@ static void PickRecursive(
   }
 
   size_t offset = from + delta;
-  auto new_sequence = nc::make_unique<BinSequence>(
-      traces_and_slices.begin(), std::next(traces_and_slices.begin(), offset));
+  std::unique_ptr<BinSequence> new_sequence;
+  if (offset >= kExtraPadding) {
+    size_t delta = offset - kExtraPadding;
+    new_sequence = nc::make_unique<BinSequence>(
+        traces_and_slices.begin(), std::next(traces_and_slices.begin(), delta));
+  } else {
+    double fraction = static_cast<double>(offset) / kExtraPadding;
+    auto tmp_sequence = nc::make_unique<BinSequence>(
+        traces_and_slices.begin(), std::next(traces_and_slices.begin(), 1));
+    new_sequence = std::move(tmp_sequence->PreciseSplitOrDie({fraction})[0]);
+  }
 
   std::unique_ptr<BinSequence> bin_sequence =
       new_sequence->CutFromStart(initial_window);
@@ -1202,18 +1215,8 @@ static std::unique_ptr<BinSequence> PickOrDie(
   nc::net::Bandwidth rate = nc::net::Bandwidth::Zero();
   std::unique_ptr<BinSequence> out;
   PickRecursive(traces_and_slices, initial_window, target_rate, 0,
-                traces_and_slices.size(), &out, &rate, cache);
-
-  if (!out) {
-    // We were unable to find even a single slice that would yield low queues,
-    // will just pick the first one and hope for the best.
-    out = nc::make_unique<BinSequence>(traces_and_slices.begin(),
-                                       std::next(traces_and_slices.begin(), 1));
-    out = out->CutFromStart(initial_window);
-    LOG(ERROR) << "Unable to pick traces to fit " << target_rate.Mbps()
-               << " instead picked mean " << out->MeanRate(cache).Mbps()
-               << "Mbps max " << out->MaxRate(cache).Mbps() << "Mbps";
-  }
+                kExtraPadding + traces_and_slices.size(), &out, &rate, cache);
+  CHECK(out);
 
   return out;
 }
