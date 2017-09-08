@@ -46,8 +46,10 @@ for metric, flow_count_scale, log_scale, x_label, x_min, x_max, y_min in [('opt_
     data_list = []
     for opt in OPTIMIZERS:
         data = defaultdict(dict)
+        print metric, opt, 'A'
         path_stretch_data = p.Parse(metric, '.*{}$'.format(opt))
         flow_count_data = p.Parse('opt_path_flow_count', '.*{}$'.format(opt))
+        print metric, opt
 
         for k, path_stretch_v in sorted(path_stretch_data.items()):
             flow_count_v = flow_count_data[('opt_path_flow_count', k[1])]

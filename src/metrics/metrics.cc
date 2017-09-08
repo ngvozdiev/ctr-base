@@ -75,6 +75,41 @@ void SaveEntryToProtobuf<BytesBlob>(const Entry<BytesBlob>& entry,
   *out->mutable_bytes_value() = entry.value;
 }
 
+template <>
+Entry<double> MetricHandle<double, true>::AddValuePrivate(double value,
+                                                          uint64_t time_now) {
+  CHECK(isinf(value) == 0);
+  CHECK(isnan(value) == 0);
+
+  Entry<double> entry = {value, time_now};
+  std::unique_lock<std::mutex> lock = GetLock();
+  storage_.AddValue(entry);
+
+  --log_tokens_;
+  if (log_tokens_ == 0) {
+    Persist();
+  }
+
+  return entry;
+}
+
+template <>
+Entry<double> MetricHandle<double, false>::AddValuePrivate(double value,
+                                                           uint64_t time_now) {
+  CHECK(isinf(value) == 0);
+  CHECK(isnan(value) == 0);
+
+  Entry<double> entry = {value, time_now};
+  storage_.AddValue(entry);
+
+  --log_tokens_;
+  if (log_tokens_ == 0) {
+    Persist();
+  }
+
+  return entry;
+}
+
 OutputStream::OutputStream(const std::string& file) {
   fd_ = open(file.c_str(), O_WRONLY | O_TRUNC | O_CREAT,  // open mode
              S_IREAD | S_IWRITE | S_IRGRP | S_IROTH | S_ISUID);

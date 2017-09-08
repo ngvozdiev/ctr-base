@@ -24,6 +24,11 @@ struct CityData {
         longitude(longitude),
         latitude(latitude) {}
 
+  std::string ToString() const {
+    return StrCat("name: ", name, " country: ", country_code, " pop: ",
+                  population);
+  }
+
   // Returns the distance between this city and another one.
   double DistanceKm(const CityData& other_city) const;
 
@@ -34,7 +39,7 @@ struct CityData {
   const std::string country_code;
 
   // Population.
-  const size_t population;
+  const uint64_t population;
 
   // Coordinates of the city in decimal degrees.
   const double longitude;

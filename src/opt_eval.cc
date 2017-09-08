@@ -400,6 +400,13 @@ int main(int argc, char** argv) {
     builder.ScaleDelay(FLAGS_delay_scale);
     auto graph = nc::make_unique<nc::net::GraphStorage>(builder);
 
+    nc::net::GraphStats stats = graph->Stats();
+    CHECK(!stats.sp_delay_percentiles.empty());
+    if (stats.sp_delay_percentiles.back() == nc::net::Delay::max()) {
+      LOG(INFO) << "Skipping " << topology_file << " graph partitioned ";
+      continue;
+    }
+
     size_t node_count = graph->AllNodes().Count();
     if (node_count > FLAGS_topology_size_limit) {
       LOG(INFO) << "Skipping " << topology_file << " / " << topology_file
@@ -429,8 +436,12 @@ int main(int argc, char** argv) {
           nc::lp::DemandMatrix::LoadRepetitaOrDie(
               nc::File::ReadFileToStringOrDie(tm_file), node_order,
               graph.get());
-      demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+      if (!demand_matrix) {
+        LOG(INFO) << "Skipping " << tm_file << " inconsistent TM";
+        continue;
+      }
 
+      demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
       std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
       to_process.emplace_back(top_file_trimmed, tm_file_trimmed,
                               std::move(demand_matrix));

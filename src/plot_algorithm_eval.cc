@@ -32,8 +32,6 @@ static constexpr char kPathDelayMetric[] = "opt_path_sp_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
-static constexpr char kTreenessMetric[] = "tm_treeness";
-static constexpr char kDiameterMetric[] = "tm_diameter_ms";
 static constexpr size_t kDiscreteMultiplier = 1000;
 static constexpr size_t kPercentilesCount = 10000;
 
@@ -210,18 +208,21 @@ static std::vector<double> GetPathRatios(const TMStateMap& tm_state_map,
   return out;
 }
 
-static std::vector<std::pair<double, double>> GetScatterData(
-    const std::map<std::string, double>& per_topology_x,
-    const TMStateMap& tm_state_map) {
-  std::vector<std::pair<double, double>> out;
-  for (const auto& topology_and_x : per_topology_x) {
-    const std::string& topology = topology_and_x.first;
-    double x = topology_and_x.second;
+static std::vector<double> GetTotalDelays(const TMStateMap& tm_state_map) {
+  std::vector<double> out;
+  for (const auto& key_and_data : tm_state_map) {
+    const OptimizerTMState& tm_state = *(key_and_data.second);
 
-    std::vector<double> ys = GetPathRatios(tm_state_map, &topology);
-    for (double y : ys) {
-      out.emplace_back(x, y);
+    double total_delay = 0;
+    for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
+      double flow_count = tm_state.path_flow_count[i];
+      double abs_stretch = tm_state.path_stretch_abs_ms[i];
+      double sp_delay = tm_state.path_sp_delay_ms[i];
+
+      total_delay += (sp_delay + abs_stretch) * flow_count;
     }
+
+    out.emplace_back(total_delay);
   }
 
   return out;
@@ -333,29 +334,23 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
     grapher.PlotCDF({}, to_plot);                                  \
   }
 
-static void PlotScatter(const std::map<std::string, TMStateMap>& data,
-                        const std::string& metric, const std::string& prefix) {
-  std::map<std::string, double> metric_map;
-  DataMap metric_data =
-      SimpleParseNumericDataNoTimestamps(FLAGS_metrics_dir, metric, ".*");
-  for (const auto& id_and_data : metric_data) {
-    const std::string& topology = id_and_data.first.second;
-    CHECK(id_and_data.second.size() == 1);
-    metric_map[topology] = id_and_data.second.front();
-  }
+static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
+                           const std::vector<std::string>& optimizers) {
+  std::vector<nc::viz::DataSeries2D> to_plot;
+  for (const std::string& opt : optimizers) {
+    const TMStateMap& state_map = nc::FindOrDie(data, opt);
 
-  for (const auto& opt_and_state_map : data) {
-    const std::string opt = opt_and_state_map.first;
-    const TMStateMap& state_map = opt_and_state_map.second;
+    std::vector<std::pair<double, double>> xy;
+    std::vector<double> total_delays = GetTotalDelays(state_map);
+    for (size_t i = 0; i < total_delays.size(); ++i) {
+      xy.emplace_back(i, total_delays[i]);
+    }
 
-    std::vector<nc::viz::DataSeries2D> to_plot;
-    std::vector<std::pair<double, double>> xy =
-        GetScatterData(metric_map, state_map);
     to_plot.push_back({opt, xy});
-
-    nc::viz::PythonGrapher grapher(nc::StrCat(prefix, "_scatter_", opt));
-    grapher.PlotLine({}, to_plot);
   }
+
+  nc::viz::PythonGrapher grapher("total_delays");
+  grapher.PlotLine({}, to_plot);
 }
 
 int main(int argc, char** argv) {
@@ -436,8 +431,7 @@ int main(int argc, char** argv) {
   PLOT1D("link_utilization_out", result_ptrs[i]->link_utilization_data);
   PLOT1D("ratios_out", result_ptrs[i]->ratios_data);
 
-  PlotScatter(data, kTreenessMetric, "treeness");
-  PlotScatter(data, kDiameterMetric, "diameter");
+  PlotTotalDelay(data, optimizers);
 
   //  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
   //      FLAGS_metrics_dir, "ctr_runtime_ms", ".*");

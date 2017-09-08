@@ -676,6 +676,14 @@ Entry<EntryType> MetricHandle<EntryType, ThreadSafe>::AddValuePrivate(
   return entry;
 }
 
+template <>
+Entry<double> MetricHandle<double, true>::AddValuePrivate(double value,
+                                                          uint64_t time_now);
+
+template <>
+Entry<double> MetricHandle<double, false>::AddValuePrivate(double value,
+                                                           uint64_t time_now);
+
 template <typename EntryType, bool ThreadSafe, typename... FieldTypes>
 typename Metric<EntryType, ThreadSafe, FieldTypes...>::HandleType* Metric<
     EntryType, ThreadSafe, FieldTypes...>::GetHandle(FieldTypes... fields) {
