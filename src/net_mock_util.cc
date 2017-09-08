@@ -63,6 +63,9 @@ DEFINE_uint64(tcp_tracer_flow_max_count, 50,
               "aggregate. Other aggregates' flow count is proportional.");
 DEFINE_double(exceed_probability, 0.001,
               "Probability convolution to exceed rate");
+DEFINE_bool(small_aggregates, false,
+            "If true will reduce each aggregate's rate so that evverything "
+            "fits on the shortest path.");
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -228,6 +231,13 @@ int main(int argc, char** argv) {
 
     std::unique_ptr<ctr::BinSequence> bin_sequence_extended =
         trace_store.ExtendBinSequence(*bin_sequence);
+
+    if (FLAGS_small_aggregates) {
+      // Will reduce the bin sequence by three orders of magnitude, hoping it
+      // will fit on the shortest path.
+      bin_sequence_extended =
+          std::move(bin_sequence_extended->PreciseSplitOrDie({0.001})[0]);
+    }
 
     initial_sequences.emplace(
         std::piecewise_construct,

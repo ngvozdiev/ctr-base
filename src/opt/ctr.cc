@@ -298,6 +298,14 @@ double CTROptimizer::OptimizePrivate(
                 << " links with no capacity " << links_with_no_capacity.Count();
     }
 
+    if (prev_obj_value != std::numeric_limits<double>::max() &&
+        std::abs(prev_obj_value - obj_value) < 0.01) {
+      if (FLAGS_debug_ctr) {
+        LOG(INFO) << "Unable to make progress";
+      }
+      break;
+    }
+
     prev_obj_value = obj_value;
     max_oversubscription = run_output.max_oversubscription;
     if (max_oversubscription <= 1.0) {

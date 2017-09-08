@@ -762,8 +762,6 @@ nc::net::Bandwidth BinSequence::MaxRate(PcapDataBinCache* cache) const {
 PBBinSequence BinSequence::ToProtobuf() const {
   PBBinSequence out;
   for (const TraceAndSlice& trace_and_slice : traces_) {
-    CHECK(trace_and_slice.precise_split == 1.0);
-
     PBTraceAndSlice* trace_and_slice_pb = out.add_traces_and_slices();
     *trace_and_slice_pb->mutable_id() =
         trace_and_slice.trace->id().ToProtobuf();
@@ -1160,7 +1158,7 @@ std::unique_ptr<BinSequence> PcapTraceFitStore::GetBinSequence(
   return to_return;
 }
 
-static constexpr size_t kExtraPadding = 100;
+static constexpr size_t kExtraPadding = 1000;
 
 // Performs binary search to pick a offset as large as possible into
 // traces_and_slices.
