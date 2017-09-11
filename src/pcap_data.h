@@ -465,19 +465,16 @@ class ObserverPack : public nc::htsim::PacketHandler {
 class BinSequenceGenerator {
  public:
   BinSequenceGenerator(const std::vector<const PcapDataTrace*>& all_traces,
-                       const std::vector<std::chrono::milliseconds>& offsets,
-                       size_t seed, PcapDataBinCache* cache);
+                       const std::vector<std::chrono::milliseconds>& offsets);
 
-  // Returns a BinSequence that will fit within the given 'target_rate' (its max
-  // rate will be less than the target rate) over 'init_window'.
+  // Returns a BinSequence that will fit within the given 'target_rate' (will
+  // have queues of 10ms or less) over 'init_window'.
   std::unique_ptr<BinSequence> Next(nc::net::Bandwidth target_rate,
-                                    std::chrono::microseconds init_window);
+                                    std::chrono::microseconds init_window,
+                                    PcapDataBinCache* cache,
+                                    std::mt19937* rnd) const;
 
  private:
-  PcapDataBinCache* cache_;
-
-  std::mt19937 rnd_;
-
   std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_;
 };
 
