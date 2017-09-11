@@ -578,31 +578,21 @@ std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
 PcapDataBinCache::Bins(const PcapDataTrace* trace, TraceSliceIndex slice,
                        size_t start_bin, size_t end_bin) {
   size_t bin_count = trace->ToProtobuf().bin_count();
+  size_t range = end_bin - start_bin;
   CHECK(end_bin <= bin_count);
   CHECK(start_bin <= end_bin);
 
   CachedTrace& cached_trace = cached_bins_[trace][slice];
   std::vector<TrimmedPcapDataTraceBin>& bins = cached_trace.bins;
-  size_t range = end_bin - start_bin;
-  CHECK(range < 100000) << range;
 
   size_t last_cached_bin = cached_trace.starting_bin + bins.size();
   if (cached_trace.starting_bin <= start_bin && last_cached_bin >= end_bin) {
     size_t from = start_bin - cached_trace.starting_bin;
     size_t to = from + range;
-    //    LOG(INFO) << "Hit " << start_bin << " -> " << end_bin << " slice " <<
-    //    slice;
     return {bins.begin() + from, bins.begin() + to};
   }
 
   size_t to_bring_in = std::max(kCacheLineBinCount, range);
-  // LOG(INFO) << "Miss " << start_bin << " -> " << end_bin << " slice " <<
-  // slice
-  //          << " current from " << cached_trace.starting_bin << " to "
-  //          << last_cached_bin << " will bring in " << to_bring_in << " trace
-  //          "
-  //         << trace->id().ToString() << " " << CacheStats();
-
   bins.clear();
   bins.reserve(to_bring_in);
 
@@ -1193,8 +1183,8 @@ static void PickRecursive(
       bin_sequence->SimulateQueue(target_rate, cache);
 
   if (max_queue_size > std::chrono::milliseconds(10)) {
-    LOG(ERROR) << "Offset " << offset << " max queue size "
-               << max_queue_size.count() << "ms";
+    //    LOG(ERROR) << "Offset " << offset << " max queue size "
+    //               << max_queue_size.count() << "ms";
     PickRecursive(traces_and_slices, initial_window, target_rate, from, offset,
                   out, out_rate, cache);
   } else {
@@ -1204,9 +1194,9 @@ static void PickRecursive(
       *out = std::move(bin_sequence);
     }
 
-    LOG(ERROR) << "Offset " << offset << " max queue size "
-               << max_queue_size.count() << "ms mean " << mean_rate.Mbps()
-               << "Mbps";
+    //    LOG(ERROR) << "Offset " << offset << " max queue size "
+    //               << max_queue_size.count() << "ms mean " << mean_rate.Mbps()
+    //               << "Mbps";
     PickRecursive(traces_and_slices, initial_window, target_rate, offset, to,
                   out, out_rate, cache);
   }
@@ -1236,9 +1226,7 @@ static std::unique_ptr<BinSequence> PickOrDie(
 
 BinSequenceGenerator::BinSequenceGenerator(
     const std::vector<const PcapDataTrace*>& all_traces,
-    const std::vector<std::chrono::milliseconds>& offsets, size_t seed,
-    PcapDataBinCache* cache)
-    : cache_(cache), rnd_(seed) {
+    const std::vector<std::chrono::milliseconds>& offsets) {
   for (const PcapDataTrace* trace : all_traces) {
     for (std::chrono::milliseconds offset : offsets) {
       std::vector<BinSequence::TraceAndSlice> traces_and_slices =
@@ -1251,13 +1239,14 @@ BinSequenceGenerator::BinSequenceGenerator(
 }
 
 std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
-    nc::net::Bandwidth target_rate, std::chrono::microseconds init_window) {
+    nc::net::Bandwidth target_rate, std::chrono::microseconds init_window,
+    PcapDataBinCache* cache, std::mt19937* rnd) const {
   std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_cpy =
       all_traces_and_slices_;
   std::shuffle(all_traces_and_slices_cpy.begin(),
-               all_traces_and_slices_cpy.end(), rnd_);
+               all_traces_and_slices_cpy.end(), *rnd);
 
-  return PickOrDie(all_traces_and_slices_cpy, init_window, target_rate, cache_);
+  return PickOrDie(all_traces_and_slices_cpy, init_window, target_rate, cache);
 }
 
 }  // namespace e2e
