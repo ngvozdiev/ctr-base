@@ -204,6 +204,12 @@ class RoutingConfiguration : public TrafficMatrix {
   // Returns sum of all flows' delay.
   nc::net::Delay TotalPerFlowDelay() const;
 
+  // Returns a map from a link to its utilization.
+  nc::net::GraphLinkMap<double> LinkUtilizations() const;
+
+  // Returns the max link utilization.
+  double MaxLinkUtilization() const;
+
   // Makes a copy.
   std::unique_ptr<RoutingConfiguration> Copy() const;
 

@@ -510,6 +510,50 @@ nc::net::Delay RoutingConfiguration::TotalPerFlowDelay() const {
   return nc::net::Delay(static_cast<size_t>(total));
 }
 
+nc::net::GraphLinkMap<double> RoutingConfiguration::LinkUtilizations() const {
+  // A map from a link to the total load over the link.
+  std::map<nc::net::GraphLinkIndex, nc::net::Bandwidth> link_to_total_load;
+  for (const auto& aggregate_and_aggregate_output : configuration_) {
+    const AggregateId& aggregate_id = aggregate_and_aggregate_output.first;
+    const std::vector<RouteAndFraction>& routes =
+        aggregate_and_aggregate_output.second;
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(demands(), aggregate_id);
+    nc::net::Bandwidth total_aggregate_demand = demand_and_flow_count.first;
+
+    for (const auto& route : routes) {
+      const nc::net::Walk* path = route.first;
+      double fraction = route.second;
+      CHECK(fraction > 0);
+
+      for (nc::net::GraphLinkIndex link : path->links()) {
+        link_to_total_load[link] += total_aggregate_demand * fraction;
+      }
+    }
+  }
+
+  nc::net::GraphLinkMap<double> out;
+  for (const auto& link_and_total_load : link_to_total_load) {
+    nc::net::GraphLinkIndex link_index = link_and_total_load.first;
+    const nc::net::GraphLink* link = graph_->GetLink(link_index);
+
+    nc::net::Bandwidth total_load = link_and_total_load.second;
+    double utilization = total_load / link->bandwidth();
+    out[link_index] = utilization;
+  }
+
+  return out;
+}
+
+double RoutingConfiguration::MaxLinkUtilization() const {
+  nc::net::GraphLinkMap<double> link_utilizations = LinkUtilizations();
+  double max_utilization = 0;
+  for (const auto& link_and_utilization : link_utilizations) {
+    max_utilization = std::max(max_utilization, *link_and_utilization.second);
+  }
+  return max_utilization;
+}
+
 std::unique_ptr<RoutingConfiguration> RoutingConfiguration::Copy() const {
   auto out = nc::make_unique<RoutingConfiguration>(
       *static_cast<const TrafficMatrix*>(this));

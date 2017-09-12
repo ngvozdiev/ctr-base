@@ -140,5 +140,5 @@ add_executable(geo_main src/geo/geo_main.cc)
 target_link_libraries(geo_main geo_lib gflags)
 
 add_executable(top_grow src/top_grow.cc)
-target_link_libraries(top_grow geo_lib ncode gflags)
+target_link_libraries(top_grow geo_lib ctr_base metrics gflags)
 

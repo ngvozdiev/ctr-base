@@ -505,6 +505,7 @@ PcapDataTrace::PcapDataTrace(const std::string& file, size_t offset)
     : store_file_(file),
       offset_in_file_(offset),
       trace_pb_(GetPcapDataTrace(file, offset)),
+      trace_pb_size_(trace_pb_.ByteSize()),
       id_(trace_pb_.id()) {}
 
 size_t PcapDataTrace::TotalSizeInFile() const {
@@ -522,10 +523,9 @@ std::unique_ptr<nc::htsim::PcapPacketGen> PcapDataTrace::GetPacketGenerator(
 }
 
 size_t PcapDataTrace::TraceProtobufSize() const {
-  uint32_t size = trace_pb_.ByteSize();
   uint32_t extra =
-      ::google::protobuf::io::CodedOutputStream::VarintSize32(size);
-  return size + extra;
+      ::google::protobuf::io::CodedOutputStream::VarintSize32(trace_pb_size_);
+  return trace_pb_size_ + extra;
 }
 
 void PcapDataTrace::TCPSYNFlows(

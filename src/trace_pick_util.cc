@@ -30,18 +30,16 @@ DEFINE_uint64(seed, 1, "Seed for the RNG");
 DEFINE_uint64(threads, 4, "Number of threads");
 DEFINE_uint64(passes, 100, "Number of passes to perform for each rate");
 
-using Input =
-    std::tuple<nc::net::Bandwidth, size_t, const ctr::BinSequenceGenerator*>;
+using Input = std::tuple<nc::net::Bandwidth, size_t, ctr::PcapDataBinCache*,
+                         const ctr::BinSequenceGenerator*>;
 
 static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
     const Input& input) {
   nc::net::Bandwidth demand;
   size_t i;
+  ctr::PcapDataBinCache* bin_cache;
   const ctr::BinSequenceGenerator* sequence_generator;
-  std::tie(demand, i, sequence_generator) = input;
-
-  // Each thread get its own cache.
-  ctr::PcapDataBinCache bin_cache;
+  std::tie(demand, i, bin_cache, sequence_generator) = input;
 
   LOG(INFO) << "Looking for traces to match " << demand.Mbps() << "Mbps";
   std::unique_ptr<ctr::BinSequence> bin_sequence;
@@ -57,7 +55,7 @@ static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
     LOG(INFO) << "Pass " << pass_num;
     std::unique_ptr<ctr::BinSequence> bin_sequence_candidate =
         sequence_generator->Next(demand, milliseconds(FLAGS_period_duration_ms),
-                                 &rnd);
+                                 bin_cache, &rnd);
     if (!bin_sequence_candidate) {
       continue;
     }
@@ -86,15 +84,17 @@ int main(int argc, char** argv) {
   nc::net::GraphStorage graph(builder);
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
-  ctr::PcapDataBinCache bin_cache;
   ctr::BinSequenceGenerator bin_sequence_generator(
-      trace_store.AllTraces(), {milliseconds(0), seconds(20)}, &bin_cache);
+      trace_store.AllTraces(), {milliseconds(0), seconds(20)});
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
           nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
           &graph);
   demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+
+  // The bin cache.
+  ctr::PcapDataBinCache bin_cache;
 
   std::vector<Input> inputs;
   for (size_t i = 0; i < demand_matrix->elements().size(); ++i) {
