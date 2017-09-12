@@ -61,13 +61,15 @@ static constexpr size_t kTopAggregateFlowCount = 10000;
 
 static auto* total_delay_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint32_t, uint32_t>("total_delay_ms",
-                                                   "Sum of all delays", "Step");
+        -> GetThreadSafeMetric<uint32_t>("total_delay_ms", "Sum of all delays");
 
 static auto* max_link_utilization =
-    nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<double, uint32_t>(
-            "max_link_utilization", "Maximum link utilization", "Step");
+    nc::metrics::DefaultMetricManager() -> GetThreadSafeMetric<double>(
+        "max_link_utilization", "Maximum link utilization");
+
+static auto* capacity_added =
+    nc::metrics::DefaultMetricManager() -> GetThreadSafeMetric<double>(
+        "capacity_added", "Capacity added to the network (in Mbps)");
 
 namespace ctr {
 
@@ -144,8 +146,8 @@ static std::pair<double, bool> Cost(const nc::net::GraphBuilder& topology,
 // Records information about the routing.
 static void RecordRoutingConfig(const RoutingConfiguration& routing,
                                 uint32_t step) {
-  auto* total_path_handle = total_delay_ms->GetHandle(step);
-  auto* link_utilization_handle = max_link_utilization->GetHandle(step);
+  auto* total_path_handle = total_delay_ms->GetHandle();
+  auto* link_utilization_handle = max_link_utilization->GetHandle();
 
   nc::net::Delay total_delay = routing.TotalPerFlowDelay();
   total_path_handle->AddValue(duration_cast<milliseconds>(total_delay).count());
@@ -165,6 +167,7 @@ static nc::net::GraphBuilder GrowNetwork(
     const nc::net::GraphBuilder& topology, const TMElements& tm_elements,
     const std::map<std::pair<std::string, std::string>, milliseconds>& delays) {
   nc::net::GraphBuilder to_return = topology;
+  double total_added = 0.0;
   while (true) {
     nc::net::GraphBuilder best_topology;
     double best_cost = std::numeric_limits<double>::max();
@@ -218,6 +221,7 @@ static nc::net::GraphBuilder GrowNetwork(
     CHECK(best_cost != std::numeric_limits<double>::max());
     LOG(INFO) << "Growing network, best cost " << best_cost << " will add "
               << best_link_to_string << " fits " << best_fits;
+    total_added += FLAGS_link_speed_Mbps;
 
     to_return = best_topology;
     if (best_fits) {
@@ -225,6 +229,7 @@ static nc::net::GraphBuilder GrowNetwork(
     }
   }
 
+  capacity_added->GetHandle()->AddValue(total_added);
   return to_return;
 }
 
@@ -254,6 +259,8 @@ static void Run(
       // Need to grow the network.
       current_topology =
           GrowNetwork(topology, scaled_demands->elements(), delays);
+    } else {
+      capacity_added->GetHandle()->AddValue(0.0);
     }
 
     // Perform a single step.
