@@ -50,6 +50,7 @@ DEFINE_string(
     optimizer, "CTR",
     "The optimizer to use. One of SP,CTR,MinMax,MinMaxLD,MinMaxK10,B4.");
 DEFINE_uint64(threads, 4, "Number of threads to use");
+DEFINE_uint64(steps, 80, "Number of steps");
 
 using namespace std::chrono;
 
@@ -239,7 +240,7 @@ static void Run(
   nc::net::GraphBuilder current_topology = topology;
   TMElements current_elements = tm_elements;
 
-  for (size_t i = 0; i < 100; ++i) {
+  for (size_t i = 0; i < FLAGS_steps; ++i) {
     LOG(INFO) << "Step " << i;
 
     // Will first run to record information.
