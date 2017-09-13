@@ -10,6 +10,7 @@
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
+#include "ncode_common/src/strutil.h"
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
@@ -22,12 +23,12 @@ DEFINE_string(topology, "", "The topology");
 DEFINE_string(traffic_matrix, "", "A file with a traffic matrix");
 DEFINE_string(pcap_trace_store, "trace_store.pb",
               "A file with information about .pcap traces");
-DEFINE_string(out_fit_store, "trace_store_fit.pb",
-              "A file with a series of PBTraceToFitRate protobufs");
+DEFINE_string(out, "",
+              "Will output a series of PBTraceToFitRate protobufs, they will "
+              "only be compatible with the same trace_store.pb");
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_uint64(seed, 1, "Seed for the RNG");
-DEFINE_uint64(threads, 4, "Number of threads");
 DEFINE_uint64(passes, 100, "Number of passes to perform for each rate");
 
 using Input = std::tuple<nc::net::Bandwidth, size_t, ctr::PcapDataBinCache*,
@@ -71,11 +72,26 @@ static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
   return bin_sequence;
 }
 
+static std::string StripExtension(const std::string& filename) {
+  std::size_t found = filename.find_last_of(".");
+  return filename.substr(0, found);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   CHECK(!FLAGS_topology.empty());
   CHECK(!FLAGS_traffic_matrix.empty());
+
+  std::string out = FLAGS_out;
+  if (out.empty()) {
+    out = nc::StrCat(StripExtension(FLAGS_traffic_matrix), "_fit.pb");
+  }
+
+  if (nc::File::Exists(out)) {
+    LOG(ERROR) << "Output " << out << " already exists";
+    return 0;
+  }
 
   std::vector<std::string> node_order;
   nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
@@ -102,14 +118,18 @@ int main(int argc, char** argv) {
     inputs.emplace_back(demand, i, &bin_cache, &bin_sequence_generator);
   }
 
+  // It is tricky to get good-performance thread-safe code in pcap_data.cc
+  // because of the copies the cache would have to do. So for now we only do one
+  // thread.
   std::vector<std::unique_ptr<ctr::BinSequence>> results =
       nc::RunInParallelWithResult<Input, ctr::BinSequence>(
           inputs, [](const Input& input) { return HandleMatrixElement(input); },
-          FLAGS_threads);
+          1);
 
   for (size_t i = 0; i < demand_matrix->elements().size(); ++i) {
     nc::net::Bandwidth demand = std::get<0>(inputs[i]);
-    ctr::PcapTraceFitStore::AddToStore(demand, *results[i], FLAGS_out_fit_store,
-                                       &bin_cache);
+    ctr::PcapTraceFitStore::AddToStore(demand, *results[i], out, &bin_cache);
   }
+
+  return 0;
 }

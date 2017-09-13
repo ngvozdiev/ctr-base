@@ -43,14 +43,9 @@ DEFINE_double(
     light_speed, 200.0,
     "Speed of light (in km per millisecond), default is speed in fiber");
 DEFINE_double(link_speed_Mbps, 1000, "All new links will be this fast");
-DEFINE_double(scale_step, 1.01, "By how much to scale the TM each step");
-DEFINE_double(capacity_grow_threshold, 1.3,
-              "What the limit is for growing capacity");
 DEFINE_string(
     optimizer, "CTR",
     "The optimizer to use. One of SP,CTR,MinMax,MinMaxLD,MinMaxK10,B4.");
-DEFINE_uint64(threads, 4, "Number of threads to use");
-DEFINE_uint64(steps, 80, "Number of steps");
 
 using namespace std::chrono;
 
@@ -241,8 +236,6 @@ static void Run(
   TMElements current_elements = tm_elements;
 
   for (size_t i = 0; i < FLAGS_steps; ++i) {
-    LOG(INFO) << "Step " << i;
-
     // Will first run to record information.
     nc::net::GraphStorage graph(current_topology);
     PathProvider path_provider(&graph);
@@ -250,6 +243,8 @@ static void Run(
     nc::lp::DemandMatrix demand_matrix(current_elements, &graph);
     auto output = RunOptimizer(demand_matrix, &path_provider);
     RecordRoutingConfig(*output, i);
+    LOG(INFO) << "Step " << i << " " << output->TotalPerFlowDelay().count()
+              << " links " << current_topology.links().size();
 
     // Will grow the TM to figure out if any new links need to be added.
     auto scaled_demands = demand_matrix.Scale(FLAGS_capacity_grow_threshold);
@@ -259,7 +254,7 @@ static void Run(
     if (!all_fit) {
       // Need to grow the network.
       current_topology =
-          GrowNetwork(topology, scaled_demands->elements(), delays);
+          GrowNetwork(current_topology, scaled_demands->elements(), delays);
     } else {
       capacity_added->GetHandle()->AddValue(0.0);
     }

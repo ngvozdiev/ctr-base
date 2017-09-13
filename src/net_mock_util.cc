@@ -40,7 +40,7 @@ DEFINE_string(topology, "", "A file with a topology");
 DEFINE_string(traffic_matrix, "", "A file with a traffic matrix");
 DEFINE_string(pcap_trace_store, "trace_store.pb",
               "A file with information about .pcap traces");
-DEFINE_string(pcap_trace_fit_store, "trace_store_fit.pb",
+DEFINE_string(pcap_trace_fit_store, "",
               "A file with a series of PBTraceToFitRate protobufs");
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_uint64(history_bin_size_ms, 100, "How big each history bin is");
@@ -178,6 +178,11 @@ static void HandleDefault(
   event_queue->RunAndStopIn(milliseconds(FLAGS_duration_ms));
 }
 
+static std::string StripExtension(const std::string& filename) {
+  std::size_t found = filename.find_last_of(".");
+  return filename.substr(0, found);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
@@ -210,9 +215,14 @@ int main(int argc, char** argv) {
   }
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
-  ctr::PcapTraceFitStore trace_fit_store(FLAGS_pcap_trace_fit_store,
-                                         &trace_store);
+  std::string fit_store = FLAGS_pcap_trace_fit_store;
+  if (fit_store.empty()) {
+    fit_store = nc::StrCat(StripExtension(FLAGS_traffic_matrix), "_fit.pb");
+  }
+  CHECK(nc::File::Exists(fit_store)) << " fit store does not exist "
+                                     << fit_store;
 
+  ctr::PcapTraceFitStore trace_fit_store(fit_store, &trace_store);
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(
           nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,

@@ -311,10 +311,6 @@ class PcapDataBinCache {
   // The cached data.
   std::map<const PcapDataTrace*, TraceSliceMap<CachedTrace>> cached_bins_;
 
-  std::mutex mu_;
-
-  std::condition_variable iterators_valid_;
-
   DISALLOW_COPY_AND_ASSIGN(PcapDataBinCache);
 };
 
