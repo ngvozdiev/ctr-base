@@ -1,71 +1,69 @@
-// Generates a series of topologies from a set of locations. Each of
-// the topologies will have a progressively higher level of connectivity,
-// starting from no connectivity and ending at a full clique. Each link will
-// have a delay set up to be the speed of light in fiber.
-
 #include <gflags/gflags.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <algorithm>
 #include <chrono>
-#include <limits>
+#include <iostream>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
-#include "ncode_common/src/map_util.h"
 #include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/strutil.h"
-#include "ncode_common/src/thread_runner.h"
-#include "ncode_common/src/viz/web_page.h"
 #include "common.h"
 #include "geo/geo.h"
 #include "metrics/metrics.h"
 #include "opt/ctr.h"
 #include "opt/opt.h"
 #include "opt/path_provider.h"
+#include "opt_eval.h"
 
 DEFINE_string(cities_file, "cities5000.txt", "Location of the cities file");
-DEFINE_string(topology_file, "", "Topology file");
-DEFINE_string(tm_file, "", "Traffic matrix file");
-DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
-DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_double(
     light_speed, 200.0,
     "Speed of light (in km per millisecond), default is speed in fiber");
 DEFINE_double(link_speed_Mbps, 1000, "All new links will be this fast");
-DEFINE_string(
-    optimizer, "CTR",
-    "The optimizer to use. One of SP,CTR,MinMax,MinMaxLD,MinMaxK10,B4.");
+DEFINE_string(optimizers, "SP,CTR,MinMax,MinMaxLD,MinMaxK10,B4",
+              "The optimizers to use, comma-separated.");
 
 using namespace std::chrono;
+
+static auto* decreasing_delay =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string,
+                               bool>(
+            "decreasing_delay_fraction",
+            "Fraction of aggregates whose delay decreases", "Topology",
+            "Traffic matrix", "Optimizer", "New link");
+
+static auto* increasing_delay =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string,
+                               bool>(
+            "increasing_delay_fraction",
+            "Fraction of aggregates whose delay increases", "Topology",
+            "Traffic matrix", "Optimizer", "New link");
+
+static auto* increasing_overload =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string,
+                               bool>(
+            "increasing_overload_fraction",
+            "Fraction of aggregates that encounter more congestion", "Topology",
+            "Traffic matrix", "Optimizer", "New link");
 
 // Elements of a traffic matrix.
 using TMElements = std::vector<nc::lp::DemandMatrixElement>;
 
 // Number of flows in the most loaded aggregate.
 static constexpr size_t kTopAggregateFlowCount = 10000;
-
-static auto* total_delay_ms =
-    nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint32_t>("total_delay_ms", "Sum of all delays");
-
-static auto* max_link_utilization =
-    nc::metrics::DefaultMetricManager() -> GetThreadSafeMetric<double>(
-        "max_link_utilization", "Maximum link utilization");
-
-static auto* capacity_added =
-    nc::metrics::DefaultMetricManager() -> GetThreadSafeMetric<double>(
-        "capacity_added", "Capacity added to the network (in Mbps)");
 
 namespace ctr {
 
@@ -92,180 +90,68 @@ static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
 }
 
 static std::unique_ptr<RoutingConfiguration> RunOptimizer(
-    const nc::lp::DemandMatrix& demand_matrix, PathProvider* provider) {
+    const std::string& opt_string, const nc::lp::DemandMatrix& demand_matrix,
+    PathProvider* provider) {
   auto tm = FromDemandMatrix(demand_matrix);
 
   std::unique_ptr<Optimizer> opt;
-  if (FLAGS_optimizer == "CTR") {
+  if (opt_string == "CTR") {
     opt = nc::make_unique<CTROptimizer>(provider, 1.0, false, false);
-  } else if (FLAGS_optimizer == "MinMax") {
+  } else if (opt_string == "MinMax") {
     opt = nc::make_unique<MinMaxOptimizer>(provider, 1.0, false);
-  } else if (FLAGS_optimizer == "MinMaxLD") {
+  } else if (opt_string == "MinMaxLD") {
     opt = nc::make_unique<MinMaxOptimizer>(provider, 1.0, true);
-  } else if (FLAGS_optimizer == "MinMaxK10") {
+  } else if (opt_string == "MinMaxK10") {
     opt = nc::make_unique<MinMaxPathBasedOptimizer>(provider, 1.0, true, 10);
-  } else if (FLAGS_optimizer == "B4") {
+  } else if (opt_string == "B4") {
     opt = nc::make_unique<B4Optimizer>(provider, false, 1.0);
-  } else if (FLAGS_optimizer == "SP") {
+  } else if (opt_string == "SP") {
     opt = nc::make_unique<ShortestPathOptimizer>(provider);
   } else {
-    LOG(FATAL) << "Bad optimizer " << FLAGS_optimizer;
+    LOG(FATAL) << "Bad optimizer " << opt_string;
   }
 
   return opt->Optimize(*tm);
 }
 
-// Scores a combination of topology and TM.
-static std::pair<double, bool> Cost(const nc::net::GraphBuilder& topology,
-                                    const TMElements& tm_elements) {
-  nc::net::GraphStorage graph(topology);
-  PathProvider path_provider(&graph);
-  nc::lp::DemandMatrix demand_matrix(tm_elements, &graph);
-  auto routing = RunOptimizer(demand_matrix, &path_provider);
+static void Record(const OptEvalInput& input,
+                   const RoutingConfiguration& routing,
+                   const RoutingConfiguration& new_routing,
+                   const std::string& opt, bool new_link) {
+  LOG(INFO) << routing.routes().size() << " vs " << new_routing.routes().size();
+  RoutingConfigurationDelta delta = routing.GetDifference(new_routing);
+  double increasing_delay_count = 0;
+  double decreasing_delay_count = 0;
+  for (const auto& aggregate_and_delta : delta.aggregates) {
+    const AggregateDelta& aggregate_delta = aggregate_and_delta.second;
 
-  double total_oversubscription = 0;
-  double max_utilization = 0;
-  nc::net::GraphLinkMap<double> link_utilizations = routing->LinkUtilizations();
-  for (const auto& link_and_utilization : link_utilizations) {
-    double utilization = *(link_and_utilization.second);
-
-    double oversubscription = utilization - 1.0;
-    oversubscription = std::max(0.0, oversubscription);
-    total_oversubscription += oversubscription;
-
-    max_utilization = std::max(max_utilization, utilization);
-  }
-
-  return {total_oversubscription, max_utilization <= 1.0};
-}
-
-// Records information about the routing.
-static void RecordRoutingConfig(const RoutingConfiguration& routing,
-                                uint32_t step) {
-  auto* total_path_handle = total_delay_ms->GetHandle();
-  auto* link_utilization_handle = max_link_utilization->GetHandle();
-
-  nc::net::Delay total_delay = routing.TotalPerFlowDelay();
-  total_path_handle->AddValue(duration_cast<milliseconds>(total_delay).count());
-
-  double max_utilization = routing.MaxLinkUtilization();
-  link_utilization_handle->AddValue(max_utilization);
-
-  nc::viz::HtmlPage page;
-  routing.ToHTML(&page);
-  nc::File::WriteStringToFile(page.Construct(),
-                              nc::StrCat("top_grow_step_", step, ".html"));
-}
-
-// Will add a single link (or increase the capacity of existing one) that
-// minimizes the overall cost.
-static nc::net::GraphBuilder GrowNetwork(
-    const nc::net::GraphBuilder& topology, const TMElements& tm_elements,
-    const std::map<std::pair<std::string, std::string>, milliseconds>& delays) {
-  nc::net::GraphBuilder to_return = topology;
-  double total_added = 0.0;
-  while (true) {
-    nc::net::GraphBuilder best_topology;
-    double best_cost = std::numeric_limits<double>::max();
-    bool best_fits = false;
-    std::string best_link_to_string;
-
-    std::vector<nc::net::GraphBuilder> to_run;
-    std::vector<std::string> links_added_to_string;
-    std::set<std::string> all_nodes = topology.AllNodeNames();
-    for (const std::string& src : all_nodes) {
-      for (const std::string& dst : all_nodes) {
-        if (src >= dst) {
-          continue;
-        }
-
-        nc::net::GraphBuilder new_topology = to_return;
-        nc::net::Delay delay =
-            nc::FindOrDieNoPrint(delays, std::make_pair(src, dst));
-        nc::net::Bandwidth bw =
-            nc::net::Bandwidth::FromMBitsPerSecond(FLAGS_link_speed_Mbps);
-        new_topology.AddLink({src, dst, bw, delay});
-        new_topology.AddLink({dst, src, bw, delay});
-        new_topology.RemoveMultipleLinks();
-        to_run.emplace_back(new_topology);
-        links_added_to_string.emplace_back(nc::StrCat(src, "->", dst));
-      }
-    }
-
-    std::vector<std::unique_ptr<std::pair<double, bool>>> output =
-        nc::RunInParallelWithResult<nc::net::GraphBuilder,
-                                    std::pair<double, bool>>(
-            to_run, [&tm_elements](const nc::net::GraphBuilder& builder) {
-              return nc::make_unique<std::pair<double, bool>>(
-                  Cost(builder, tm_elements));
-            }, FLAGS_threads);
-
-    for (size_t i = 0; i < to_run.size(); ++i) {
-      const nc::net::GraphBuilder& new_topology = to_run[i];
-      double cost;
-      bool fits;
-      std::tie(cost, fits) = *(output[i]);
-
-      if (cost < best_cost) {
-        best_topology = new_topology;
-        best_cost = cost;
-        best_link_to_string = links_added_to_string[i];
-        best_fits = fits;
-      }
-    }
-
-    CHECK(best_cost != std::numeric_limits<double>::max());
-    LOG(INFO) << "Growing network, best cost " << best_cost << " will add "
-              << best_link_to_string << " fits " << best_fits;
-    total_added += FLAGS_link_speed_Mbps;
-
-    to_return = best_topology;
-    if (best_fits) {
-      break;
+    double on_longer_path = aggregate_delta.fraction_on_longer_path;
+    double on_shorter_path = aggregate_delta.fraction_delta -
+                             aggregate_delta.fraction_on_longer_path;
+    double net = on_shorter_path - on_longer_path;
+    if (net > 0.001) {
+      ++decreasing_delay_count;
+    } else if (net < 0.001) {
+      ++increasing_delay_count;
     }
   }
 
-  capacity_added->GetHandle()->AddValue(total_added);
-  return to_return;
+  double increasing_fraction = increasing_delay_count / delta.aggregates.size();
+  double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
+
+  increasing_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+      ->AddValue(increasing_fraction);
+  decreasing_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+      ->AddValue(decreasing_fraction);
+
+  size_t overloaded_before = routing.OverloadedAggregates();
+  size_t overloaded_after = routing.OverloadedAggregates();
+  double net_overload = overloaded_after - overloaded_before;
+  double overload_fraction = net_overload / delta.aggregates.size();
+  increasing_overload->GetHandle(input.topology_file, input.tm_file, opt,
+                                 new_link)
+      ->AddValue(overload_fraction);
 }
-
-static void Run(
-    const nc::net::GraphBuilder& topology, const TMElements& tm_elements,
-    const std::map<std::pair<std::string, std::string>, milliseconds>& delays) {
-  nc::net::GraphBuilder current_topology = topology;
-  TMElements current_elements = tm_elements;
-
-  for (size_t i = 0; i < FLAGS_steps; ++i) {
-    // Will first run to record information.
-    nc::net::GraphStorage graph(current_topology);
-    PathProvider path_provider(&graph);
-
-    nc::lp::DemandMatrix demand_matrix(current_elements, &graph);
-    auto output = RunOptimizer(demand_matrix, &path_provider);
-    RecordRoutingConfig(*output, i);
-    LOG(INFO) << "Step " << i << " " << output->TotalPerFlowDelay().count()
-              << " links " << current_topology.links().size();
-
-    // Will grow the TM to figure out if any new links need to be added.
-    auto scaled_demands = demand_matrix.Scale(FLAGS_capacity_grow_threshold);
-    output = RunOptimizer(*scaled_demands, &path_provider);
-
-    bool all_fit = output->MaxLinkUtilization() <= 1.0;
-    if (!all_fit) {
-      // Need to grow the network.
-      current_topology =
-          GrowNetwork(current_topology, scaled_demands->elements(), delays);
-    } else {
-      capacity_added->GetHandle()->AddValue(0.0);
-    }
-
-    // Perform a single step.
-    scaled_demands = demand_matrix.Scale(FLAGS_scale_step);
-    current_elements = scaled_demands->elements();
-  }
-}
-
-}  // namespace ctr
 
 static const nc::geo::CityData* GetCity(const std::string& name,
                                         nc::geo::Localizer* localizer) {
@@ -278,44 +164,68 @@ static const nc::geo::CityData* GetCity(const std::string& name,
   return city_data;
 }
 
+static void ProcessInput(const OptEvalInput& input, const std::string& opt,
+                         nc::geo::Localizer* localizer) {
+  const nc::lp::DemandMatrix& old_demand_matrix = *(input.demand_matrix);
+  const nc::net::GraphStorage* old_graph = old_demand_matrix.graph();
+  PathProvider old_path_provider(old_graph);
+  auto old_routing = RunOptimizer(opt, old_demand_matrix, &old_path_provider);
+
+  nc::net::GraphNodeSet all_nodes = old_graph->AllNodes();
+  for (nc::net::GraphNodeIndex src : all_nodes) {
+    for (nc::net::GraphNodeIndex dst : all_nodes) {
+      if (src <= dst) {
+        continue;
+      }
+
+      const std::string& src_id = old_graph->GetNode(src)->id();
+      const std::string& dst_id = old_graph->GetNode(dst)->id();
+
+      const nc::geo::CityData* src_city = GetCity(src_id, localizer);
+      const nc::geo::CityData* dst_city = GetCity(dst_id, localizer);
+      double distance_km = src_city->DistanceKm(*dst_city);
+      uint32_t delay_ms = distance_km / FLAGS_light_speed;
+      delay_ms = std::max(delay_ms, static_cast<uint32_t>(1));
+      bool new_link = !old_graph->HasLink(src_id, dst_id);
+
+      nc::net::Bandwidth bw =
+          nc::net::Bandwidth::FromMBitsPerSecond(FLAGS_link_speed_Mbps);
+
+      nc::net::GraphBuilder new_topology = old_graph->ToBuilder();
+      new_topology.AddLink({src_id, dst_id, bw, milliseconds(delay_ms)});
+      new_topology.AddLink({dst_id, src_id, bw, milliseconds(delay_ms)});
+      new_topology.RemoveMultipleLinks();
+      nc::net::GraphStorage new_graph(new_topology);
+      PathProvider new_path_provider(&new_graph);
+      auto new_routing =
+          RunOptimizer(opt, nc::lp::DemandMatrix(old_demand_matrix, &new_graph),
+                       &new_path_provider);
+      Record(input, *old_routing, *new_routing, opt, new_link);
+    }
+  }
+}
+
+}  // namespace ctr
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
   nc::geo::Localizer localizer(FLAGS_cities_file);
 
-  std::vector<std::string> node_order;
-  nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
-      nc::File::ReadFileToStringOrDie(FLAGS_topology_file), &node_order);
-  builder.RemoveMultipleLinks();
-  builder.ScaleCapacity(FLAGS_link_capacity_scale);
-  builder.ScaleDelay(FLAGS_delay_scale);
+  // Will switch off timestamps.
+  auto timestamp_provider =
+      ::nc::make_unique<nc::metrics::NullTimestampProvider>();
+  nc::metrics::DefaultMetricManager()->set_timestamp_provider(
+      std::move(timestamp_provider));
 
-  nc::net::GraphStorage graph(builder);
-  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(FLAGS_tm_file), node_order, &graph);
+  std::vector<std::unique_ptr<nc::net::GraphStorage>> graphs;
+  std::vector<ctr::OptEvalInput> to_process;
+  std::tie(graphs, to_process) = ctr::GetOptEvalInputs();
 
-  // Will record the delays between all N * (N - 1) nodes.
-  std::map<std::pair<std::string, std::string>, milliseconds> delays;
-  nc::net::GraphNodeSet all_nodes = graph.AllNodes();
-  for (nc::net::GraphNodeIndex src : all_nodes) {
-    for (nc::net::GraphNodeIndex dst : all_nodes) {
-      if (src == dst) {
-        continue;
-      }
-
-      const std::string& src_id = graph.GetNode(src)->id();
-      const std::string& dst_id = graph.GetNode(dst)->id();
-
-      const nc::geo::CityData* src_city = GetCity(src_id, &localizer);
-      const nc::geo::CityData* dst_city = GetCity(dst_id, &localizer);
-      double distance_km = src_city->DistanceKm(*dst_city);
-
-      uint32_t delay_ms = distance_km / FLAGS_light_speed;
-      delay_ms = std::max(delay_ms, static_cast<uint32_t>(1));
-      delays[{src_id, dst_id}] = milliseconds(delay_ms);
+  std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
+  for (const auto& opt : optimizers) {
+    for (const auto& input : to_process) {
+      ctr::ProcessInput(input, opt, &localizer);
     }
   }
-
-  ctr::Run(builder, demand_matrix->elements(), delays);
 }

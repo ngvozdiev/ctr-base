@@ -545,6 +545,47 @@ nc::net::GraphLinkMap<double> RoutingConfiguration::LinkUtilizations() const {
   return out;
 }
 
+size_t RoutingConfiguration::OverloadedAggregates() const {
+  std::map<nc::net::GraphLinkIndex, nc::net::Bandwidth> link_to_total_load;
+  nc::net::GraphLinkMap<std::set<AggregateId>> link_to_aggregate;
+  for (const auto& aggregate_and_aggregate_output : configuration_) {
+    const AggregateId& aggregate_id = aggregate_and_aggregate_output.first;
+    const std::vector<RouteAndFraction>& routes =
+        aggregate_and_aggregate_output.second;
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(demands(), aggregate_id);
+    nc::net::Bandwidth total_aggregate_demand = demand_and_flow_count.first;
+
+    for (const auto& route : routes) {
+      const nc::net::Walk* path = route.first;
+      double fraction = route.second;
+      CHECK(fraction > 0);
+
+      for (nc::net::GraphLinkIndex link : path->links()) {
+        link_to_total_load[link] += total_aggregate_demand * fraction;
+        link_to_aggregate[link].emplace(aggregate_id);
+      }
+    }
+  }
+
+  std::set<AggregateId> overloaded_aggregates;
+  for (const auto& link_and_total_load : link_to_total_load) {
+    nc::net::GraphLinkIndex link_index = link_and_total_load.first;
+    const nc::net::GraphLink* link = graph_->GetLink(link_index);
+
+    nc::net::Bandwidth total_load = link_and_total_load.second;
+    double utilization = total_load / link->bandwidth();
+    if (utilization > 1) {
+      const std::set<AggregateId>& aggregates_crossing_link =
+          link_to_aggregate.GetValueOrDie(link_index);
+      overloaded_aggregates.insert(aggregates_crossing_link.begin(),
+                                   aggregates_crossing_link.end());
+    }
+  }
+
+  return overloaded_aggregates.size();
+}
+
 double RoutingConfiguration::MaxLinkUtilization() const {
   nc::net::GraphLinkMap<double> link_utilizations = LinkUtilizations();
   double max_utilization = 0;
@@ -563,6 +604,7 @@ std::unique_ptr<RoutingConfiguration> RoutingConfiguration::Copy() const {
 
 RoutingConfigurationDelta RoutingConfiguration::GetDifference(
     const RoutingConfiguration& other) const {
+  const nc::net::GraphStorage* other_graph = other.graph();
   RoutingConfigurationDelta out;
 
   size_t total_flow_count = 0;
@@ -575,10 +617,17 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
   CHECK(other.configuration_.size() == configuration_.size());
   for (const auto& aggregate_id_and_routes : configuration_) {
     const AggregateId& aggregate_id = aggregate_id_and_routes.first;
+
+    // The other's graph may be different. Need to create a different id.
+    const std::string& src_id = graph_->GetNode(aggregate_id.src())->id();
+    const std::string& dst_id = graph_->GetNode(aggregate_id.dst())->id();
+    AggregateId other_aggregate_id(other_graph->NodeFromStringOrDie(src_id),
+                                   other_graph->NodeFromStringOrDie(dst_id));
+
     const std::vector<RouteAndFraction>& route_and_fractions_this =
         aggregate_id_and_routes.second;
     const std::vector<RouteAndFraction>& route_and_fractions_other =
-        nc::FindOrDieNoPrint(other.configuration_, aggregate_id);
+        nc::FindOrDieNoPrint(other.configuration_, other_aggregate_id);
 
     AggregateDelta& aggregate_delta = out.aggregates[aggregate_id];
     std::tie(aggregate_delta.fraction_delta,
@@ -591,7 +640,7 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
                    &aggregate_delta.routes_removed);
 
     const DemandAndFlowCount& demand_and_flow_count_other =
-        nc::FindOrDieNoPrint(other.demands(), aggregate_id);
+        nc::FindOrDieNoPrint(other.demands(), other_aggregate_id);
 
     size_t flow_count = demand_and_flow_count_other.second;
     nc::net::Bandwidth volume = demand_and_flow_count_other.first;

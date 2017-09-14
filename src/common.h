@@ -207,6 +207,9 @@ class RoutingConfiguration : public TrafficMatrix {
   // Returns a map from a link to its utilization.
   nc::net::GraphLinkMap<double> LinkUtilizations() const;
 
+  // Number of aggregates that cross links with utilization > 1.
+  size_t OverloadedAggregates() const;
+
   // Returns the max link utilization.
   double MaxLinkUtilization() const;
 
