@@ -444,6 +444,20 @@ static std::pair<double, double> GetFractionDelta(
   return {change_count / kTryCount, on_longer_path_count / kTryCount};
 }
 
+// Fraction of flows that change from one path to another.
+struct FlowPathChange {
+  double fraction;
+  const nc::net::Walk* from;
+  const nc::net::Walk* to;
+};
+
+static std::pair<double, double> GetFractionDeltaAlt(
+    const std::vector<RouteAndFraction>& prev,
+    const std::vector<RouteAndFraction>& next) {
+  // This assumes that each of prev and next are already sorted by delay and
+  // their fractions both sum up to 1.
+}
+
 static void GetRouteCounts(const std::vector<RouteAndFraction>& prev,
                            const std::vector<RouteAndFraction>& next,
                            size_t* add_count, size_t* update_count,
