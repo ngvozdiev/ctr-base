@@ -3,20 +3,20 @@
 #include <stdint.h>
 #include <algorithm>
 #include <chrono>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <string>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/strutil.h"
+#include "ncode_common/src/viz/web_page.h"
 #include "common.h"
 #include "geo/geo.h"
 #include "metrics/metrics.h"
@@ -30,34 +30,41 @@ DEFINE_double(
     light_speed, 200.0,
     "Speed of light (in km per millisecond), default is speed in fiber");
 DEFINE_double(link_speed_Mbps, 1000, "All new links will be this fast");
-DEFINE_string(optimizers, "SP,CTR,MinMax,MinMaxLD,MinMaxK10,B4",
+DEFINE_string(optimizers, "SP,CTR,CTRNFC,MinMax,MinMaxLD,MinMaxK10,B4",
               "The optimizers to use, comma-separated.");
 
 using namespace std::chrono;
 
-static auto* decreasing_delay =
+static auto* decreasing_delay_aggreggate =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
                                bool>(
-            "decreasing_delay_fraction",
+            "decreasing_delay_aggregate_fraction",
             "Fraction of aggregates whose delay decreases", "Topology",
             "Traffic matrix", "Optimizer", "New link");
 
-static auto* increasing_delay =
+static auto* increasing_delay_aggregate =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
                                bool>(
-            "increasing_delay_fraction",
+            "increasing_delay_aggregate_fraction",
             "Fraction of aggregates whose delay increases", "Topology",
             "Traffic matrix", "Optimizer", "New link");
 
-static auto* increasing_overload =
+static auto* increasing_overload_delta =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
                                bool>(
-            "increasing_overload_fraction",
+            "overload_delta_fraction",
             "Fraction of aggregates that encounter more congestion", "Topology",
             "Traffic matrix", "Optimizer", "New link");
+
+static auto* total_delay_delta =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string,
+                               bool>("total_delay_delta_fraction",
+                                     "Change in total delay", "Topology",
+                                     "Traffic matrix", "Optimizer", "New link");
 
 // Elements of a traffic matrix.
 using TMElements = std::vector<nc::lp::DemandMatrixElement>;
@@ -97,6 +104,8 @@ static std::unique_ptr<RoutingConfiguration> RunOptimizer(
   std::unique_ptr<Optimizer> opt;
   if (opt_string == "CTR") {
     opt = nc::make_unique<CTROptimizer>(provider, 1.0, false, false);
+  } else if (opt_string == "CTRNFC") {
+    opt = nc::make_unique<CTROptimizer>(provider, 1.0, false, true);
   } else if (opt_string == "MinMax") {
     opt = nc::make_unique<MinMaxOptimizer>(provider, 1.0, false);
   } else if (opt_string == "MinMaxLD") {
@@ -114,11 +123,10 @@ static std::unique_ptr<RoutingConfiguration> RunOptimizer(
   return opt->Optimize(*tm);
 }
 
-static void Record(const OptEvalInput& input,
-                   const RoutingConfiguration& routing,
-                   const RoutingConfiguration& new_routing,
-                   const std::string& opt, bool new_link) {
-  LOG(INFO) << routing.routes().size() << " vs " << new_routing.routes().size();
+static double Record(const OptEvalInput& input,
+                     const RoutingConfiguration& routing,
+                     const RoutingConfiguration& new_routing,
+                     const std::string& opt, bool new_link) {
   RoutingConfigurationDelta delta = routing.GetDifference(new_routing);
   double increasing_delay_count = 0;
   double decreasing_delay_count = 0;
@@ -128,29 +136,41 @@ static void Record(const OptEvalInput& input,
     double on_longer_path = aggregate_delta.fraction_on_longer_path;
     double on_shorter_path = aggregate_delta.fraction_delta -
                              aggregate_delta.fraction_on_longer_path;
-    double net = on_shorter_path - on_longer_path;
-    if (net > 0.001) {
-      ++decreasing_delay_count;
-    } else if (net < 0.001) {
+    if (on_longer_path > 0.001) {
       ++increasing_delay_count;
+    }
+
+    if (on_shorter_path > 0.001) {
+      ++decreasing_delay_count;
     }
   }
 
   double increasing_fraction = increasing_delay_count / delta.aggregates.size();
   double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
-
-  increasing_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+  increasing_delay_aggregate->GetHandle(input.topology_file, input.tm_file, opt,
+                                        new_link)
       ->AddValue(increasing_fraction);
-  decreasing_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+  decreasing_delay_aggreggate->GetHandle(input.topology_file, input.tm_file,
+                                         opt, new_link)
       ->AddValue(decreasing_fraction);
 
   size_t overloaded_before = routing.OverloadedAggregates();
   size_t overloaded_after = routing.OverloadedAggregates();
   double net_overload = overloaded_after - overloaded_before;
   double overload_fraction = net_overload / delta.aggregates.size();
-  increasing_overload->GetHandle(input.topology_file, input.tm_file, opt,
-                                 new_link)
+  increasing_overload_delta->GetHandle(input.topology_file, input.tm_file, opt,
+                                       new_link)
       ->AddValue(overload_fraction);
+
+  nc::net::Delay total_delay_before = routing.TotalPerFlowDelay();
+  nc::net::Delay total_delay_after = new_routing.TotalPerFlowDelay();
+  double change = (total_delay_after.count() - total_delay_before.count()) /
+                  static_cast<double>(total_delay_before.count());
+  total_delay_delta->GetHandle(input.topology_file, input.tm_file, opt,
+                               new_link)
+      ->AddValue(change);
+
+  return increasing_fraction;
 }
 
 static const nc::geo::CityData* GetCity(const std::string& name,
@@ -159,7 +179,6 @@ static const nc::geo::CityData* GetCity(const std::string& name,
   request.ascii_name = name;
 
   const nc::geo::CityData* city_data = localizer->FindCityOrNull(request);
-  LOG(INFO) << name << " localized to " << city_data->ToString();
   CHECK(city_data != nullptr);
   return city_data;
 }
@@ -170,6 +189,9 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
   const nc::net::GraphStorage* old_graph = old_demand_matrix.graph();
   PathProvider old_path_provider(old_graph);
   auto old_routing = RunOptimizer(opt, old_demand_matrix, &old_path_provider);
+
+  //  double max_increasing_fraction = 0;
+  //  std::string link_at_max_increasing_fraction;
 
   nc::net::GraphNodeSet all_nodes = old_graph->AllNodes();
   for (nc::net::GraphNodeIndex src : all_nodes) {
@@ -184,16 +206,16 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
       const nc::geo::CityData* src_city = GetCity(src_id, localizer);
       const nc::geo::CityData* dst_city = GetCity(dst_id, localizer);
       double distance_km = src_city->DistanceKm(*dst_city);
-      uint32_t delay_ms = distance_km / FLAGS_light_speed;
-      delay_ms = std::max(delay_ms, static_cast<uint32_t>(1));
+      uint32_t delay_micros = (distance_km / FLAGS_light_speed) * 1000.0;
+      delay_micros = std::max(delay_micros, static_cast<uint32_t>(1));
       bool new_link = !old_graph->HasLink(src_id, dst_id);
 
       nc::net::Bandwidth bw =
           nc::net::Bandwidth::FromMBitsPerSecond(FLAGS_link_speed_Mbps);
 
       nc::net::GraphBuilder new_topology = old_graph->ToBuilder();
-      new_topology.AddLink({src_id, dst_id, bw, milliseconds(delay_ms)});
-      new_topology.AddLink({dst_id, src_id, bw, milliseconds(delay_ms)});
+      new_topology.AddLink({src_id, dst_id, bw, microseconds(delay_micros)});
+      new_topology.AddLink({dst_id, src_id, bw, microseconds(delay_micros)});
       new_topology.RemoveMultipleLinks();
       nc::net::GraphStorage new_graph(new_topology);
       PathProvider new_path_provider(&new_graph);

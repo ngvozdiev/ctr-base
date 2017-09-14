@@ -164,6 +164,8 @@ struct RoutingConfigurationDelta {
 
   // Returns the number of routed added, removed and updated
   std::tuple<size_t, size_t, size_t> TotalRoutes() const;
+
+  std::string ToString(const nc::net::GraphStorage& graph) const;
 };
 
 // Extends a TM with for each aggregate a set of paths and a fraction of demand

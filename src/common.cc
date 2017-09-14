@@ -685,6 +685,37 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
   return std::make_tuple(total_added, total_removed, total_updated);
 }
 
+std::string RoutingConfigurationDelta::ToString(
+    const nc::net::GraphStorage& graph) const {
+  using namespace std::chrono;
+  std::string out;
+  nc::SubstituteAndAppend(
+      &out,
+      "flow fraction delta: $0\nvolume fraction delta: $1\nflow fraction on "
+      "longer path: $2\nvolume fraction on longer path: $3\ntotal per flow "
+      "delay fraction: $4\ntotal per flow delay abs: $5 ms\n",
+      total_flow_fraction_delta, total_volume_fraction_delta,
+      total_flow_fraction_on_longer_path, total_volume_fraction_on_longer_path,
+      total_per_flow_delay_delta,
+      duration_cast<milliseconds>(total_per_flow_delay_delta_absolute).count());
+
+  nc::StrAppend(&out, "Aggregates with change:\n");
+  for (const auto& aggregate_and_delta : aggregates) {
+    const AggregateId& aggregate = aggregate_and_delta.first;
+    const AggregateDelta& delta = aggregate_and_delta.second;
+    if (delta.fraction_delta == 0) {
+      continue;
+    }
+
+    nc::SubstituteAndAppend(
+        &out, "$0: fraction delta: $1, fraction on longer path: $2\n",
+        aggregate.ToString(graph), delta.fraction_delta,
+        delta.fraction_on_longer_path);
+  }
+
+  return out;
+}
+
 AggregateHistory::AggregateHistory(nc::net::Bandwidth rate, size_t bin_count,
                                    std::chrono::milliseconds bin_size,
                                    size_t flow_count)

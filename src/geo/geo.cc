@@ -120,6 +120,7 @@ const CityData* Localizer::FindCityOrNull(const FindCityRequest& request) {
   }
   request_to_city_.emplace(request, best_city);
 
+  LOG(INFO) << request.ascii_name << " localized to " << best_city->ToString();
   return best_city;
 }
 
