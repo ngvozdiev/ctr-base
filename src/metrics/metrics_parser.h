@@ -392,6 +392,14 @@ SimpleParseNumericData(const std::string& metrics_dir,
                        uint64_t min_timestamp, uint64_t max_timestamp,
                        uint64_t limiting_timestamp);
 
+std::map<std::pair<std::string, std::string>,
+         std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>>
+SimpleParseDistributionData(const std::string& metrics_dir,
+                            const std::string& metric_regex,
+                            const std::string& fields_to_match,
+                            uint64_t min_timestamp, uint64_t max_timestamp,
+                            uint64_t limiting_timestamp);
+
 // Same as above, but returns no timestamps.
 std::map<std::pair<std::string, std::string>, std::vector<double>>
 SimpleParseNumericDataNoTimestamps(const std::string& metrics_dir,

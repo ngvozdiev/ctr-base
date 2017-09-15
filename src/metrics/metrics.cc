@@ -75,6 +75,39 @@ void SaveEntryToProtobuf<BytesBlob>(const Entry<BytesBlob>& entry,
   *out->mutable_bytes_value() = entry.value;
 }
 
+template <typename T>
+static void SerializeDist(const nc::DiscreteDistribution<T>& dist,
+                          PBMetricEntry* out) {
+  const std::map<T, uint64_t>& counts = dist.counts();
+  PBDiscreteDistribution* distribution_pb =
+      out->mutable_discrete_distribution();
+  for (const auto& value_and_count : counts) {
+    distribution_pb->add_values(value_and_count.first);
+    distribution_pb->add_counts(value_and_count.second);
+  }
+}
+
+template <>
+void SaveEntryToProtobuf<nc::DiscreteDistribution<uint64_t>>(
+    const Entry<nc::DiscreteDistribution<uint64_t>>& entry,
+    PBMetricEntry* out) {
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
+
+  SerializeDist(entry.value, out);
+}
+
+template <>
+void SaveEntryToProtobuf<nc::DiscreteDistribution<int64_t>>(
+    const Entry<nc::DiscreteDistribution<int64_t>>& entry, PBMetricEntry* out) {
+  if (entry.timestamp) {
+    out->set_timestamp(entry.timestamp);
+  }
+
+  SerializeDist(entry.value, out);
+}
+
 template <>
 Entry<double> MetricHandle<double, true>::AddValuePrivate(double value,
                                                           uint64_t time_now) {
@@ -301,6 +334,18 @@ void PopulateManifestEntryType(PBManifestEntry* out, double* dummy) {
 void PopulateManifestEntryType(PBManifestEntry* out, BytesBlob* dummy) {
   Unused(dummy);
   out->set_type(PBManifestEntry::BYTES);
+}
+
+void PopulateManifestEntryType(PBManifestEntry* out,
+                               nc::DiscreteDistribution<uint64_t>* dummy) {
+  Unused(dummy);
+  out->set_type(PBManifestEntry::DISCRETE_DIST);
+}
+
+void PopulateManifestEntryType(PBManifestEntry* out,
+                               nc::DiscreteDistribution<int64_t>* dummy) {
+  Unused(dummy);
+  out->set_type(PBManifestEntry::DISCRETE_DIST);
 }
 
 DefaultMetricManagerPoller::DefaultMetricManagerPoller(

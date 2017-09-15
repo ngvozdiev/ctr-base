@@ -608,6 +608,34 @@ SimpleParseNumericData(const std::string& metrics_dir,
   return out;
 }
 
+std::map<std::pair<std::string, std::string>,
+         std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>>
+SimpleParseDistributionData(const std::string& metrics_dir,
+                            const std::string& metric_regex,
+                            const std::string& fields_to_match,
+                            uint64_t min_timestamp, uint64_t max_timestamp,
+                            uint64_t limiting_timestamp) {
+  using DistProcessor =
+      QueryCallbackProcessor<nc::DiscreteDistribution<int64_t>,
+                             PBManifestEntry::DISCRETE_DIST>;
+
+  std::map<std::pair<std::string, std::string>,
+           std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>>
+      out;
+
+  DistProcessor::Callback dist_callback = [&out, min_timestamp, max_timestamp,
+                                           limiting_timestamp](
+      const Entry<double>& entry, const PBManifestEntry& manifest_entry,
+      uint32_t manifest_index) {
+    if (entry.timestamp < max_timestamp && entry.timestamp >= min_timestamp) {
+      const std::string& metric_id = manifest_entry.id();
+      std::string fields = GetFieldString(entry);
+      return_handle->Update(entry.timestamp, entry.value, manifest_index,
+                            manifest_entry, limiting_timestamp);
+    }
+  };
+}
+
 std::map<std::pair<std::string, std::string>, std::vector<double>>
 SimpleParseNumericDataNoTimestamps(const std::string& metrics_dir,
                                    const std::string& metric_regex,

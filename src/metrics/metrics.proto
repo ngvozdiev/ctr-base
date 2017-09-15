@@ -36,6 +36,7 @@ message PBManifestEntry {
     STRING = 4;  // A string value.
     BOOL = 5;  // A boolean.
     BYTES = 6;  // A generic collection of bytes.
+    DISCRETE_DIST = 7; // A discrete distribution.
   }
 
   // The type of values the metric associated with this manifest entry
@@ -81,6 +82,9 @@ message PBMetricEntry {
     // contain information about the indices of metric entries to
     // follow.
     PBManifestEntry manifest_entry = 11;
+
+    // A discrete distribution.
+    PBDiscreteDistribution discrete_distribution = 12;
   }
 }
 
@@ -88,3 +92,9 @@ message PBMetricEntry {
 message BytesBlob {
   optional bytes bytes_value = 1;
 }
+
+// A discrete distribution is just a bunc of values and associated counts.
+message PBDiscreteDistribution {
+  repeated int64 values = 1;
+  repeated uint64 counts = 2;
+};

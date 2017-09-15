@@ -66,6 +66,14 @@ static auto* total_delay_delta =
                                      "Change in total delay", "Topology",
                                      "Traffic matrix", "Optimizer", "New link");
 
+static auto* absolute_path_stretch_micros =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<nc::DiscreteDistribution<int64_t>, std::string,
+                               std::string, std::string, bool>(
+            "absolute_path_stretch_micros",
+            "Distribution of absolute per-flow deltas in microseconds",
+            "Topology", "Traffic matrix", "Optimizer", "New link");
+
 // Elements of a traffic matrix.
 using TMElements = std::vector<nc::lp::DemandMatrixElement>;
 
@@ -123,19 +131,52 @@ static std::unique_ptr<RoutingConfiguration> RunOptimizer(
   return opt->Optimize(*tm);
 }
 
-static double Record(const OptEvalInput& input,
-                     const RoutingConfiguration& routing,
-                     const RoutingConfiguration& new_routing,
-                     const std::string& opt, bool new_link) {
+static void RecordStretch(
+    const OptEvalInput& input, const RoutingConfiguration& routing,
+    const std::vector<const RoutingConfiguration*> new_routings,
+    const std::string& opt, bool new_link) {
+  nc::DiscreteDistribution<int64_t> dist;
+
+  for (const RoutingConfiguration* new_routing : new_routings) {
+    RoutingConfigurationDelta delta = routing.GetDifference(*new_routing);
+    for (const auto& aggregate_and_delta : delta.aggregates) {
+      // Need to figure out how many flows there are in an aggregate.
+      const AggregateId& aggregate_id = aggregate_and_delta.first;
+
+      const DemandAndFlowCount& demand_and_flow_count =
+          nc::FindOrDieNoPrint(routing.demands(), aggregate_id);
+      size_t flow_count = demand_and_flow_count.second;
+
+      for (const FlowPathChange& change : aggregate_and_delta.second.changes) {
+        uint64_t from_micros =
+            duration_cast<microseconds>(change.from->delay()).count();
+        uint64_t to_micros =
+            duration_cast<microseconds>(change.to->delay()).count();
+
+        int64_t delta = to_micros - from_micros;
+        dist.Add(delta, flow_count);
+      }
+    }
+  }
+
+  absolute_path_stretch_micros->GetHandle(input.topology_file, input.tm_file,
+                                          opt, new_link)
+      ->AddValue(dist);
+}
+
+static void Record(const OptEvalInput& input,
+                   const RoutingConfiguration& routing,
+                   const RoutingConfiguration& new_routing,
+                   const std::string& opt, bool new_link) {
   RoutingConfigurationDelta delta = routing.GetDifference(new_routing);
   double increasing_delay_count = 0;
   double decreasing_delay_count = 0;
   for (const auto& aggregate_and_delta : delta.aggregates) {
     const AggregateDelta& aggregate_delta = aggregate_and_delta.second;
 
-    double on_longer_path = aggregate_delta.fraction_on_longer_path;
-    double on_shorter_path = aggregate_delta.fraction_delta -
-                             aggregate_delta.fraction_on_longer_path;
+    double on_longer_path = aggregate_delta.FractionOnLongerPath();
+    double on_shorter_path = aggregate_delta.FractionDelta() -
+                             aggregate_delta.FractionOnLongerPath();
     if (on_longer_path > 0.001) {
       ++increasing_delay_count;
     }
@@ -169,8 +210,6 @@ static double Record(const OptEvalInput& input,
   total_delay_delta->GetHandle(input.topology_file, input.tm_file, opt,
                                new_link)
       ->AddValue(change);
-
-  return increasing_fraction;
 }
 
 static const nc::geo::CityData* GetCity(const std::string& name,
@@ -189,9 +228,6 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
   const nc::net::GraphStorage* old_graph = old_demand_matrix.graph();
   PathProvider old_path_provider(old_graph);
   auto old_routing = RunOptimizer(opt, old_demand_matrix, &old_path_provider);
-
-  //  double max_increasing_fraction = 0;
-  //  std::string link_at_max_increasing_fraction;
 
   nc::net::GraphNodeSet all_nodes = old_graph->AllNodes();
   for (nc::net::GraphNodeIndex src : all_nodes) {
@@ -223,6 +259,7 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
           RunOptimizer(opt, nc::lp::DemandMatrix(old_demand_matrix, &new_graph),
                        &new_path_provider);
       Record(input, *old_routing, *new_routing, opt, new_link);
+      RecordStretch(input, *old_routing, {new_routing.get()}, opt, new_link);
     }
   }
 }

@@ -106,6 +106,8 @@ if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(metrics_test src/metrics/metrics_test.cc metrics metrics_parser metrics_test_util)
    add_test_exec(metrics_parser_test src/metrics/metrics_parser_test.cc metrics metrics_parser metrics_test_util)
 
+   add_test_exec(ctr_common_test src/common_test.cc ctr_base)
+   
    add_test_exec(geo_test src/geo/geo_test.cc geo_lib)
 endif()
 

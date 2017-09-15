@@ -119,15 +119,22 @@ class TrafficMatrix {
   DISALLOW_COPY_AND_ASSIGN(TrafficMatrix);
 };
 
+// Fraction of flows that change from one path to another.
+struct FlowPathChange {
+  double fraction;
+  const nc::net::Walk* from;
+  const nc::net::Walk* to;
+};
+
+std::vector<FlowPathChange> GetFractionDeltas(
+    const std::vector<RouteAndFraction>& prev,
+    const std::vector<RouteAndFraction>& next);
+
 // The difference between the same aggregate in two different outputs
 // (RoutingConfigurations).
 struct AggregateDelta {
-  // The fraction of the aggregate's total traffic that changed paths.
-  double fraction_delta = 0.0;
-
-  // The fraction of the aggregate's total traffic that was sent on a longer
-  // path.
-  double fraction_on_longer_path = 0.0;
+  // List of changes.
+  std::vector<FlowPathChange> changes;
 
   // New routes added (f == 0 -> f != 0).
   size_t routes_added = 0;
@@ -137,6 +144,10 @@ struct AggregateDelta {
 
   // Routes updated (f != 0 -> f != 0)
   size_t routes_updated = 0;
+
+  double FractionDelta() const;
+
+  double FractionOnLongerPath() const;
 };
 
 struct RoutingConfigurationDelta {

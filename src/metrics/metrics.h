@@ -106,6 +106,14 @@ template <>
 void SaveEntryToProtobuf<BytesBlob>(const Entry<BytesBlob>& entry,
                                     PBMetricEntry* out);
 
+template <>
+void SaveEntryToProtobuf<nc::DiscreteDistribution<uint64_t>>(
+    const Entry<nc::DiscreteDistribution<uint64_t>>& entry, PBMetricEntry* out);
+
+template <>
+void SaveEntryToProtobuf<nc::DiscreteDistribution<int64_t>>(
+    const Entry<nc::DiscreteDistribution<int64_t>>& entry, PBMetricEntry* out);
+
 // A generic interface for a class that knows how to provide timestamps.
 class TimestampProviderInterface {
  public:
@@ -281,16 +289,15 @@ template <typename T>
 using UnsafeMetricHandle = MetricHandle<T, false>;
 
 void PopulateManifestEntryType(PBManifestEntry* out, uint64_t* dummy);
-
 void PopulateManifestEntryType(PBManifestEntry* out, uint32_t* dummy);
-
 void PopulateManifestEntryType(PBManifestEntry* out, bool* dummy);
-
 void PopulateManifestEntryType(PBManifestEntry* out, std::string* dummy);
-
 void PopulateManifestEntryType(PBManifestEntry* out, double* dummy);
-
 void PopulateManifestEntryType(PBManifestEntry* out, BytesBlob* dummy);
+void PopulateManifestEntryType(PBManifestEntry* out,
+                               nc::DiscreteDistribution<uint64_t>* dummy);
+void PopulateManifestEntryType(PBManifestEntry* out,
+                               nc::DiscreteDistribution<int64_t>* dummy);
 
 void PopulateManifestEntryField(PBMetricField* field, uint64_t value);
 void PopulateManifestEntryField(PBMetricField* field, uint32_t value);

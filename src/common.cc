@@ -418,71 +418,67 @@ const nc::net::Walk* PickPath(const std::vector<RouteAndFraction>& routes,
   return nullptr;
 }
 
-static constexpr size_t kTryCount = 1000;
-
-static std::pair<double, double> GetFractionDelta(
-    const std::vector<RouteAndFraction>& prev,
-    const std::vector<RouteAndFraction>& next) {
-  std::mt19937 rnd(1);
-  std::uniform_real_distribution<double> dist(0, 1.0);
-
-  double change_count = 0;
-  double on_longer_path_count = 0;
-  for (size_t i = 0; i < kTryCount; ++i) {
-    double p = dist(rnd);
-    const nc::net::Walk* p1 = PickPath(prev, p);
-    const nc::net::Walk* p2 = PickPath(next, p);
-
-    if (*p1 != *p2) {
-      ++change_count;
-      if (p2->delay() > p1->delay()) {
-        ++on_longer_path_count;
-      }
-    }
-  }
-
-  return {change_count / kTryCount, on_longer_path_count / kTryCount};
-}
-
-// Fraction of flows that change from one path to another.
-struct FlowPathChange {
-  double fraction;
-  const nc::net::Walk* from;
-  const nc::net::Walk* to;
-};
-
-static std::pair<double, double> GetFractionDeltaAlt(
-    const std::vector<RouteAndFraction>& prev,
-    const std::vector<RouteAndFraction>& next) {
+std::vector<FlowPathChange> GetFractionDeltas(
+    const std::vector<RouteAndFraction>& src,
+    const std::vector<RouteAndFraction>& dst) {
   // This assumes that each of prev and next are already sorted by delay and
   // their fractions both sum up to 1.
   std::vector<FlowPathChange> out;
 
+  double src_f_cumulative = 0.0;
+  double dst_f_cumulative = 0.0;
   double fraction = 0.0;
-  const nc::net::Walk* src_path;
-  const nc::net::Walk* dst_path;
-
   size_t src_index = 0;
   size_t dst_index = 0;
   while (true) {
-    if (fraction != 0.0) {
-      out.emplace_back(fraction, src_path, dst_path);
+    if (src_index == src.size()) {
+      for (size_t i = dst_index; i < dst.size(); ++i) {
+        double dst_f = dst_f_cumulative + dst[dst_index].second;
+        out.push_back({dst_f - fraction, src.back().first, dst[i].first});
+        dst_f_cumulative = dst_f;
+        fraction = dst_f;
+      }
+
+      break;
     }
 
-    const RouteAndFraction& src_route =
-        src_index != prev.size() ? prev[src_index] : prev.back();
-    const RouteAndFraction& dst_route =
-        dst_index != next.size() ? next[dst_index] : next.back();
-    if (src_route.second >= dst_route.second) {
-      fraction = dst_route.second - fraction;
-      dst_path = dst_route.first;
+    if (dst_index == dst.size()) {
+      for (size_t i = src_index; i < src.size(); ++i) {
+        double src_f = src_f_cumulative + src[src_index].second;
+        out.push_back({src_f - fraction, src[i].first, dst.back().first});
+        src_f_cumulative = src_f;
+        fraction = src_f;
+      }
+
+      break;
+    }
+
+    double src_f = src_f_cumulative + src[src_index].second;
+    double dst_f = dst_f_cumulative + dst[dst_index].second;
+    if (src_f > dst_f) {
+      out.push_back(
+          {dst_f - fraction, src[src_index].first, dst[dst_index].first});
       ++dst_index;
-    } else {
-      fraction = src_route.second - fraction;
-      src_path = src_route.first;
+      dst_f_cumulative = dst_f;
+      fraction = dst_f;
+    } else if (src_f < dst_f) {
+      out.push_back(
+          {src_f - fraction, src[src_index].first, dst[dst_index].first});
       ++src_index;
+      src_f_cumulative = src_f;
+      fraction = src_f;
+    } else {
+      out.push_back(
+          {src_f - fraction, src[src_index].first, dst[dst_index].first});
+      ++src_index;
+      ++dst_index;
+      dst_f_cumulative = dst_f;
+      src_f_cumulative = src_f;
+      fraction = src_f;
     }
   }
+
+  return out;
 }
 
 static void GetRouteCounts(const std::vector<RouteAndFraction>& prev,
@@ -671,9 +667,8 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
         nc::FindOrDieNoPrint(other.configuration_, other_aggregate_id);
 
     AggregateDelta& aggregate_delta = out.aggregates[aggregate_id];
-    std::tie(aggregate_delta.fraction_delta,
-             aggregate_delta.fraction_on_longer_path) =
-        GetFractionDelta(route_and_fractions_this, route_and_fractions_other);
+    aggregate_delta.changes =
+        GetFractionDeltas(route_and_fractions_this, route_and_fractions_other);
 
     GetRouteCounts(route_and_fractions_this, route_and_fractions_other,
                    &aggregate_delta.routes_added,
@@ -686,13 +681,13 @@ RoutingConfigurationDelta RoutingConfiguration::GetDifference(
     size_t flow_count = demand_and_flow_count_other.second;
     nc::net::Bandwidth volume = demand_and_flow_count_other.first;
 
-    total_flow_count_delta += aggregate_delta.fraction_delta * flow_count;
+    total_flow_count_delta += aggregate_delta.FractionDelta() * flow_count;
     total_flow_count_delta_longer_path +=
-        aggregate_delta.fraction_on_longer_path * flow_count;
+        aggregate_delta.FractionOnLongerPath() * flow_count;
     total_flow_count += flow_count;
     total_volume_delta_longer_path +=
-        volume * aggregate_delta.fraction_on_longer_path;
-    total_volume_delta += volume * aggregate_delta.fraction_delta;
+        volume * aggregate_delta.FractionOnLongerPath();
+    total_volume_delta += volume * aggregate_delta.FractionDelta();
     total_volume += volume;
   }
 
@@ -744,17 +739,39 @@ std::string RoutingConfigurationDelta::ToString(
   for (const auto& aggregate_and_delta : aggregates) {
     const AggregateId& aggregate = aggregate_and_delta.first;
     const AggregateDelta& delta = aggregate_and_delta.second;
-    if (delta.fraction_delta == 0) {
+    if (delta.FractionDelta() == 0) {
       continue;
     }
 
     nc::SubstituteAndAppend(
         &out, "$0: fraction delta: $1, fraction on longer path: $2\n",
-        aggregate.ToString(graph), delta.fraction_delta,
-        delta.fraction_on_longer_path);
+        aggregate.ToString(graph), delta.FractionDelta(),
+        delta.FractionOnLongerPath());
   }
 
   return out;
+}
+
+double AggregateDelta::FractionDelta() const {
+  double total_same = 0;
+  for (const auto& path_change : changes) {
+    if (*path_change.from == *path_change.to) {
+      total_same += path_change.fraction;
+    }
+  }
+
+  return total_same;
+}
+
+double AggregateDelta::FractionOnLongerPath() const {
+  double total_longer = 0;
+  for (const auto& path_change : changes) {
+    if (path_change.from->delay() < path_change.to->delay()) {
+      total_longer += path_change.fraction;
+    }
+  }
+
+  return total_longer;
 }
 
 AggregateHistory::AggregateHistory(nc::net::Bandwidth rate, size_t bin_count,
