@@ -456,6 +456,33 @@ static std::pair<double, double> GetFractionDeltaAlt(
     const std::vector<RouteAndFraction>& next) {
   // This assumes that each of prev and next are already sorted by delay and
   // their fractions both sum up to 1.
+  std::vector<FlowPathChange> out;
+
+  double fraction = 0.0;
+  const nc::net::Walk* src_path;
+  const nc::net::Walk* dst_path;
+
+  size_t src_index = 0;
+  size_t dst_index = 0;
+  while (true) {
+    if (fraction != 0.0) {
+      out.emplace_back(fraction, src_path, dst_path);
+    }
+
+    const RouteAndFraction& src_route =
+        src_index != prev.size() ? prev[src_index] : prev.back();
+    const RouteAndFraction& dst_route =
+        dst_index != next.size() ? next[dst_index] : next.back();
+    if (src_route.second >= dst_route.second) {
+      fraction = dst_route.second - fraction;
+      dst_path = dst_route.first;
+      ++dst_index;
+    } else {
+      fraction = src_route.second - fraction;
+      src_path = src_route.first;
+      ++src_index;
+    }
+  }
 }
 
 static void GetRouteCounts(const std::vector<RouteAndFraction>& prev,
