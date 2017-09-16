@@ -291,6 +291,22 @@ void ParseEntryFromProtobuf<BytesBlob>(const PBMetricEntry& entry,
   out->value = entry.bytes_value();
 }
 
+template <>
+void ParseEntryFromProtobuf<nc::DiscreteDistribution<int64_t>>(
+    const PBMetricEntry& entry, Entry<nc::DiscreteDistribution<int64_t>>* out) {
+  out->timestamp = entry.timestamp();
+
+  nc::DiscreteDistribution<int64_t> dist;
+  const PBDiscreteDistribution& dist_pb = entry.discrete_distribution();
+
+  size_t count = dist_pb.values_size();
+  for (size_t i = 0; i < count; ++i) {
+    dist.Add(dist_pb.values(i), dist_pb.counts(i));
+  }
+
+  out->value = dist;
+}
+
 bool ReadDelimitedHeaderFrom(uint32_t* manifest_index,
                              google::protobuf::io::CodedInputStream* input) {
   // Read the manifest.
@@ -613,27 +629,72 @@ std::map<std::pair<std::string, std::string>,
 SimpleParseDistributionData(const std::string& metrics_dir,
                             const std::string& metric_regex,
                             const std::string& fields_to_match,
-                            uint64_t min_timestamp, uint64_t max_timestamp,
-                            uint64_t limiting_timestamp) {
+                            uint64_t min_timestamp, uint64_t max_timestamp) {
+  using DiscreteDist = nc::DiscreteDistribution<int64_t>;
   using DistProcessor =
-      QueryCallbackProcessor<nc::DiscreteDistribution<int64_t>,
-                             PBManifestEntry::DISCRETE_DIST>;
+      QueryCallbackProcessor<DiscreteDist, PBManifestEntry::DISCRETE_DIST>;
 
-  std::map<std::pair<std::string, std::string>,
-           std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>>
-      out;
-
-  DistProcessor::Callback dist_callback = [&out, min_timestamp, max_timestamp,
-                                           limiting_timestamp](
-      const Entry<double>& entry, const PBManifestEntry& manifest_entry,
+  std::map<uint64_t, PBManifestEntry> index_to_entry;
+  std::map<uint64_t, std::vector<std::pair<uint64_t, DiscreteDist>>> data_map;
+  DistProcessor::Callback dist_callback = [&data_map, &index_to_entry,
+                                           min_timestamp, max_timestamp](
+      const Entry<DiscreteDist>& entry, const PBManifestEntry& manifest_entry,
       uint32_t manifest_index) {
     if (entry.timestamp < max_timestamp && entry.timestamp >= min_timestamp) {
-      const std::string& metric_id = manifest_entry.id();
-      std::string fields = GetFieldString(entry);
-      return_handle->Update(entry.timestamp, entry.value, manifest_index,
-                            manifest_entry, limiting_timestamp);
+      if (!nc::ContainsKey(index_to_entry, manifest_index)) {
+        index_to_entry[manifest_index] = manifest_entry;
+      }
+
+      data_map[manifest_index].emplace_back(entry.timestamp, entry.value);
     }
   };
+
+  auto dist_processor =
+      make_unique<DistProcessor>(metric_regex, fields_to_match, dist_callback);
+  MetricsParser parser(metrics_dir);
+  parser.AddProcessor(std::move(dist_processor));
+  parser.Parse();
+
+  std::map<std::pair<std::string, std::string>,
+           std::vector<std::pair<uint64_t, DiscreteDist>>> out;
+  for (auto& index_and_data : data_map) {
+    uint64_t index = index_and_data.first;
+    const PBManifestEntry& manifest_entry =
+        nc::FindOrDie(index_to_entry, index);
+
+    const std::string& metric_id = manifest_entry.id();
+    std::string fields = GetFieldString(manifest_entry);
+    out[{metric_id, fields}] = std::move(index_and_data.second);
+  }
+
+  return out;
+}
+
+std::map<std::pair<std::string, std::string>,
+         std::vector<nc::DiscreteDistribution<int64_t>>>
+SimpleParseDistributionDataNoTimestamps(const std::string& metrics_dir,
+                                        const std::string& metric_regex,
+                                        const std::string& fields_to_match) {
+  std::map<std::pair<std::string, std::string>,
+           std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>>
+      full_data = SimpleParseDistributionData(
+          metrics_dir, metric_regex, fields_to_match, 0,
+          std::numeric_limits<uint64_t>::max());
+
+  std::map<std::pair<std::string, std::string>,
+           std::vector<nc::DiscreteDistribution<int64_t>>> out;
+  for (auto& key_and_value : full_data) {
+    std::vector<nc::DiscreteDistribution<int64_t>> values;
+    std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>&
+        full_values = key_and_value.second;
+
+    for (auto& timestamp_and_v : full_values) {
+      values.emplace_back(timestamp_and_v.second);
+    }
+    out[key_and_value.first] = std::move(values);
+  }
+
+  return out;
 }
 
 std::map<std::pair<std::string, std::string>, std::vector<double>>

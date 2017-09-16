@@ -74,6 +74,14 @@ static auto* absolute_path_stretch_micros =
             "Distribution of absolute per-flow deltas in microseconds",
             "Topology", "Traffic matrix", "Optimizer", "New link");
 
+static auto* relative_path_stretch_micros =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<nc::DiscreteDistribution<int64_t>, std::string,
+                               std::string, std::string, bool>(
+            "relative_path_stretch_micros",
+            "Distribution of relative path stretch (quantized x10000)",
+            "Topology", "Traffic matrix", "Optimizer", "New link");
+
 // Elements of a traffic matrix.
 using TMElements = std::vector<nc::lp::DemandMatrixElement>;
 
@@ -136,6 +144,7 @@ static void RecordStretch(
     const std::vector<const RoutingConfiguration*> new_routings,
     const std::string& opt, bool new_link) {
   nc::DiscreteDistribution<int64_t> dist;
+  nc::DiscreteDistribution<int64_t> dist_relative;
 
   for (const RoutingConfiguration* new_routing : new_routings) {
     RoutingConfigurationDelta delta = routing.GetDifference(*new_routing);
@@ -152,9 +161,14 @@ static void RecordStretch(
             duration_cast<microseconds>(change.from->delay()).count();
         uint64_t to_micros =
             duration_cast<microseconds>(change.to->delay()).count();
+        size_t flows_changed = change.fraction * flow_count;
 
         int64_t delta = to_micros - from_micros;
-        dist.Add(delta, flow_count);
+        dist.Add(delta, flows_changed);
+
+        double delta_rel =
+            (to_micros - from_micros) / static_cast<double>(from_micros);
+        dist_relative.Add(delta_rel * 10000, flows_changed);
       }
     }
   }

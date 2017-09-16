@@ -29,7 +29,7 @@ template <typename T>
 void ParseEntryFromProtobuf(const PBMetricEntry& entry, Entry<T>* out) {
   Unused(entry);
   Unused(out);
-  assert(false);
+  LOG(FATAL) << "Bad type";
 }
 
 template <>
@@ -54,6 +54,14 @@ void ParseEntryFromProtobuf<std::string>(const PBMetricEntry& entry,
 template <>
 void ParseEntryFromProtobuf<BytesBlob>(const PBMetricEntry& entry,
                                        Entry<BytesBlob>* out);
+
+template <>
+void ParseEntryFromProtobuf<nc::DiscreteDistribution<int64_t>>(
+    const PBMetricEntry& entry, Entry<nc::DiscreteDistribution<int64_t>>* out);
+
+template <>
+void ParseEntryFromProtobuf<uint64_t>(const PBMetricEntry& entry,
+                                      Entry<uint64_t>* out);
 
 // Returns a human-readable string that described the fields in the entry.
 std::string GetFieldString(const PBManifestEntry& entry);
@@ -101,6 +109,7 @@ class CallbackProcessor : public MetricProcessor {
                     const PBManifestEntry& manifest_entry,
                     uint32_t manifest_index) override {
     ParseEntryFromProtobuf(entry, &scratch_entry_);
+
     callback_(scratch_entry_, manifest_entry, manifest_index);
   }
 
@@ -392,19 +401,25 @@ SimpleParseNumericData(const std::string& metrics_dir,
                        uint64_t min_timestamp, uint64_t max_timestamp,
                        uint64_t limiting_timestamp);
 
+// Same as above, but for distributions.
 std::map<std::pair<std::string, std::string>,
          std::vector<std::pair<uint64_t, nc::DiscreteDistribution<int64_t>>>>
 SimpleParseDistributionData(const std::string& metrics_dir,
                             const std::string& metric_regex,
                             const std::string& fields_to_match,
-                            uint64_t min_timestamp, uint64_t max_timestamp,
-                            uint64_t limiting_timestamp);
+                            uint64_t min_timestamp, uint64_t max_timestamp);
 
 // Same as above, but returns no timestamps.
 std::map<std::pair<std::string, std::string>, std::vector<double>>
 SimpleParseNumericDataNoTimestamps(const std::string& metrics_dir,
                                    const std::string& metric_regex,
                                    const std::string& fields_to_match);
+
+std::map<std::pair<std::string, std::string>,
+         std::vector<nc::DiscreteDistribution<int64_t>>>
+SimpleParseDistributionDataNoTimestamps(const std::string& metrics_dir,
+                                        const std::string& metric_regex,
+                                        const std::string& fields_to_match);
 
 // Will expose the parser functionality for things that are not C++
 // (e.g. Python).
