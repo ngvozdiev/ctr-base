@@ -32,6 +32,9 @@ DEFINE_double(
 DEFINE_double(link_speed_Mbps, 1000, "All new links will be this fast");
 DEFINE_string(optimizers, "SP,CTR,CTRNFC,MinMax,MinMaxLD,MinMaxK10,B4",
               "The optimizers to use, comma-separated.");
+DEFINE_bool(fixed_flow_count, false,
+            "If true all aggregates will have the same flow count, if false "
+            "the flow count will depend on the size of the aggregate");
 
 using namespace std::chrono;
 
@@ -103,6 +106,10 @@ static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
   for (const auto& element : demand_matrix.elements()) {
     size_t flow_count = kTopAggregateFlowCount * (element.demand / max_demand);
     flow_count = std::max(1ul, flow_count);
+
+    if (FLAGS_fixed_flow_count) {
+      flow_count = kTopAggregateFlowCount;
+    }
 
     AggregateId id(element.src, element.dst);
     demands_and_counts[id] = {element.demand, flow_count};

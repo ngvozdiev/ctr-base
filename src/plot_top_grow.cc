@@ -25,6 +25,7 @@ static constexpr char kOverloadDeltaMetric[] = "overload_delta_fraction";
 static constexpr char kTotalDelayDeltaMetric[] = "total_delay_delta_fraction";
 static constexpr char kAbsoluteFlowStretchMetric[] =
     "absolute_path_stretch_micros";
+static constexpr char kRelativeFlowStretchMetric[] = "relative_path_stretch";
 
 using namespace nc::metrics::parser;
 
@@ -112,5 +113,5 @@ int main(int argc, char** argv) {
   PlotMetric(kTotalDelayDeltaMetric);
   PlotMetric(kOverloadDeltaMetric);
   PlotStretch(kAbsoluteFlowStretchMetric, 1.0);
-  PlotStretch(kAbsoluteFlowStretchMetric, 1 / 10000.0);
+  PlotStretch(kRelativeFlowStretchMetric, 1 / 10000.0);
 }
