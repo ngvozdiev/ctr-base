@@ -760,7 +760,7 @@ double AggregateDelta::FractionDelta() const {
     }
   }
 
-  return total_same;
+  return 1 - total_same;
 }
 
 double AggregateDelta::FractionOnLongerPath() const {

@@ -164,12 +164,14 @@ static void RecordStretch(
       size_t flow_count = demand_and_flow_count.second;
 
       for (const FlowPathChange& change : aggregate_and_delta.second.changes) {
-        uint64_t from_micros =
-            duration_cast<microseconds>(change.from->delay()).count();
-        uint64_t to_micros =
-            duration_cast<microseconds>(change.to->delay()).count();
+        int64_t from_micros =
+            duration_cast<milliseconds>(change.from->delay()).count();
+        int64_t to_micros =
+            duration_cast<milliseconds>(change.to->delay()).count();
         size_t flows_changed = change.fraction * flow_count;
-
+	from_micros = std::max(from_micros, static_cast<int64_t>(1));
+	to_micros = std::max(to_micros, static_cast<int64_t>(1));
+	
         int64_t delta = to_micros - from_micros;
         dist.Add(delta, flows_changed);
 
@@ -180,6 +182,7 @@ static void RecordStretch(
     }
   }
 
+  LOG(INFO) << "dr " << dist_relative.Percentiles().front() << " " << dist_relative.Percentiles().back();
   absolute_path_stretch_micros->GetHandle(input.topology_file, input.tm_file,
                                           opt, new_link)
       ->AddValue(dist);
@@ -201,6 +204,15 @@ static void Record(const OptEvalInput& input,
     double on_longer_path = aggregate_delta.FractionOnLongerPath();
     double on_shorter_path = aggregate_delta.FractionDelta() -
                              aggregate_delta.FractionOnLongerPath();
+
+    if (on_longer_path != 0 || on_shorter_path != 0) {
+      const DemandAndFlowCount& demand_and_flow_count =
+	nc::FindOrDieNoPrint(routing.demands(), aggregate_and_delta.first);
+
+      //LOG(INFO) << on_longer_path << " on shorter " << on_shorter_path << " f "
+      //		<< demand_and_flow_count.second;
+    }
+    
     if (on_longer_path > 0.001) {
       ++increasing_delay_count;
     }
@@ -212,6 +224,7 @@ static void Record(const OptEvalInput& input,
 
   double increasing_fraction = increasing_delay_count / delta.aggregates.size();
   double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
+  LOG(INFO) << increasing_fraction << " vs " << decreasing_fraction;
   increasing_delay_aggregate->GetHandle(input.topology_file, input.tm_file, opt,
                                         new_link)
       ->AddValue(increasing_fraction);
