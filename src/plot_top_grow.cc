@@ -92,7 +92,7 @@ static void PlotStretch(const std::string& metric, double multiplier) {
     nc::DiscreteDistribution<int64_t> dist = DistDataForOptimizer(opt, metric);
 
     LOG(INFO) << "A";
-    std::vector<int64_t> percentiles = dist.Percentiles();
+    std::vector<int64_t> percentiles = dist.Percentiles(10000);
     nc::viz::DataSeries2D data_series;
     for (size_t i = 0; i < percentiles.size(); ++i) {
       data_series.data.emplace_back(percentiles[i] * multiplier, i);
