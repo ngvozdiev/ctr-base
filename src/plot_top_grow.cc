@@ -24,7 +24,7 @@ static constexpr char kIncreasingDelayAggregateMetric[] =
 static constexpr char kOverloadDeltaMetric[] = "overload_delta_fraction";
 static constexpr char kTotalDelayDeltaMetric[] = "total_delay_delta_fraction";
 static constexpr char kAbsoluteFlowStretchMetric[] =
-    "absolute_path_stretch_micros";
+    "absolute_path_stretch_ms";
 static constexpr char kRelativeFlowStretchMetric[] = "relative_path_stretch";
 
 using namespace nc::metrics::parser;
@@ -91,6 +91,7 @@ static void PlotStretch(const std::string& metric, double multiplier) {
   for (const auto& opt : opts) {
     nc::DiscreteDistribution<int64_t> dist = DistDataForOptimizer(opt, metric);
 
+    LOG(INFO) << "A";
     std::vector<int64_t> percentiles = dist.Percentiles();
     nc::viz::DataSeries2D data_series;
     for (size_t i = 0; i < percentiles.size(); ++i) {
