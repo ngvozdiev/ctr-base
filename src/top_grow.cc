@@ -74,11 +74,11 @@ static auto* absolute_path_stretch_micros =
             "Distribution of absolute per-flow deltas in microseconds",
             "Topology", "Traffic matrix", "Optimizer", "New link");
 
-static auto* relative_path_stretch_micros =
+static auto* relative_path_stretch =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<nc::DiscreteDistribution<int64_t>, std::string,
                                std::string, std::string, bool>(
-            "relative_path_stretch_micros",
+            "relative_path_stretch",
             "Distribution of relative path stretch (quantized x10000)",
             "Topology", "Traffic matrix", "Optimizer", "New link");
 
@@ -176,6 +176,9 @@ static void RecordStretch(
   absolute_path_stretch_micros->GetHandle(input.topology_file, input.tm_file,
                                           opt, new_link)
       ->AddValue(dist);
+  relative_path_stretch->GetHandle(input.topology_file, input.tm_file, opt,
+                                   new_link)
+      ->AddValue(dist_relative);
 }
 
 static void Record(const OptEvalInput& input,

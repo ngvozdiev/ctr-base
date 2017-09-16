@@ -84,7 +84,7 @@ static void PlotMetric(const std::string& metric) {
   grapher.PlotCDF({}, to_plot);
 }
 
-static void PlotStretch(const std::string& metric) {
+static void PlotStretch(const std::string& metric, double multiplier) {
   std::vector<nc::viz::DataSeries2D> to_plot;
   std::vector<std::string> opts = nc::Split(FLAGS_optimizers, ",");
   for (const auto& opt : opts) {
@@ -93,7 +93,7 @@ static void PlotStretch(const std::string& metric) {
     std::vector<int64_t> percentiles = dist.Percentiles();
     nc::viz::DataSeries2D data_series;
     for (size_t i = 0; i < percentiles.size(); ++i) {
-      data_series.data.emplace_back(percentiles[i], i);
+      data_series.data.emplace_back(percentiles[i] * multiplier, i);
     }
     data_series.label = opt;
     to_plot.emplace_back(data_series);
@@ -111,5 +111,6 @@ int main(int argc, char** argv) {
   PlotMetric(kDecreasingDelayAggregateMetric);
   PlotMetric(kTotalDelayDeltaMetric);
   PlotMetric(kOverloadDeltaMetric);
-  PlotStretch(kAbsoluteFlowStretchMetric);
+  PlotStretch(kAbsoluteFlowStretchMetric, 1.0);
+  PlotStretch(kAbsoluteFlowStretchMetric, 1 / 10000.0);
 }
