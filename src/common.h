@@ -145,9 +145,9 @@ struct AggregateDelta {
   // Routes updated (f != 0 -> f != 0)
   size_t routes_updated = 0;
 
-  double FractionDelta() const;
+  double FractionDelta(double relative_change_threshold = 0.0) const;
 
-  double FractionOnLongerPath() const;
+  double FractionOnLongerPath(double relative_change_threshold = 0.0) const;
 };
 
 struct RoutingConfigurationDelta {

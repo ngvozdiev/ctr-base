@@ -752,23 +752,42 @@ std::string RoutingConfigurationDelta::ToString(
   return out;
 }
 
-double AggregateDelta::FractionDelta() const {
+double AggregateDelta::FractionDelta(double relative_change_threshold) const {
   double total_same = 0;
   for (const auto& path_change : changes) {
-    if (*path_change.from == *path_change.to) {
-      total_same += path_change.fraction;
+    uint64_t from_delay = path_change.from->delay().count();
+    uint64_t to_delay = path_change.to->delay().count();
+
+    double relative_change =
+        (std::max(from_delay, to_delay) - std::min(from_delay, to_delay)) /
+        static_cast<double>(from_delay);
+    if (relative_change > relative_change_threshold) {
+      continue;
     }
+
+    total_same += path_change.fraction;
   }
 
   return 1 - total_same;
 }
 
-double AggregateDelta::FractionOnLongerPath() const {
+double AggregateDelta::FractionOnLongerPath(
+    double relative_change_threshold) const {
   double total_longer = 0;
   for (const auto& path_change : changes) {
-    if (path_change.from->delay() < path_change.to->delay()) {
-      total_longer += path_change.fraction;
+    uint64_t from_delay = path_change.from->delay().count();
+    uint64_t to_delay = path_change.to->delay().count();
+    if (from_delay >= to_delay) {
+      continue;
     }
+
+    double relative_change =
+        (to_delay - from_delay) / static_cast<double>(from_delay);
+    if (relative_change <= relative_change_threshold) {
+      continue;
+    }
+
+    total_longer += path_change.fraction;
   }
 
   return total_longer;

@@ -41,34 +41,38 @@ using namespace std::chrono;
 static auto* decreasing_delay_aggreggate =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
-                               bool>(
+                               bool, std::string>(
             "decreasing_delay_aggregate_fraction",
             "Fraction of aggregates whose delay decreases", "Topology",
-            "Traffic matrix", "Optimizer", "New link");
+            "Traffic matrix", "Optimizer", "New link",
+            "Relative stretch threshold");
 
 static auto* increasing_delay_aggregate =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
-                               bool>(
+                               bool, std::string>(
             "increasing_delay_aggregate_fraction",
             "Fraction of aggregates whose delay increases", "Topology",
-            "Traffic matrix", "Optimizer", "New link");
+            "Traffic matrix", "Optimizer", "New link",
+            "Relative stretch threshold");
 
 static auto* decreasing_delay_flows =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
-                               bool>("decreasing_delay_flow_fraction",
-                                     "Fraction of flows whose delay decreases",
-                                     "Topology", "Traffic matrix", "Optimizer",
-                                     "New link");
+                               bool, std::string>(
+            "decreasing_delay_flow_fraction",
+            "Fraction of flows whose delay decreases", "Topology",
+            "Traffic matrix", "Optimizer", "New link",
+            "Relative stretch threshold");
 
 static auto* increasing_delay_flows =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
-                               bool>("increasing_delay_flows_fraction",
-                                     "Fraction of flows whose delay increases",
-                                     "Topology", "Traffic matrix", "Optimizer",
-                                     "New link");
+                               bool, std::string>(
+            "increasing_delay_flows_fraction",
+            "Fraction of flows whose delay increases", "Topology",
+            "Traffic matrix", "Optimizer", "New link",
+            "Relative stretch threshold");
 
 static auto* increasing_overload_delta =
     nc::metrics::DefaultMetricManager()
@@ -213,30 +217,26 @@ static void RecordStretch(
 static void Record(const OptEvalInput& input,
                    const RoutingConfiguration& routing,
                    const RoutingConfiguration& new_routing,
-                   const std::string& opt, bool new_link) {
+                   const std::string& opt, bool new_link, double threshold) {
   RoutingConfigurationDelta delta = routing.GetDifference(new_routing);
   double increasing_delay_count = 0;
   double decreasing_delay_count = 0;
   double increasing_flow_count = 0;
   double decreasing_flow_count = 0;
   double total_flow_count = 0;
+
   for (const auto& aggregate_and_delta : delta.aggregates) {
     const AggregateDelta& aggregate_delta = aggregate_and_delta.second;
 
-    double on_longer_path = aggregate_delta.FractionOnLongerPath();
-    double on_shorter_path = aggregate_delta.FractionDelta() -
-                             aggregate_delta.FractionOnLongerPath();
+    double on_longer_path = aggregate_delta.FractionOnLongerPath(threshold);
+    double on_shorter_path =
+        aggregate_delta.FractionDelta(threshold) - on_longer_path;
     const DemandAndFlowCount& demand_and_flow_count =
         nc::FindOrDieNoPrint(routing.demands(), aggregate_and_delta.first);
     double flow_count = demand_and_flow_count.second;
     total_flow_count += flow_count;
     increasing_flow_count += on_longer_path * flow_count;
     decreasing_flow_count += on_shorter_path * flow_count;
-
-    if (on_longer_path != 0 || on_shorter_path != 0) {
-      const DemandAndFlowCount& demand_and_flow_count =
-          nc::FindOrDieNoPrint(routing.demands(), aggregate_and_delta.first);
-    }
 
     if (on_longer_path > 0.001) {
       ++increasing_delay_count;
@@ -247,29 +247,35 @@ static void Record(const OptEvalInput& input,
     }
   }
 
+  std::string threshold_str = nc::ToStringMaxDecimals(threshold, 1);
   double increasing_flow_fraction = increasing_flow_count / total_flow_count;
   double decreasing_flow_fraction = decreasing_flow_count / total_flow_count;
   increasing_delay_flows->GetHandle(input.topology_file, input.tm_file, opt,
-                                    new_link)
+                                    new_link, threshold_str)
       ->AddValue(increasing_flow_fraction);
   decreasing_delay_flows->GetHandle(input.topology_file, input.tm_file, opt,
-                                    new_link)
+                                    new_link, threshold_str)
       ->AddValue(decreasing_flow_fraction);
 
   double increasing_fraction = increasing_delay_count / delta.aggregates.size();
   double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
   LOG(INFO) << increasing_fraction << " vs " << decreasing_fraction;
   increasing_delay_aggregate->GetHandle(input.topology_file, input.tm_file, opt,
-                                        new_link)
+                                        new_link, threshold_str)
       ->AddValue(increasing_fraction);
   decreasing_delay_aggreggate->GetHandle(input.topology_file, input.tm_file,
-                                         opt, new_link)
+                                         opt, new_link, threshold_str)
       ->AddValue(decreasing_fraction);
+}
 
+static void RecordOverloadAndTotal(const OptEvalInput& input,
+                                   const RoutingConfiguration& routing,
+                                   const RoutingConfiguration& new_routing,
+                                   const std::string& opt, bool new_link) {
   size_t overloaded_before = routing.OverloadedAggregates();
   size_t overloaded_after = routing.OverloadedAggregates();
   double net_overload = overloaded_after - overloaded_before;
-  double overload_fraction = net_overload / delta.aggregates.size();
+  double overload_fraction = net_overload / routing.demands().size();
   increasing_overload_delta->GetHandle(input.topology_file, input.tm_file, opt,
                                        new_link)
       ->AddValue(overload_fraction);
@@ -329,7 +335,10 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
       auto new_routing =
           RunOptimizer(opt, nc::lp::DemandMatrix(old_demand_matrix, &new_graph),
                        &new_path_provider);
-      Record(input, *old_routing, *new_routing, opt, new_link);
+      for (double threshold = 0.0; threshold <= 1.0; threshold += 0.1) {
+        Record(input, *old_routing, *new_routing, opt, new_link, threshold);
+      }
+      RecordOverloadAndTotal(input, *old_routing, *new_routing, opt, new_link);
       RecordStretch(input, *old_routing, {new_routing.get()}, opt, new_link);
     }
   }
