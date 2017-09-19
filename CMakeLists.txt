@@ -90,6 +90,9 @@ target_link_libraries(mean_est_eval ctr_base)
 add_executable(pcap_data_util src/pcap_data_util)
 target_link_libraries(pcap_data_util ctr_base)
 
+add_executable(plot_pcap_data src/plot_pcap_data.cc)
+target_link_libraries(plot_pcap_data ctr_base)
+
 add_executable(net_mock_util src/net_mock_util)
 target_link_libraries(net_mock_util ctr_base)
 

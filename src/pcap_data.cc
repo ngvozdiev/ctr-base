@@ -32,22 +32,22 @@ constexpr size_t PcapDataTrace::kFlowCacheSize;
 constexpr size_t PcapDataBinCache::kCacheLineBinCount;
 
 void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
+  uint64_t bytes_prev = bytes;
+  uint32_t flows_prev = flows_enter;
   bytes += other.bytes;
-  uint16_t prev = flows_enter;
   flows_enter += other.flows_enter;
-  if (flows_enter < prev) {
-    flows_enter = std::numeric_limits<uint16_t>::max();
-  }
+  CHECK(flows_enter >= flows_prev);
+  CHECK(bytes >= bytes_prev);
 }
 
 void TrimmedPcapDataTraceBin::CombineWithFraction(
     const TrimmedPcapDataTraceBin& other, double fraction) {
+  uint64_t bytes_prev = bytes;
+  uint32_t flows_prev = flows_enter;
   bytes += other.bytes * fraction;
-  uint16_t prev = flows_enter;
   flows_enter += other.flows_enter * fraction;
-  if (flows_enter < prev) {
-    flows_enter = std::numeric_limits<uint16_t>::max();
-  }
+  CHECK(flows_enter >= flows_prev);
+  CHECK(bytes >= bytes_prev);
 }
 
 struct TCPFlowRecord {
