@@ -87,7 +87,7 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
 
   TrimmedPcapDataTraceBin(const PBBin& bin_pb)
       : bytes(bin_pb.byte_count()), flows_enter(bin_pb.enter_flow_count()) {
-    CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint16_t>::max());
+    CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint32_t>::max());
   }
 
   void CombineWithFraction(const TrimmedPcapDataTraceBin& other,
@@ -96,8 +96,8 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
   // Like above, but does not take a fraction.
   void Combine(const TrimmedPcapDataTraceBin& other);
 
-  uint32_t bytes;
-  uint16_t flows_enter;
+  uint64_t bytes;
+  uint32_t flows_enter;
 };
 
 class PcapDataTrace;

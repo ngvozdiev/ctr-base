@@ -60,7 +60,7 @@ static auto* decreasing_delay_flows =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
                                bool, std::string>(
-            "decreasing_delay_flow_fraction",
+            "decreasing_delay_flows_fraction",
             "Fraction of flows whose delay decreases", "Topology",
             "Traffic matrix", "Optimizer", "New link",
             "Relative stretch threshold");
@@ -104,6 +104,13 @@ static auto* relative_path_stretch =
             "relative_path_stretch",
             "Distribution of relative path stretch (quantized x10000)",
             "Topology", "Traffic matrix", "Optimizer", "New link");
+
+static auto* link_delay_micros =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string, std::string,
+                               bool>("link_delay_micros",
+                                     "Link delay in microseconds", "Topology",
+                                     "Traffic matrix", "Optimizer", "New link");
 
 // Elements of a traffic matrix.
 using TMElements = std::vector<nc::lp::DemandMatrixElement>;
@@ -204,8 +211,6 @@ static void RecordStretch(
     }
   }
 
-  LOG(INFO) << "dr " << dist_relative.Percentiles().front() << " "
-            << dist_relative.Percentiles().back();
   absolute_path_stretch_ms->GetHandle(input.topology_file, input.tm_file, opt,
                                       new_link)
       ->AddValue(dist);
@@ -259,7 +264,6 @@ static void Record(const OptEvalInput& input,
 
   double increasing_fraction = increasing_delay_count / delta.aggregates.size();
   double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
-  LOG(INFO) << increasing_fraction << " vs " << decreasing_fraction;
   increasing_delay_aggregate->GetHandle(input.topology_file, input.tm_file, opt,
                                         new_link, threshold_str)
       ->AddValue(increasing_fraction);
@@ -284,9 +288,19 @@ static void RecordOverloadAndTotal(const OptEvalInput& input,
   nc::net::Delay total_delay_after = new_routing.TotalPerFlowDelay();
   double change = (total_delay_after.count() - total_delay_before.count()) /
                   static_cast<double>(total_delay_before.count());
+  LOG(INFO) << "OPT " << opt << " before " << total_delay_before.count()
+            << " after " << total_delay_after.count() << " change " << change;
   total_delay_delta->GetHandle(input.topology_file, input.tm_file, opt,
                                new_link)
       ->AddValue(change);
+}
+
+static void RecordLinkDelay(const OptEvalInput& input,
+                            std::chrono::microseconds delay,
+                            const std::string& opt, bool new_link) {
+  link_delay_micros->GetHandle(input.topology_file, input.tm_file, opt,
+                               new_link)
+      ->AddValue(delay.count());
 }
 
 static const nc::geo::CityData* GetCity(const std::string& name,
@@ -301,10 +315,15 @@ static const nc::geo::CityData* GetCity(const std::string& name,
 
 static void ProcessInput(const OptEvalInput& input, const std::string& opt,
                          nc::geo::Localizer* localizer) {
+  LOG(INFO) << "Processing " << input.topology_file << " tm " << input.tm_file
+            << " opt " << opt;
   const nc::lp::DemandMatrix& old_demand_matrix = *(input.demand_matrix);
   const nc::net::GraphStorage* old_graph = old_demand_matrix.graph();
   PathProvider old_path_provider(old_graph);
   auto old_routing = RunOptimizer(opt, old_demand_matrix, &old_path_provider);
+
+  static int i = 0;
+  i = 0;
 
   nc::net::GraphNodeSet all_nodes = old_graph->AllNodes();
   for (nc::net::GraphNodeIndex src : all_nodes) {
@@ -313,8 +332,15 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
         continue;
       }
 
+      if (i == 0) {
+        ++i;
+        continue;
+      }
+
       const std::string& src_id = old_graph->GetNode(src)->id();
       const std::string& dst_id = old_graph->GetNode(dst)->id();
+
+      LOG(INFO) << "Link " << src_id << " -> " << dst_id;
 
       const nc::geo::CityData* src_city = GetCity(src_id, localizer);
       const nc::geo::CityData* dst_city = GetCity(dst_id, localizer);
@@ -340,8 +366,14 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
       }
       RecordOverloadAndTotal(input, *old_routing, *new_routing, opt, new_link);
       RecordStretch(input, *old_routing, {new_routing.get()}, opt, new_link);
+      RecordLinkDelay(input, microseconds(delay_micros), opt, new_link);
+
+      if (++i == 2) {
+        return;
+      }
     }
   }
+  LOG(INFO) << "Done";
 }
 
 }  // namespace ctr
