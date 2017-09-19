@@ -481,6 +481,10 @@ class BinSequenceGenerator {
   std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_;
 };
 
+// Returns the variances between mean sizes of bins of different size.
+std::vector<std::pair<double, double>> AllanVariance(
+    const std::vector<double>& data);
+
 }  // namespace e2e
 
 #endif

@@ -1247,4 +1247,39 @@ std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
   return PickOrDie(all_traces_and_slices_cpy, init_window, target_rate, cache);
 }
 
+static std::vector<double> Bin(const std::vector<double>& data,
+                               size_t bin_size) {
+  size_t max_count = (data.size() / bin_size) * bin_size;
+
+  std::vector<double> out;
+  for (size_t i = 0; i < max_count; ++i) {
+    size_t bin_index = i / bin_size;
+    out.resize(bin_index + 1);
+    out[bin_index] += data[bin_index];
+  }
+
+  for (double& v : out) {
+    v /= bin_size;
+  }
+
+  return out;
+}
+
+std::vector<std::pair<size_t, double>> AllanVariance(
+    const std::vector<double>& data) {
+  std::vector<std::pair<size_t, double>> out;
+  for (size_t bin_size = 1; bin_size < data.size() / 2; ++bin_size) {
+    std::vector<double> binned = Bin(data, bin_size);
+
+    nc::SummaryStats stats;
+    for (double bin : binned) {
+      stats.Add(bin);
+    }
+
+    out.emplace_back(bin_size, stats.var());
+  }
+
+  return out;
+}
+
 }  // namespace e2e
