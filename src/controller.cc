@@ -241,7 +241,7 @@ void Controller::ReOptimize(RoundState* round) {
   nc::viz::HtmlPage page;
   update_result.routing->ToHTML(&page);
   nc::File::WriteStringToFile(page.Construct(), "out.html");
-  
+
   CHECK(update_result.routing->demands().size() == round->histories.size());
   pending_output = RoutingToUpdateState(*update_result.routing,
                                         *update_result.competing_aggregates);
@@ -254,7 +254,6 @@ void Controller::ReOptimize(RoundState* round) {
   std::swap(update_result.histories_after_prediction, round->histories);
   LOG(INFO) << "Done optimizing " << round->pending_output.size()
             << " aggregates";
-  
 
   last_optimize_time_ = event_queue_->CurrentTime();
 
@@ -825,7 +824,8 @@ void NetworkContainer::AddDefaultRouteToDummyHandler(
 
 void NetworkContainer::AddElementsFromGraph(
     DeviceFactory* device_factory,
-    nc::htsim::PacketObserver* external_internal_observer) {
+    nc::htsim::PacketObserver* external_internal_observer,
+    nc::htsim::PacketObserver* internal_external_observer) {
   std::default_random_engine generator(config_.seed);
   std::uniform_int_distribution<size_t> tldr_device_dist(
       config_.min_delay_tldr_device.count(),
@@ -847,6 +847,11 @@ void NetworkContainer::AddElementsFromGraph(
     if (external_internal_observer) {
       src_device->AddExternalInternalObserver(external_internal_observer);
       dst_device->AddExternalInternalObserver(external_internal_observer);
+    }
+
+    if (internal_external_observer) {
+      src_device->AddInternalExternalObserver(internal_external_observer);
+      dst_device->AddInternalExternalObserver(internal_external_observer);
     }
 
     uint64_t speed_bps = link_ptr->bandwidth().bps();

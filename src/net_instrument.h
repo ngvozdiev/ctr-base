@@ -78,6 +78,33 @@ class InputPacketObserver : public nc::EventConsumer,
   std::map<nc::htsim::PacketTag, BytesAndPackets> tag_to_per_path_state_;
 };
 
+// Monitors queueing.
+class OutputPacketObserver : public nc::htsim::PacketObserver {
+ public:
+  OutputPacketObserver(const nc::EventQueue* event_queue)
+      : event_queue_(event_queue) {}
+
+  void ObservePacket(const nc::htsim::Packet& pkt) override {
+    nc::EventQueueTime queueing_time = pkt.queueing_time();
+    uint64_t queueing_time_ms = event_queue_->TimeToRawMillis(queueing_time);
+    queueing_time_dist_ms_.Add(queueing_time_ms, 1);
+  }
+
+  const nc::DiscreteDistribution<uint64_t>& queueing_time_dist_ms() const {
+    return queueing_time_dist_ms_;
+  }
+
+  // Records the distribution. Should be called at the end of the simulation.
+  void RecordDist();
+
+ private:
+  // Keeps track of the queueing times of all packets that leave the network.
+  nc::DiscreteDistribution<uint64_t> queueing_time_dist_ms_;
+
+  // The event queue, converts to / from sim time.
+  const nc::EventQueue* event_queue_;
+};
+
 }  // namespace ctr
 
 #endif

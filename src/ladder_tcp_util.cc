@@ -61,7 +61,7 @@ DEFINE_bool(simulate_initial_handshake, true,
 DEFINE_uint64(
     tcp_initial_cwnd_pkts, 4,
     "How many packets should there be in the inital congestion window");
-DEFINE_uint64(duration_sec, 240, "For how long to run (in simulated time)");
+DEFINE_uint64(duration_sec, 500, "For how long to run (in simulated time)");
 
 static void AddKeyFrames(Bandwidth start_rate, Bandwidth mid_rate,
                          Bandwidth end_rate, size_t count,

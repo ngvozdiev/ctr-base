@@ -16,6 +16,42 @@ DEFINE_string(traces, "", "Traces to plot, if empty will plot all traces");
 
 using namespace std::chrono;
 
+//static std::vector<double> Bin(const std::vector<double>& data,
+//                               size_t bin_size) {
+//  size_t max_count = (data.size() / bin_size) * bin_size;
+//
+//  std::vector<double> out;
+//  for (size_t i = 0; i < max_count; ++i) {
+//    size_t bin_index = i / bin_size;
+//    out.resize(bin_index + 1);
+//    out[bin_index] += data[bin_index];
+//  }
+//
+//  for (double& v : out) {
+//    v /= bin_size;
+//  }
+//
+//  return out;
+//}
+//
+//static std::vector<std::pair<double, double>> AllanVariance(
+//    const std::vector<double>& data) {
+//  std::vector<std::pair<double, double>> out;
+//  for (size_t bin_size = 1; bin_size < data.size() / 2; ++bin_size) {
+//    LOG(INFO) << "AV bin size " << bin_size;
+//    std::vector<double> binned = Bin(data, bin_size);
+//
+//    nc::SummaryStats stats;
+//    for (double bin : binned) {
+//      stats.Add(bin);
+//    }
+//
+//    out.emplace_back(bin_size, stats.var());
+//  }
+//
+//  return out;
+//}
+
 static std::vector<double> BinTrace(const ctr::BinSequence& bin_sequence,
                                     std::chrono::milliseconds bin_size,
                                     ctr::PcapDataBinCache* cache) {
@@ -45,6 +81,13 @@ static void PlotTrace(const std::string& trace_id,
 
   nc::viz::PythonGrapher grapher(nc::StrCat("binned_trace_", trace_id));
   grapher.PlotLine({}, {to_plot});
+
+//  std::vector<double> per_ms_bins =
+//      BinTrace(bin_sequence, milliseconds(10), cache);
+//  to_plot.data = AllanVariance(per_ms_bins);
+//
+//  nc::viz::PythonGrapher av_grapher(nc::StrCat("av_trace_", trace_id));
+//  av_grapher.PlotLine({}, {to_plot});
 }
 
 static std::vector<nc::SummaryStats> ProcessTrace(

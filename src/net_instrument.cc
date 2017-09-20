@@ -93,6 +93,11 @@ static auto* kPathPktsMetric =
         -> GetUnsafeMetric<uint64_t, std::string>(
             "path_pkts", "Packets through a path", "Path");
 
+static auto* kQueueSizeDistMetric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
+            "queue_size_ms", "Distribution of queue sizes of packets");
+
 static std::chrono::milliseconds GetQueueSizeMs(
     const nc::htsim::QueueStats& stats, nc::net::Bandwidth rate) {
   double bytes_per_sec = rate.bps() / 8;
@@ -200,6 +205,10 @@ void InputPacketObserver::Record() {
     kPathBytesMetric->GetHandle(path_str)->AddValue(bytes_and_packets.first);
     kPathPktsMetric->GetHandle(path_str)->AddValue(bytes_and_packets.second);
   }
+}
+
+void OutputPacketObserver::RecordDist() {
+  kQueueSizeDistMetric->GetHandle()->AddValue(queueing_time_dist_ms_);
 }
 
 }  // namespace ctr

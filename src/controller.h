@@ -444,7 +444,8 @@ class NetworkContainer {
   // will add it to all devices.
   void AddElementsFromGraph(
       DeviceFactory* device_factory,
-      nc::htsim::PacketObserver* external_internal_observer = nullptr);
+      nc::htsim::PacketObserver* external_internal_observer = nullptr,
+      nc::htsim::PacketObserver* internal_external_observer = nullptr);
 
   // Inializes the controller with per-aggregate state.
   void InitAggregatesInController();
