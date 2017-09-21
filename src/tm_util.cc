@@ -133,8 +133,11 @@ int main(int argc, char** argv) {
       continue;
     }
 
-    if (candidate->SPMaxUtilization() >= FLAGS_sp_link_utilization_threshold) {
+    double max_utilization = candidate->SPMaxUtilization();
+    if (max_utilization >= FLAGS_sp_link_utilization_threshold) {
       break;
+    } else {
+      candidate.reset();
     }
   }
 

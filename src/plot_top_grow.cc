@@ -145,7 +145,7 @@ PlotRankedLinks(const DataMap& increase_data, const DataMap& decrease_data,
     decrease_to_plot.data.emplace_back(i, std::get<2>(all_data[i]));
   }
 
-  return {increase_to_plot, decrease_to_plot, total_to_plot};
+  return std::make_tuple(increase_to_plot, decrease_to_plot, total_to_plot);
 }
 
 static void PlotLinks(const std::string& field, bool new_links) {
