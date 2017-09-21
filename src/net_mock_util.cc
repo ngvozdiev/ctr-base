@@ -45,6 +45,7 @@ DEFINE_string(pcap_trace_fit_store, "",
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_uint64(history_bin_size_ms, 100, "How big each history bin is");
 DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
+DEFINE_double(estimator_headroom, 1.1, "Fixed headroom for the estimator");
 DEFINE_double(link_capacity_scale, 1.0,
               "By how much to scale all links' bandwidth");
 DEFINE_double(link_delay_scale, 1.3, "By how much to scale all links' delay");
@@ -107,11 +108,11 @@ static void HandleDefault(
                                   std::move(bin_sequence));
 
     // Will also add the reverse aggregate for ACKs.
-    auto ack_history =
-        ctr::GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100),
-                             milliseconds(FLAGS_history_bin_size_ms),
-                             milliseconds(FLAGS_period_duration_ms), 10);
-    network_container->AddAggregate(id.Reverse(), ack_history);
+    //    auto ack_history =
+    //        ctr::GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100),
+    //                             milliseconds(FLAGS_history_bin_size_ms),
+    //                             milliseconds(FLAGS_period_duration_ms), 10);
+    //    network_container->AddAggregate(id.Reverse(), ack_history);
   }
 
   // Records per-path stats.
@@ -213,7 +214,7 @@ int main(int argc, char** argv) {
   prob_model_config.exceed_probability = FLAGS_exceed_probability;
 
   ctr::MeanScaleEstimatorFactory estimator_factory(
-      {1.05, FLAGS_decay_factor, FLAGS_decay_factor, 10});
+      {FLAGS_estimator_headroom, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.prob_model_config = prob_model_config;
   ctr::RoutingSystem routing_system(routing_system_config, &opt,

@@ -1,3 +1,4 @@
+#include <gflags/gflags.h>
 #include "routing_system.h"
 
 #include <stddef.h>
@@ -18,6 +19,9 @@
 #include "metrics/metrics.h"
 
 namespace ctr {
+
+DEFINE_bool(pin_mean, false,
+            "If true will always use the mean aggregate level.");
 
 static auto* per_aggregate_mean_input =
     nc::metrics::DefaultMetricManager()
@@ -244,6 +248,11 @@ RoutingSystemUpdateResult RoutingSystem::Update(
     std::tie(aggregates_no_fit, competing_aggregates) =
         CheckWithProbModel(*output, next_history);
     if (aggregates_no_fit.empty()) {
+      break;
+    }
+
+    if (FLAGS_pin_mean) {
+      competing_aggregates->Clear();
       break;
     }
 

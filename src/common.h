@@ -254,6 +254,8 @@ class CompetingAggregates {
     return aggregates_;
   }
 
+  void Clear() { aggregates_.clear(); }
+
  private:
   std::map<AggregateId, std::vector<AggregatesAndCapacity>> aggregates_;
 };
