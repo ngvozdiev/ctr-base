@@ -36,12 +36,12 @@ int main(int argc, char** argv) {
   const nc::DiscreteDistribution<int64_t>& dist = data_vector.front();
   std::vector<int64_t> values = dist.Percentiles();
 
-  nc::viz::DataSeries1D data_series;
+  nc::viz::DataSeries2D data_series;
   for (size_t i = 0; i < values.size(); ++i) {
-    data_series.data.emplace_back(values[i]);
+    data_series.data.emplace_back(values[i], i);
   }
 
   nc::viz::PythonGrapher grapher("queue_size_plot_out");
-  grapher.PlotCDF({}, {data_series});
+  grapher.PlotLine({}, {data_series});
   return 0;
 }
