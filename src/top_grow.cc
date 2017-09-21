@@ -17,6 +17,7 @@
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/viz/web_page.h"
+#include "ncode_common/src/thread_runner.h"
 #include "common.h"
 #include "geo/geo.h"
 #include "metrics/metrics.h"
@@ -35,6 +36,7 @@ DEFINE_string(optimizers, "SP,CTR,CTRNFC,MinMax,MinMaxLD,MinMaxK10,B4",
 DEFINE_bool(fixed_flow_count, false,
             "If true all aggregates will have the same flow count, if false "
             "the flow count will depend on the size of the aggregate");
+DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 
 using namespace std::chrono;
 
@@ -88,6 +90,13 @@ static auto* total_delay_delta =
                                bool>("total_delay_delta_fraction",
                                      "Change in total delay", "Topology",
                                      "Traffic matrix", "Optimizer", "New link");
+
+static auto* total_delay =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string,
+                               bool>("total_absolute_delay", "Total delay",
+                                     "Topology", "Traffic matrix", "Optimizer",
+                                     "New link");
 
 static auto* absolute_path_stretch_ms =
     nc::metrics::DefaultMetricManager()
@@ -288,11 +297,11 @@ static void RecordOverloadAndTotal(const OptEvalInput& input,
   nc::net::Delay total_delay_after = new_routing.TotalPerFlowDelay();
   double change = (total_delay_after.count() - total_delay_before.count()) /
                   static_cast<double>(total_delay_before.count());
-  LOG(INFO) << "OPT " << opt << " before " << total_delay_before.count()
-            << " after " << total_delay_after.count() << " change " << change;
   total_delay_delta->GetHandle(input.topology_file, input.tm_file, opt,
                                new_link)
       ->AddValue(change);
+  total_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+      ->AddValue(total_delay_after.count());
 }
 
 static void RecordLinkDelay(const OptEvalInput& input,
@@ -322,9 +331,6 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
   PathProvider old_path_provider(old_graph);
   auto old_routing = RunOptimizer(opt, old_demand_matrix, &old_path_provider);
 
-  static int i = 0;
-  i = 0;
-
   nc::net::GraphNodeSet all_nodes = old_graph->AllNodes();
   for (nc::net::GraphNodeIndex src : all_nodes) {
     for (nc::net::GraphNodeIndex dst : all_nodes) {
@@ -332,15 +338,8 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
         continue;
       }
 
-      if (i == 0) {
-        ++i;
-        continue;
-      }
-
       const std::string& src_id = old_graph->GetNode(src)->id();
       const std::string& dst_id = old_graph->GetNode(dst)->id();
-
-      LOG(INFO) << "Link " << src_id << " -> " << dst_id;
 
       const nc::geo::CityData* src_city = GetCity(src_id, localizer);
       const nc::geo::CityData* dst_city = GetCity(dst_id, localizer);
@@ -367,10 +366,6 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
       RecordOverloadAndTotal(input, *old_routing, *new_routing, opt, new_link);
       RecordStretch(input, *old_routing, {new_routing.get()}, opt, new_link);
       RecordLinkDelay(input, microseconds(delay_micros), opt, new_link);
-
-      if (++i == 2) {
-        return;
-      }
     }
   }
   LOG(INFO) << "Done";
@@ -395,8 +390,13 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
   for (const auto& opt : optimizers) {
-    for (const auto& input : to_process) {
-      ctr::ProcessInput(input, opt, &localizer);
-    }
+    nc::RunInParallel<ctr::OptEvalInput>(
+        to_process, [&opt, &localizer](const ctr::OptEvalInput& input) {
+          ctr::ProcessInput(input, opt, &localizer);
+        }, FLAGS_threads);
+
+    //    for (const auto& input : to_process) {
+    //      ctr::ProcessInput(input, opt, &localizer);
+    //    }
   }
 }

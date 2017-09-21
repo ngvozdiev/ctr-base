@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
   CHECK(data_vector.size() == 1);
 
   const nc::DiscreteDistribution<int64_t>& dist = data_vector.front();
-  std::vector<int64_t> values = dist.Percentiles();
+  std::vector<int64_t> values = dist.Percentiles(10000);
 
   nc::viz::DataSeries1D data_series;
   for (size_t i = 0; i < values.size(); ++i) {

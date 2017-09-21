@@ -32,6 +32,7 @@ static constexpr char kTotalDelayDeltaMetric[] = "total_delay_delta_fraction";
 static constexpr char kAbsoluteFlowStretchMetric[] = "absolute_path_stretch_ms";
 static constexpr char kRelativeFlowStretchMetric[] = "relative_path_stretch";
 static constexpr char kLinkDelayMetric[] = "link_delay_micros";
+static constexpr char kTotalDelayMetric[] = "total_absolute_delay";
 
 using namespace nc::metrics::parser;
 
@@ -127,38 +128,45 @@ static void PlotStretch(const std::string& metric, double multiplier,
 }
 
 static std::tuple<nc::viz::DataSeries2D, nc::viz::DataSeries2D,
-                  nc::viz::DataSeries2D, nc::viz::DataSeries2D>
+                  nc::viz::DataSeries2D, nc::viz::DataSeries2D,
+                  nc::viz::DataSeries2D>
 PlotRankedLinks(const DataMap& increase_data, const DataMap& decrease_data,
                 const DataMap& total_delta, const DataMap& link_delay_data,
+                const DataMap& total_delay_data,
                 const std::vector<size_t>& order) {
   CHECK(increase_data.size() == 1);
   CHECK(decrease_data.size() == 1);
   CHECK(total_delta.size() == 1);
   CHECK(link_delay_data.size() == 1);
+  CHECK(total_delay_data.size() == 1);
 
   const std::vector<double>& increase_v = increase_data.begin()->second;
   const std::vector<double>& decrease_v = decrease_data.begin()->second;
   const std::vector<double>& delta_v = total_delta.begin()->second;
   const std::vector<double>& link_delay_v = link_delay_data.begin()->second;
+  const std::vector<double>& total_delay_v = total_delay_data.begin()->second;
   CHECK(increase_v.size() == decrease_v.size());
   CHECK(delta_v.size() == decrease_v.size());
   CHECK(delta_v.size() == order.size());
   CHECK(link_delay_v.size() == order.size());
+  CHECK(total_delay_v.size() == order.size());
 
   nc::viz::DataSeries2D increase_to_plot;
   nc::viz::DataSeries2D decrease_to_plot;
   nc::viz::DataSeries2D total_to_plot;
   nc::viz::DataSeries2D link_delay_to_plot;
+  nc::viz::DataSeries2D total_delay_to_plot;
   for (size_t i = 0; i < order.size(); ++i) {
     size_t index = order[i];
     total_to_plot.data.emplace_back(i, delta_v[index]);
     increase_to_plot.data.emplace_back(i, increase_v[index]);
     decrease_to_plot.data.emplace_back(i, decrease_v[index]);
     link_delay_to_plot.data.emplace_back(i, link_delay_v[index]);
+    total_delay_to_plot.data.emplace_back(i, total_delay_v[index]);
   }
 
   return std::make_tuple(increase_to_plot, decrease_to_plot, total_to_plot,
-                         link_delay_to_plot);
+                         link_delay_to_plot, total_delay_to_plot);
 }
 
 std::vector<size_t> PickOrder(const std::string& field, bool new_links) {
@@ -202,6 +210,7 @@ static void PlotLinks(const std::string& field, bool new_links) {
   std::vector<nc::viz::DataSeries2D> decrease_series;
   std::vector<nc::viz::DataSeries2D> total_series;
   std::vector<nc::viz::DataSeries2D> link_delay_series;
+  std::vector<nc::viz::DataSeries2D> total_delay_series;
 
   for (const auto& opt : opts) {
     std::string regex =
@@ -217,24 +226,30 @@ static void PlotLinks(const std::string& field, bool new_links) {
         FLAGS_metrics_dir, kTotalDelayDeltaMetric, regex);
     DataMap link_delay_data_map = SimpleParseNumericDataNoTimestamps(
         FLAGS_metrics_dir, kLinkDelayMetric, regex);
+    DataMap total_delay_data_map = SimpleParseNumericDataNoTimestamps(
+        FLAGS_metrics_dir, kTotalDelayMetric, regex);
 
     nc::viz::DataSeries2D increase_data;
     nc::viz::DataSeries2D decrease_data;
     nc::viz::DataSeries2D total_data;
     nc::viz::DataSeries2D link_delay_data;
-    std::tie(increase_data, decrease_data, total_data, link_delay_data) =
+    nc::viz::DataSeries2D total_delay_data;
+    std::tie(increase_data, decrease_data, total_data, link_delay_data,
+             total_delay_data) =
         PlotRankedLinks(increase_data_map, decrease_data_map, delta_data_map,
-                        link_delay_data_map, order);
+                        link_delay_data_map, total_delay_data_map, order);
 
     increase_data.label = opt;
     decrease_data.label = opt;
     total_data.label = opt;
     link_delay_data.label = opt;
+    total_delay_data.label = opt;
 
     increase_series.emplace_back(increase_data);
     decrease_series.emplace_back(decrease_data);
     total_series.emplace_back(total_data);
     link_delay_series.emplace_back(link_delay_data);
+    total_delay_series.emplace_back(total_delay_data);
   }
 
   nc::viz::PythonGrapher increase_grapher(
@@ -252,6 +267,10 @@ static void PlotLinks(const std::string& field, bool new_links) {
   nc::viz::PythonGrapher ld_grapher(
       nc::StrCat("top_grow_links_ranked_link_delay_new_links_", new_links));
   ld_grapher.PlotLine({}, link_delay_series);
+
+  nc::viz::PythonGrapher td_grapher(
+      nc::StrCat("top_grow_links_ranked_total_abs_new_links_", new_links));
+  td_grapher.PlotLine({}, total_delay_series);
 }
 
 int main(int argc, char** argv) {

@@ -32,7 +32,7 @@ constexpr size_t PcapDataTrace::kFlowCacheSize;
 constexpr size_t PcapDataBinCache::kCacheLineBinCount;
 
 void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
-  uint64_t bytes_prev = bytes;
+  uint32_t bytes_prev = bytes;
   uint32_t flows_prev = flows_enter;
   bytes += other.bytes;
   flows_enter += other.flows_enter;
@@ -42,7 +42,7 @@ void TrimmedPcapDataTraceBin::Combine(const TrimmedPcapDataTraceBin& other) {
 
 void TrimmedPcapDataTraceBin::CombineWithFraction(
     const TrimmedPcapDataTraceBin& other, double fraction) {
-  uint64_t bytes_prev = bytes;
+  uint32_t bytes_prev = bytes;
   uint32_t flows_prev = flows_enter;
   bytes += other.bytes * fraction;
   flows_enter += other.flows_enter * fraction;

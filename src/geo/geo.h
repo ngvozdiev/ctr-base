@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <mutex>
 
 #include "ncode_common/src/substitute.h"
 #include "ncode_common/src/logging.h"
@@ -127,6 +128,9 @@ class Localizer {
 
   // Cache of requests.
   std::map<FindCityRequest, const CityData*> request_to_city_;
+
+  // Protects the cache.
+  std::mutex mu_;
 };
 
 }  // namespace geo
