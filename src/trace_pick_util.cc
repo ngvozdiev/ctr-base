@@ -29,7 +29,10 @@ DEFINE_string(out, "",
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_uint64(seed, 1, "Seed for the RNG");
-DEFINE_uint64(passes, 100, "Number of passes to perform for each rate");
+DEFINE_uint64(passes, 10, "Number of passes to perform for each rate");
+DEFINE_string(to_exclude,
+              "equinix-sanjose_A_12_19_2013,equinix-chicago_A_11_21_2013",
+              "Traces to exclude");
 
 using Input = std::tuple<nc::net::Bandwidth, size_t, ctr::PcapDataBinCache*,
                          const ctr::BinSequenceGenerator*>;
@@ -99,9 +102,21 @@ int main(int argc, char** argv) {
   builder.RemoveMultipleLinks();
   nc::net::GraphStorage graph(builder);
 
+  std::vector<std::string> to_exclude_v = nc::Split(FLAGS_to_exclude, ",");
+  std::set<std::string> to_exclude(to_exclude_v.begin(), to_exclude_v.end());
+  auto filter = ctr::PcapTraceStore::FilterFunction(
+      [&to_exclude](const ctr::TraceId& trace_id) {
+        if (nc::ContainsKey(to_exclude, trace_id.ToString())) {
+          LOG(INFO) << "Filtering " << trace_id.ToString();
+          return true;
+        }
+
+        return false;
+      });
+
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
   ctr::BinSequenceGenerator bin_sequence_generator(
-      trace_store.AllTraces(), {milliseconds(0), seconds(20)});
+      trace_store.AllTracesExcept(filter), {milliseconds(0)});
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaOrDie(

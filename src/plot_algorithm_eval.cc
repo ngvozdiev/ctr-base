@@ -25,6 +25,9 @@ DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
 DEFINE_bool(ignore_trivial, true,
             "Ignores topologies/TM combinations where traffic fits on the "
             "shortest path.");
+DEFINE_string(focus_stretch_on, "",
+              "If empty will plot path stretch for all flows in the data set. "
+              "If not will plot only flows in the TM idenified by this.");
 
 static constexpr char kPathStretchMetric[] = "opt_path_stretch_rel";
 static constexpr char kPathStretchAbsMetric[] = "opt_path_stretch_ms";
@@ -210,6 +213,20 @@ static std::vector<double> GetPathRatios(const TMStateMap& tm_state_map,
   return out;
 }
 
+static std::pair<double, std::string> MedianPathRatio(
+    const std::vector<double>& ratios, const TMStateMap& tm_state_map) {
+  std::vector<std::pair<double, std::string>> to_sort;
+  size_t i = 0;
+  for (const auto& key_and_data : tm_state_map) {
+    to_sort.emplace_back(ratios[i], key_and_data.first.second);
+
+    ++i;
+  }
+
+  std::sort(to_sort.begin(), to_sort.end());
+  return to_sort[to_sort.size() / 2];
+}
+
 static std::vector<double> GetTotalDelays(const TMStateMap& tm_state_map) {
   std::vector<double> out;
   for (const auto& key_and_data : tm_state_map) {
@@ -241,14 +258,18 @@ GetStretchDistribution(const TMStateMap& tm_state_map) {
 
     double max = 0;
     for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
-      size_t flow_count = tm_state.path_flow_count[i];
       double stretch = tm_state.path_stretch[i];
       max = std::max(max, stretch);
 
-      // Have to discretize the value.
-      uint64_t value_discrete =
-          static_cast<uint64_t>(kDiscreteMultiplier * stretch);
-      dist.Add(value_discrete, flow_count);
+      if (FLAGS_focus_stretch_on.empty() ||
+          FLAGS_focus_stretch_on == key_and_data.first.second) {
+        double abs_stretch = tm_state.path_stretch_abs_ms[i];
+        // Have to discretize the value.
+        uint64_t value_discrete =
+            static_cast<uint64_t>(kDiscreteMultiplier * abs_stretch);
+        size_t flow_count = tm_state.path_flow_count[i];
+        dist.Add(value_discrete, flow_count);
+      }
     }
 
     maxs.emplace_back(max);
@@ -278,6 +299,11 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
     const std::string& optimizer, const TMStateMap& tm_state_map) {
   auto result_ptr = nc::make_unique<Result>();
   std::vector<double> ratios = GetPathRatios(tm_state_map, nullptr);
+  std::pair<double, std::string> median_ratio =
+      MedianPathRatio(ratios, tm_state_map);
+  LOG(INFO) << "Opt " << optimizer << " median " << median_ratio.first
+            << " top " << median_ratio.second;
+
   result_ptr->ratios_data.label = optimizer;
   result_ptr->ratios_data.data = std::move(ratios);
 
@@ -488,14 +514,4 @@ int main(int argc, char** argv) {
 
   PlotTotalDelay(data, optimizers);
   PlotCTRRuntime(data);
-
-  //  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
-  //      FLAGS_metrics_dir, "ctr_runtime_ms", ".*");
-  //  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
-  //      FLAGS_metrics_dir, "ctr_runtime_cached_ms", ".*");
-  //  nc::viz::PythonGrapher grapher("runtime_out");
-  //  grapher.PlotCDF(
-  //      {}, {FlattenData(to_ignore, runtime_data, "Runtime (ms)"),
-  //           FlattenData(to_ignore, runtime_data_cached, "Runtime cached
-  //           (ms)")});
 }

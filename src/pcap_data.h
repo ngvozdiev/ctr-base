@@ -87,7 +87,7 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
 
   TrimmedPcapDataTraceBin(const PBBin& bin_pb)
       : bytes(bin_pb.byte_count()), flows_enter(bin_pb.enter_flow_count()) {
-    CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint16_t>::max());
+    CHECK(bin_pb.enter_flow_count() <= std::numeric_limits<uint32_t>::max());
   }
 
   void CombineWithFraction(const TrimmedPcapDataTraceBin& other,
@@ -97,7 +97,7 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
   void Combine(const TrimmedPcapDataTraceBin& other);
 
   uint32_t bytes;
-  uint16_t flows_enter;
+  uint32_t flows_enter;
 };
 
 class PcapDataTrace;
@@ -317,6 +317,8 @@ class PcapDataBinCache {
 // Stores and manages .pcap traces.
 class PcapTraceStore {
  public:
+  using FilterFunction = std::function<bool(const TraceId& id)>;
+
   PcapTraceStore(const std::string& file);
 
   // Gets a trace by id. The trace is owned by this object.
@@ -331,13 +333,23 @@ class PcapTraceStore {
     return out;
   }
 
-  std::vector<const PcapDataTrace*> AllTraces() const {
+  std::vector<const PcapDataTrace*> AllTracesExcept(
+      FilterFunction filter) const {
     std::vector<const PcapDataTrace*> out;
     for (const auto& id_and_trace : traces_) {
+      const TraceId& id = id_and_trace.first;
+      if (filter && filter(id)) {
+        continue;
+      }
+
       out.emplace_back(id_and_trace.second.get());
     }
 
     return out;
+  }
+
+  std::vector<const PcapDataTrace*> AllTraces() const {
+    return AllTracesExcept(FilterFunction());
   }
 
   std::unique_ptr<BinSequence> BinSequenceFromProtobufOrDie(

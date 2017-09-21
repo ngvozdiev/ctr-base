@@ -79,6 +79,8 @@ Localizer::Localizer(const std::string& world_cities_db_file) {
 }
 
 const CityData* Localizer::FindCityOrNull(const FindCityRequest& request) {
+  std::lock_guard<std::mutex> lock(mu_);
+
   const CityData* in_cache = FindPtrOrNull(request_to_city_, request);
   if (in_cache != nullptr) {
     return in_cache;

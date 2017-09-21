@@ -17,6 +17,7 @@
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/viz/web_page.h"
+#include "ncode_common/src/thread_runner.h"
 #include "common.h"
 #include "geo/geo.h"
 #include "metrics/metrics.h"
@@ -35,6 +36,7 @@ DEFINE_string(optimizers, "SP,CTR,CTRNFC,MinMax,MinMaxLD,MinMaxK10,B4",
 DEFINE_bool(fixed_flow_count, false,
             "If true all aggregates will have the same flow count, if false "
             "the flow count will depend on the size of the aggregate");
+DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 
 using namespace std::chrono;
 
@@ -60,7 +62,7 @@ static auto* decreasing_delay_flows =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string, std::string,
                                bool, std::string>(
-            "decreasing_delay_flow_fraction",
+            "decreasing_delay_flows_fraction",
             "Fraction of flows whose delay decreases", "Topology",
             "Traffic matrix", "Optimizer", "New link",
             "Relative stretch threshold");
@@ -89,6 +91,13 @@ static auto* total_delay_delta =
                                      "Change in total delay", "Topology",
                                      "Traffic matrix", "Optimizer", "New link");
 
+static auto* total_delay =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string,
+                               bool>("total_absolute_delay", "Total delay",
+                                     "Topology", "Traffic matrix", "Optimizer",
+                                     "New link");
+
 static auto* absolute_path_stretch_ms =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<nc::DiscreteDistribution<int64_t>, std::string,
@@ -104,6 +113,13 @@ static auto* relative_path_stretch =
             "relative_path_stretch",
             "Distribution of relative path stretch (quantized x10000)",
             "Topology", "Traffic matrix", "Optimizer", "New link");
+
+static auto* link_delay_micros =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string, std::string,
+                               bool>("link_delay_micros",
+                                     "Link delay in microseconds", "Topology",
+                                     "Traffic matrix", "Optimizer", "New link");
 
 // Elements of a traffic matrix.
 using TMElements = std::vector<nc::lp::DemandMatrixElement>;
@@ -204,8 +220,6 @@ static void RecordStretch(
     }
   }
 
-  LOG(INFO) << "dr " << dist_relative.Percentiles().front() << " "
-            << dist_relative.Percentiles().back();
   absolute_path_stretch_ms->GetHandle(input.topology_file, input.tm_file, opt,
                                       new_link)
       ->AddValue(dist);
@@ -259,7 +273,6 @@ static void Record(const OptEvalInput& input,
 
   double increasing_fraction = increasing_delay_count / delta.aggregates.size();
   double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
-  LOG(INFO) << increasing_fraction << " vs " << decreasing_fraction;
   increasing_delay_aggregate->GetHandle(input.topology_file, input.tm_file, opt,
                                         new_link, threshold_str)
       ->AddValue(increasing_fraction);
@@ -287,6 +300,16 @@ static void RecordOverloadAndTotal(const OptEvalInput& input,
   total_delay_delta->GetHandle(input.topology_file, input.tm_file, opt,
                                new_link)
       ->AddValue(change);
+  total_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+      ->AddValue(total_delay_after.count());
+}
+
+static void RecordLinkDelay(const OptEvalInput& input,
+                            std::chrono::microseconds delay,
+                            const std::string& opt, bool new_link) {
+  link_delay_micros->GetHandle(input.topology_file, input.tm_file, opt,
+                               new_link)
+      ->AddValue(delay.count());
 }
 
 static const nc::geo::CityData* GetCity(const std::string& name,
@@ -301,6 +324,8 @@ static const nc::geo::CityData* GetCity(const std::string& name,
 
 static void ProcessInput(const OptEvalInput& input, const std::string& opt,
                          nc::geo::Localizer* localizer) {
+  LOG(INFO) << "Processing " << input.topology_file << " tm " << input.tm_file
+            << " opt " << opt;
   const nc::lp::DemandMatrix& old_demand_matrix = *(input.demand_matrix);
   const nc::net::GraphStorage* old_graph = old_demand_matrix.graph();
   PathProvider old_path_provider(old_graph);
@@ -340,8 +365,10 @@ static void ProcessInput(const OptEvalInput& input, const std::string& opt,
       }
       RecordOverloadAndTotal(input, *old_routing, *new_routing, opt, new_link);
       RecordStretch(input, *old_routing, {new_routing.get()}, opt, new_link);
+      RecordLinkDelay(input, microseconds(delay_micros), opt, new_link);
     }
   }
+  LOG(INFO) << "Done";
 }
 
 }  // namespace ctr
@@ -363,8 +390,13 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
   for (const auto& opt : optimizers) {
-    for (const auto& input : to_process) {
-      ctr::ProcessInput(input, opt, &localizer);
-    }
+    nc::RunInParallel<ctr::OptEvalInput>(
+        to_process, [&opt, &localizer](const ctr::OptEvalInput& input) {
+          ctr::ProcessInput(input, opt, &localizer);
+        }, FLAGS_threads);
+
+    //    for (const auto& input : to_process) {
+    //      ctr::ProcessInput(input, opt, &localizer);
+    //    }
   }
 }
