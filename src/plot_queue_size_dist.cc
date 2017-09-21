@@ -34,6 +34,12 @@ int main(int argc, char** argv) {
   CHECK(data_vector.size() == 1);
 
   const nc::DiscreteDistribution<int64_t>& dist = data_vector.front();
+  const std::map<int64_t, uint64_t>& counts = dist.counts();
+  for (const auto& value_and_count : counts) {
+    LOG(INFO) << "V " << value_and_count.first << " count "
+              << value_and_count.second;
+  }
+
   std::vector<int64_t> values = dist.Percentiles(10000);
 
   nc::viz::DataSeries2D data_series;
