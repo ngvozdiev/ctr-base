@@ -61,7 +61,7 @@ DEFINE_bool(simulate_initial_handshake, true,
 DEFINE_uint64(
     tcp_initial_cwnd_pkts, 4,
     "How many packets should there be in the inital congestion window");
-DEFINE_uint64(duration_sec, 500, "For how long to run (in simulated time)");
+DEFINE_uint64(duration_sec, 2000, "For how long to run (in simulated time)");
 
 static void AddKeyFrames(Bandwidth start_rate, Bandwidth mid_rate,
                          Bandwidth end_rate, size_t count,
@@ -218,6 +218,8 @@ int main(int argc, char** argv) {
     opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true, 0.95);
   } else if (FLAGS_opt == "MinMax") {
     opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.9, false);
+  } else if (FLAGS_opt == "MinMaxLD") {
+    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.9, true);
   } else if (FLAGS_opt == "SP") {
     opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
   }

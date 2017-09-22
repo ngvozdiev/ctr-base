@@ -230,6 +230,7 @@ int main(int argc, char** argv) {
       {FLAGS_estimator_headroom, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.prob_model_config = prob_model_config;
+  routing_system_config.store_to_metrics = false;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 
