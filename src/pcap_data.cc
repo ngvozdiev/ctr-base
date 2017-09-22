@@ -836,8 +836,6 @@ std::vector<std::unique_ptr<BinSequence>> BinSequence::SplitOrDie(
 
 std::vector<std::unique_ptr<BinSequence>> BinSequence::PreciseSplitOrDie(
     const std::vector<double>& fractions) const {
-  double total = std::accumulate(fractions.begin(), fractions.end(), 0.0);
-  CHECK(total <= 1);
   std::vector<std::unique_ptr<BinSequence>> out;
 
   for (double fraction : fractions) {

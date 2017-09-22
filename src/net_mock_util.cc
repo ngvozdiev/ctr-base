@@ -54,6 +54,7 @@ DEFINE_uint64(duration_ms, 90000, "For how long to run (in simulated time)");
 DEFINE_double(exceed_probability, 0.001,
               "Probability convolution to exceed rate");
 DEFINE_bool(sp_opt, false, "If true will run SP routing instead of CTR");
+DEFINE_double(demand_scale, 1.0, "Will scale all packet traces by this much");
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -94,6 +95,8 @@ static void HandleDefault(
         id_and_bin_sequence.second;
     std::unique_ptr<ctr::BinSequence> from_start =
         bin_sequence->CutFromStart(round_duration);
+    from_start =
+        std::move(from_start->PreciseSplitOrDie({FLAGS_demand_scale})[0]);
 
     uint64_t flow_count =
         FlowCountFromBinsSequence(*from_start, device_factory.bin_cache());
