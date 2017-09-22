@@ -53,6 +53,7 @@ DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_uint64(duration_ms, 90000, "For how long to run (in simulated time)");
 DEFINE_double(exceed_probability, 0.001,
               "Probability convolution to exceed rate");
+DEFINE_bool(sp_opt, false, "If true will run SP routing instead of CTR");
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -208,7 +209,15 @@ int main(int argc, char** argv) {
   }
 
   ctr::PathProvider path_provider(&graph);
-  ctr::CTROptimizer opt(&path_provider, 0.95, true, false);
+  std::unique_ptr<ctr::Optimizer> opt;
+  if (FLAGS_sp_opt) {
+    opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
+  } else {
+    double link_cap_multiplier = 2 - FLAGS_estimator_headroom;
+    CHECK(link_cap_multiplier > 0);
+    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider,
+                                             link_cap_multiplier, true, false);
+  }
 
   ctr::ProbModelConfig prob_model_config;
   prob_model_config.exceed_probability = FLAGS_exceed_probability;
@@ -217,7 +226,7 @@ int main(int argc, char** argv) {
       {FLAGS_estimator_headroom, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.prob_model_config = prob_model_config;
-  ctr::RoutingSystem routing_system(routing_system_config, &opt,
+  ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 
   nc::net::IPAddress controller_ip(100);
