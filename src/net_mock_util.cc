@@ -93,10 +93,11 @@ static void HandleDefault(
     const ctr::AggregateId& id = id_and_bin_sequence.first;
     std::unique_ptr<ctr::BinSequence>& bin_sequence =
         id_and_bin_sequence.second;
+    bin_sequence =
+        std::move(bin_sequence->PreciseSplitOrDie({FLAGS_demand_scale})[0]);
+
     std::unique_ptr<ctr::BinSequence> from_start =
         bin_sequence->CutFromStart(round_duration);
-    from_start =
-        std::move(from_start->PreciseSplitOrDie({FLAGS_demand_scale})[0]);
 
     uint64_t flow_count =
         FlowCountFromBinsSequence(*from_start, device_factory.bin_cache());
