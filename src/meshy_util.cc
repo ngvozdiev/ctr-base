@@ -65,6 +65,51 @@ const nc::net::GraphLink* MaxDelayLink(const nc::net::GraphStorage& graph) {
   return out;
 }
 
+// Returns true if two nodes are reachable given a set of constraints.
+static bool Reachable(nc::net::GraphNodeIndex node_one,
+                      nc::net::GraphNodeIndex node_two,
+                      const nc::net::GraphStorage& graph,
+                      const nc::net::ExclusionSet& exclusion_set) {
+  nc::net::GraphNodeSet reachable_from_one =
+      nc::net::ReachableNodes(node_one, graph, exclusion_set);
+  return reachable_from_one.Contains(node_two);
+}
+
+// Returns the fraction of all pairs that are reachable when the shortest path
+// between two nodes in excluded from the graph.
+static double ReachableFraction(nc::net::GraphNodeIndex node_one,
+                                nc::net::GraphNodeIndex node_two,
+                                const nc::net::GraphStorage& graph) {
+  double total = 0;
+  double reachable = 0;
+
+  nc::net::ShortestPath sp_tree(node_one, graph.AllNodes(), {},
+                                graph.AdjacencyList());
+  std::unique_ptr<nc::net::Walk> path = sp_tree.GetPath(node_two);
+  CHECK(path && path->size() != 0) << "Unable to find shortest path";
+
+  nc::net::ExclusionSet exclusion_set;
+  exclusion_set.Links(path->LinkSet());
+
+  nc::net::GraphNodeSet all_nodes = graph.AllNodes();
+  for (nc::net::GraphNodeIndex src : all_nodes) {
+    for (nc::net::GraphNodeIndex dst : all_nodes) {
+      if (src <= dst) {
+        // Don't care about half of the possibilities, since links are
+        // bidirectional.
+        continue;
+      }
+
+      ++total;
+      if (Reachable(src, dst, graph, exclusion_set)) {
+        ++reachable;
+      }
+    }
+  }
+
+  return reachable / total;
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
