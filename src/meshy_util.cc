@@ -18,6 +18,14 @@
 
 DEFINE_string(topology_files, "", "Topology files");
 
+using NodePair = std::pair<nc::net::GraphNodeIndex, nc::net::GraphNodeIndex>;
+
+static constexpr nc::net::Bandwidth kDefaultDemand =
+    nc::net::Bandwidth::FromGBitsPerSecond(100);
+static constexpr size_t kDefaultFlowCount = 1000;
+static constexpr char kSuperSourceId[] = "SuperSource";
+static constexpr char kSuperSinkId[] = "SuperSink";
+
 static std::vector<std::string> GetTopologyFiles() {
   std::vector<std::string> out;
   std::vector<std::string> split = nc::Split(FLAGS_topology_files, ",");
@@ -27,6 +35,52 @@ static std::vector<std::string> GetTopologyFiles() {
   }
 
   return out;
+}
+
+// Routes a set of aggregates on their shortest paths and returns the set of
+// links that bottleneck first when all aggregates are grown at the same rate.
+static std::pair<nc::net::GraphLinkSet, nc::net::Bandwidth>
+BottleneckLinksForAggregates(
+    const std::set<NodePair>& aggregates, const nc::net::GraphStorage& graph,
+    const std::map<NodePair, nc::net::Walk>& shortest_paths) {
+  // Will create a fake traffic matrix and routing configuration that only
+  // contains the shortest path for each aggregate. Will then use the
+  // oversubscription model to figure out what links will be bottlenecked.
+  ctr::TrafficMatrix tm(&graph);
+  for (const auto& src_and_dst : aggregates) {
+    tm.AddDemand(ctr::AggregateId(src_and_dst),
+                 ctr::DemandAndFlowCount(kDefaultDemand, kDefaultFlowCount));
+  }
+
+  ctr::RoutingConfiguration routing_config(tm);
+  for (const auto& src_and_dst : aggregates) {
+    const nc::net::Walk& sp = nc::FindOrDie(shortest_paths, src_and_dst);
+    routing_config.AddRouteAndFraction(ctr::AggregateId(src_and_dst),
+                                       {ctr::RouteAndFraction(&sp, 1.0)});
+  }
+
+  ctr::OverSubModel oversub_model(routing_config);
+  const nc::net::GraphLinkMap<double>& links_to_load =
+      oversub_model.link_to_load();
+
+  nc::net::GraphLinkSet out;
+  for (const auto& link_and_load : links_to_load) {
+    double load = *(link_and_load.second);
+    if (load > 0.99) {
+      out.Insert(link_and_load.first);
+    }
+  }
+
+  // Need to also figure out what the total flow through the network is.
+  nc::net::Bandwidth total;
+  const std::map<const nc::net::Walk*, nc::net::Bandwidth>& per_flow_bw_map =
+      oversub_model.per_flow_bandwidth_map();
+  for (const auto& path_and_bw : per_flow_bw_map) {
+    nc::net::Bandwidth bandwidth = path_and_bw.second * kDefaultFlowCount;
+    total += bandwidth;
+  }
+
+  return {out, total};
 }
 
 // Returns true if two nodes are reachable given a set of constraints.
@@ -39,31 +93,30 @@ static bool Reachable(nc::net::GraphNodeIndex node_one,
   return reachable_from_one.Contains(node_two);
 }
 
-static constexpr char kSuperSourceId[] = "SuperSource";
-static constexpr char kSuperSinkId[] = "SuperSink";
-
-// Returns the flow between the super-source that connects two sources and the
-// super-sink that connects two sink nodes.
-static nc::net::Bandwidth PairwiseFlow(nc::net::GraphNodeIndex source_one,
-                                       nc::net::GraphNodeIndex source_two,
-                                       nc::net::GraphNodeIndex sink_one,
-                                       nc::net::GraphNodeIndex sink_two,
+// Returns the flow between the super-source that connects the sources of a
+// number of aggregates and another sources and the super-sink that connects the
+// destinations of a number of aggregates and another destination.
+static nc::net::Bandwidth PairwiseFlow(const std::set<NodePair>& aggregates,
+                                       nc::net::GraphNodeIndex src,
+                                       nc::net::GraphNodeIndex dst,
                                        const nc::net::GraphStorage& graph) {
-  const std::string& source_one_id = graph.GetNode(source_one)->id();
-  const std::string& source_two_id = graph.GetNode(source_two)->id();
-  const std::string& sink_one_id = graph.GetNode(sink_one)->id();
-  const std::string& sink_two_id = graph.GetNode(sink_two)->id();
-
   // Will first create super source / sinks.
   nc::net::GraphBuilder graph_builder = graph.ToBuilder();
-  graph_builder.AddLink({kSuperSourceId, source_one_id,
-                         nc::net::Bandwidth::Max(), nc::net::Delay::zero()});
-  graph_builder.AddLink({kSuperSourceId, source_two_id,
-                         nc::net::Bandwidth::Max(), nc::net::Delay::zero()});
-  graph_builder.AddLink({sink_one_id, kSuperSinkId, nc::net::Bandwidth::Max(),
-                         nc::net::Delay::zero()});
-  graph_builder.AddLink({sink_two_id, kSuperSinkId, nc::net::Bandwidth::Max(),
-                         nc::net::Delay::zero()});
+  for (const auto& src_and_dst : aggregates) {
+    const std::string& src_id = graph.GetNode(src_and_dst.first)->id();
+    const std::string& dst_id = graph.GetNode(src_and_dst.second)->id();
+    graph_builder.AddLink(
+        {kSuperSourceId, src_id, nc::net::Bandwidth::Max(), nc::net::Delay(1)});
+    graph_builder.AddLink(
+        {dst_id, kSuperSinkId, nc::net::Bandwidth::Max(), nc::net::Delay(1)});
+  }
+
+  const std::string& src_id = graph.GetNode(src)->id();
+  const std::string& dst_id = graph.GetNode(dst)->id();
+  graph_builder.AddLink(
+      {kSuperSourceId, src_id, nc::net::Bandwidth::Max(), nc::net::Delay(1)});
+  graph_builder.AddLink(
+      {dst_id, kSuperSinkId, nc::net::Bandwidth::Max(), nc::net::Delay(1)});
 
   // The flow problem will take link capacities in Mbps.
   nc::net::GraphStorage extended_graph(graph_builder);
@@ -85,65 +138,90 @@ static nc::net::Bandwidth PairwiseFlow(nc::net::GraphNodeIndex source_one,
 // Returns the fraction of all pairs that are reachable when the shortest path
 // between two nodes in excluded from the graph.
 static std::pair<double, double> ReachableFraction(
-    nc::net::GraphNodeIndex node_one, nc::net::GraphNodeIndex node_two,
-    const nc::net::GraphStorage& graph) {
+    const std::set<NodePair>& aggregates, const nc::net::GraphStorage& graph,
+    const std::map<NodePair, nc::net::Walk>& shortest_paths) {
   double total = 0;
-  double reachable = 0;
+  double unreachable = 0;
   double unreachable_no_alternative = 0;
 
-  nc::net::ShortestPath sp_tree(node_one, graph.AllNodes(), {},
-                                graph.AdjacencyList());
-  std::unique_ptr<nc::net::Walk> path = sp_tree.GetPath(node_two);
-  CHECK(path && path->size() != 0) << "Unable to find shortest path";
+  nc::net::GraphLinkSet full_links;
+  nc::net::Bandwidth total_flow;
+  std::tie(full_links, total_flow) =
+      BottleneckLinksForAggregates(aggregates, graph, shortest_paths);
 
-  nc::net::Bandwidth bottleneck_bandwidth;
   nc::net::ExclusionSet exclusion_set;
-  exclusion_set.Links(path->BottleneckLinks(graph, &bottleneck_bandwidth));
+  exclusion_set.Links(full_links);
 
   nc::net::GraphNodeSet all_nodes = graph.AllNodes();
   for (nc::net::GraphNodeIndex src : all_nodes) {
     for (nc::net::GraphNodeIndex dst : all_nodes) {
-      if (src <= dst) {
-        // Don't care about half of the possibilities, since links are
-        // bidirectional.
+      if (src == dst) {
         continue;
       }
 
-      if (src == node_one && dst == node_two) {
+      if (nc::ContainsKey(aggregates, std::make_pair(src, dst))) {
         continue;
       }
 
       ++total;
       if (Reachable(src, dst, graph, exclusion_set)) {
-        ++reachable;
-      } else {
-        nc::net::Bandwidth pairwise_flow =
-            PairwiseFlow(node_one, src, node_two, dst, graph);
-        if (pairwise_flow == bottleneck_bandwidth) {
-          ++unreachable_no_alternative;
-        }
+        continue;
+      }
+
+      ++unreachable;
+      nc::net::Bandwidth pairwise_flow =
+          PairwiseFlow(aggregates, src, dst, graph);
+      if (pairwise_flow == total_flow) {
+        ++unreachable_no_alternative;
       }
     }
   }
 
-  return {reachable / total, unreachable_no_alternative / total};
+  return {unreachable / total, unreachable_no_alternative / total};
 }
 
-static void ComputeReachableFractions(const nc::net::GraphStorage& graph) {
-  nc::net::GraphNodeSet all_nodes = graph.AllNodes();
-  for (nc::net::GraphNodeIndex src : all_nodes) {
-    for (nc::net::GraphNodeIndex dst : all_nodes) {
-      if (src <= dst) {
+// Returns the aggregates whose shortest paths cross a link for each link.
+nc::net::GraphLinkMap<std::set<NodePair>> SPCrossAggregates(
+    const nc::net::GraphStorage& graph,
+    std::map<NodePair, nc::net::Walk>* shortest_paths) {
+  nc::net::GraphLinkMap<std::set<NodePair>> out;
+
+  for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
+    nc::net::ShortestPath sp_tree(
+        src, graph.AllNodes(), nc::net::ExclusionSet(), graph.AdjacencyList());
+    for (nc::net::GraphNodeIndex dst : graph.AllNodes()) {
+      if (src == dst) {
         continue;
       }
 
-      double reachable;
-      double unreachable;
-      std::tie(reachable, unreachable) = ReachableFraction(src, dst, graph);
-      LOG(INFO) << reachable << " " << unreachable << " "
-                << graph.GetNode(src)->id() << " " << graph.GetNode(dst)->id();
-      return;
+      std::unique_ptr<nc::net::Walk> shortest_path = sp_tree.GetPath(dst);
+      for (nc::net::GraphLinkIndex link_on_path :
+           sp_tree.GetPath(dst)->links()) {
+        out[link_on_path].emplace(src, dst);
+      }
+
+      (*shortest_paths)[{src, dst}] = *shortest_path;
     }
+  }
+
+  return out;
+}
+
+static void PlotReachableFractions(const nc::net::GraphStorage& graph) {
+  std::map<NodePair, nc::net::Walk> shortest_paths;
+  nc::net::GraphLinkMap<std::vector<NodePair>> cross_map =
+      SPCrossAggregates(graph, &shortest_paths);
+
+  for (const auto& link_and_aggregates : cross_map) {
+    nc::net::GraphLinkIndex link = link_and_aggregates.first;
+    const std::set<NodePair> aggregates = *(link_and_aggregates.second);
+
+    double unreachable;
+    double unreachable_no_alternative;
+    std::tie(unreachable, unreachable_no_alternative) =
+        ReachableFraction(aggregates, graph, shortest_paths);
+    LOG(INFO) << unreachable << " " << unreachable_no_alternative << " "
+              << graph.GetLink(link)->ToStringNoPorts();
   }
 }
 
@@ -159,6 +237,6 @@ int main(int argc, char** argv) {
         nc::File::ReadFileToStringOrDie(topology_file));
     builder.RemoveMultipleLinks();
     nc::net::GraphStorage graph(builder);
-    ComputeReachableFractions(graph);
+    PlotReachableFractions(graph);
   }
 }

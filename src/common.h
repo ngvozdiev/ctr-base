@@ -27,6 +27,10 @@ class AggregateId {
   AggregateId(nc::net::GraphNodeIndex src, nc::net::GraphNodeIndex dst)
       : src_(src), dst_(dst) {}
 
+  explicit AggregateId(const std::pair<nc::net::GraphNodeIndex,
+                                       nc::net::GraphNodeIndex>& src_and_dst)
+      : src_(src_and_dst.first), dst_(src_and_dst.second) {}
+
   nc::net::GraphNodeIndex src() const { return src_; }
 
   nc::net::GraphNodeIndex dst() const { return dst_; }
