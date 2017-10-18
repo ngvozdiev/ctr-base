@@ -1,7 +1,7 @@
 #include <gflags/gflags.h>
 #include <chrono>
+#include <iostream>
 #include <memory>
-#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -15,6 +15,7 @@
 #include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/perfect_hash.h"
 #include "ncode_common/src/strutil.h"
+#include "ncode_common/src/viz/grapher.h"
 
 DEFINE_string(topology_files, "", "Topology files");
 
@@ -57,13 +58,13 @@ static nc::net::Bandwidth PairwiseFlow(nc::net::GraphNodeIndex source_one,
   // Will first create super source / sinks.
   nc::net::GraphBuilder graph_builder = graph.ToBuilder();
   graph_builder.AddLink({kSuperSourceId, source_one_id,
-                         nc::net::Bandwidth::Max(), nc::net::Delay::zero()});
+                         nc::net::Bandwidth::Max(), nc::net::Delay(1)});
   graph_builder.AddLink({kSuperSourceId, source_two_id,
-                         nc::net::Bandwidth::Max(), nc::net::Delay::zero()});
+                         nc::net::Bandwidth::Max(), nc::net::Delay(1)});
   graph_builder.AddLink({sink_one_id, kSuperSinkId, nc::net::Bandwidth::Max(),
-                         nc::net::Delay::zero()});
+                         nc::net::Delay(1)});
   graph_builder.AddLink({sink_two_id, kSuperSinkId, nc::net::Bandwidth::Max(),
-                         nc::net::Delay::zero()});
+                         nc::net::Delay(1)});
 
   // The flow problem will take link capacities in Mbps.
   nc::net::GraphStorage extended_graph(graph_builder);
@@ -88,7 +89,7 @@ static std::pair<double, double> ReachableFraction(
     nc::net::GraphNodeIndex node_one, nc::net::GraphNodeIndex node_two,
     const nc::net::GraphStorage& graph) {
   double total = 0;
-  double reachable = 0;
+  double unreachable = 0;
   double unreachable_no_alternative = 0;
 
   nc::net::ShortestPath sp_tree(node_one, graph.AllNodes(), {},
@@ -115,21 +116,27 @@ static std::pair<double, double> ReachableFraction(
 
       ++total;
       if (Reachable(src, dst, graph, exclusion_set)) {
-        ++reachable;
-      } else {
-        nc::net::Bandwidth pairwise_flow =
-            PairwiseFlow(node_one, src, node_two, dst, graph);
-        if (pairwise_flow == bottleneck_bandwidth) {
-          ++unreachable_no_alternative;
-        }
+        continue;
+      }
+
+      ++unreachable;
+      nc::net::Bandwidth pairwise_flow =
+          PairwiseFlow(node_one, src, node_two, dst, graph);
+      if (pairwise_flow == bottleneck_bandwidth) {
+        ++unreachable_no_alternative;
       }
     }
   }
 
-  return {reachable / total, unreachable_no_alternative / total};
+  return {unreachable / total, unreachable_no_alternative / total};
 }
 
-static void ComputeReachableFractions(const nc::net::GraphStorage& graph) {
+static double PlotReachableFractions(const nc::net::GraphStorage& graph,
+                                     const std::string& graph_name) {
+  std::vector<double> unreachable_values;
+  std::vector<double> unreachable_no_alt_values;
+  double total_delta = 0;
+
   nc::net::GraphNodeSet all_nodes = graph.AllNodes();
   for (nc::net::GraphNodeIndex src : all_nodes) {
     for (nc::net::GraphNodeIndex dst : all_nodes) {
@@ -137,14 +144,22 @@ static void ComputeReachableFractions(const nc::net::GraphStorage& graph) {
         continue;
       }
 
-      double reachable;
       double unreachable;
-      std::tie(reachable, unreachable) = ReachableFraction(src, dst, graph);
-      LOG(INFO) << reachable << " " << unreachable << " "
-                << graph.GetNode(src)->id() << " " << graph.GetNode(dst)->id();
-      return;
+      double unreachable_no_alt;
+      std::tie(unreachable, unreachable_no_alt) =
+          ReachableFraction(src, dst, graph);
+      unreachable_values.emplace_back(unreachable);
+      unreachable_no_alt_values.emplace_back(unreachable_no_alt);
+
+      total_delta += unreachable - unreachable_no_alt;
     }
   }
+
+  nc::viz::PythonGrapher grapher(nc::StrCat("meshy_out/g_", graph_name));
+  grapher.PlotCDF({}, {{"unreachable", unreachable_values},
+                       {"unreachable_no_alt", unreachable_no_alt_values}});
+  double weight = all_nodes.Count() * (all_nodes.Count() - 1) / 2.0;
+  return total_delta / weight;
 }
 
 int main(int argc, char** argv) {
@@ -153,12 +168,32 @@ int main(int argc, char** argv) {
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
+  double max_delta = 0;
+  std::string topology_with_max_delta;
+
   std::vector<double> all_links_to_remove;
   for (const std::string& topology_file : topology_files) {
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file));
     builder.RemoveMultipleLinks();
     nc::net::GraphStorage graph(builder);
-    ComputeReachableFractions(graph);
+
+    if (graph.NodeCount() > 50 || graph.NodeCount() < 20) {
+      LOG(INFO) << "Skipping " << topology_file;
+      continue;
+    }
+
+    LOG(INFO) << "Processing " << topology_file << " size "
+              << graph.NodeCount();
+    std::string filename = nc::File::ExtractFileName(topology_file);
+    double delta = PlotReachableFractions(graph, filename);
+
+    if (delta > max_delta) {
+      max_delta = delta;
+      topology_with_max_delta = filename;
+    }
   }
+
+  LOG(INFO) << "max delta " << max_delta << " topology "
+            << topology_with_max_delta;
 }
