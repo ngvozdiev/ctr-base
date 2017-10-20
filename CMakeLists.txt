@@ -121,7 +121,7 @@ add_executable(tm_util src/tm_util.cc)
 target_link_libraries(tm_util ctr_base gflags)
 
 add_executable(meshy_util src/meshy_util.cc)
-target_link_libraries(meshy_util ncode gflags)
+target_link_libraries(meshy_util ctr_base gflags)
 
 add_executable(trace_pick_util src/trace_pick_util.cc)
 target_link_libraries(trace_pick_util ctr_base gflags)

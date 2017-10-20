@@ -49,7 +49,7 @@ static std::vector<std::string> GetTopologyFiles() {
 static std::pair<nc::net::GraphLinkSet, nc::net::Bandwidth>
 BottleneckLinksForAggregates(
     const std::set<NodePair>& aggregates, const nc::net::GraphStorage& graph,
-    const std::map<NodePair, nc::net::Walk>& shortest_paths) {
+    const std::map<NodePair, std::unique_ptr<nc::net::Walk>>& shortest_paths) {
   // Will create a fake traffic matrix and routing configuration that only
   // contains the shortest path for each aggregate. Will then use the
   // oversubscription model to figure out what links will be bottlenecked.
@@ -61,7 +61,8 @@ BottleneckLinksForAggregates(
 
   ctr::RoutingConfiguration routing_config(tm);
   for (const auto& src_and_dst : aggregates) {
-    const nc::net::Walk& sp = nc::FindOrDie(shortest_paths, src_and_dst);
+    const nc::net::Walk& sp =
+        *(nc::FindOrDieNoPrint(shortest_paths, src_and_dst));
     routing_config.AddRouteAndFraction(ctr::AggregateId(src_and_dst),
                                        {ctr::RouteAndFraction(&sp, 1.0)});
   }
@@ -147,7 +148,7 @@ static nc::net::Bandwidth PairwiseFlow(const std::set<NodePair>& aggregates,
 // between two nodes in excluded from the graph.
 static std::pair<double, double> ReachableFraction(
     const std::set<NodePair>& aggregates, const nc::net::GraphStorage& graph,
-    const std::map<NodePair, nc::net::Walk>& shortest_paths) {
+    const std::map<NodePair, std::unique_ptr<nc::net::Walk>>& shortest_paths) {
   double total = 0;
   double unreachable = 0;
   double unreachable_no_alternative = 0;
@@ -191,7 +192,7 @@ static std::pair<double, double> ReachableFraction(
 // Returns the aggregates whose shortest paths cross a link for each link.
 nc::net::GraphLinkMap<std::set<NodePair>> SPCrossAggregates(
     const nc::net::GraphStorage& graph,
-    std::map<NodePair, nc::net::Walk>* shortest_paths) {
+    std::map<NodePair, std::unique_ptr<nc::net::Walk>>* shortest_paths) {
   nc::net::GraphLinkMap<std::set<NodePair>> out;
 
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
@@ -203,12 +204,11 @@ nc::net::GraphLinkMap<std::set<NodePair>> SPCrossAggregates(
       }
 
       std::unique_ptr<nc::net::Walk> shortest_path = sp_tree.GetPath(dst);
-      for (nc::net::GraphLinkIndex link_on_path :
-           sp_tree.GetPath(dst)->links()) {
+      for (nc::net::GraphLinkIndex link_on_path : shortest_path->links()) {
         out[link_on_path].emplace(src, dst);
       }
 
-      (*shortest_paths)[{src, dst}] = *shortest_path;
+      (*shortest_paths)[{src, dst}] = std::move(shortest_path);
     }
   }
 
@@ -217,8 +217,8 @@ nc::net::GraphLinkMap<std::set<NodePair>> SPCrossAggregates(
 
 static double PlotReachableFractions(const nc::net::GraphStorage& graph,
                                      const std::string& graph_name) {
-  std::map<NodePair, nc::net::Walk> shortest_paths;
-  nc::net::GraphLinkMap<std::vector<NodePair>> cross_map =
+  std::map<NodePair, std::unique_ptr<nc::net::Walk>> shortest_paths;
+  nc::net::GraphLinkMap<std::set<NodePair>> cross_map =
       SPCrossAggregates(graph, &shortest_paths);
 
   std::vector<double> unreachable_values;
@@ -226,15 +226,12 @@ static double PlotReachableFractions(const nc::net::GraphStorage& graph,
   double total_delta = 0;
 
   for (const auto& link_and_aggregates : cross_map) {
-    nc::net::GraphLinkIndex link = link_and_aggregates.first;
     const std::set<NodePair> aggregates = *(link_and_aggregates.second);
 
     double unreachable;
     double unreachable_no_alternative;
     std::tie(unreachable, unreachable_no_alternative) =
         ReachableFraction(aggregates, graph, shortest_paths);
-    LOG(INFO) << unreachable << " " << unreachable_no_alternative << " "
-              << graph.GetLink(link)->ToStringNoPorts();
 
     unreachable_values.emplace_back(unreachable);
     unreachable_no_alt_values.emplace_back(unreachable_no_alternative);
@@ -255,17 +252,14 @@ int main(int argc, char** argv) {
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
-  double max_delta = 0;
-  std::string topology_with_max_delta;
-
-  std::vector<double> all_links_to_remove;
+  std::vector<std::pair<double, std::string>> deltas_and_topologies;
   for (const std::string& topology_file : topology_files) {
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file));
     builder.RemoveMultipleLinks();
     nc::net::GraphStorage graph(builder);
 
-    if (graph.NodeCount() > 50 || graph.NodeCount() < 20) {
+    if (graph.NodeCount() > 70 || graph.NodeCount() < 20) {
       LOG(INFO) << "Skipping " << topology_file;
       continue;
     }
@@ -274,13 +268,14 @@ int main(int argc, char** argv) {
               << graph.NodeCount();
     std::string filename = nc::File::ExtractFileName(topology_file);
     double delta = PlotReachableFractions(graph, filename);
-
-    if (delta > max_delta) {
-      max_delta = delta;
-      topology_with_max_delta = filename;
-    }
+    deltas_and_topologies.emplace_back(delta, filename);
   }
 
-  LOG(INFO) << "max delta " << max_delta << " topology "
-            << topology_with_max_delta;
+  std::sort(deltas_and_topologies.begin(), deltas_and_topologies.end());
+  LOG(INFO) << nc::Join(
+      deltas_and_topologies, "\n",
+      [](const std::pair<double, std::string>& delta_and_topology) {
+        return nc::StrCat(delta_and_topology.first, " : ",
+                          delta_and_topology.second);
+      });
 }
