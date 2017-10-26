@@ -277,10 +277,10 @@ static void RunWithSimpleTopologyTwoAggregates() {
 
   nc::net::GraphStorage graph(builder);
   TrafficMatrix initial_tm(&graph);
-  AggregateId id_one(
-      {graph.NodeFromStringOrDie("A"), graph.NodeFromStringOrDie("B")});
-  AggregateId id_two(
-      {graph.NodeFromStringOrDie("D"), graph.NodeFromStringOrDie("C")});
+  AggregateId id_one(graph.NodeFromStringOrDie("A"),
+                     graph.NodeFromStringOrDie("B"));
+  AggregateId id_two(graph.NodeFromStringOrDie("D"),
+                     graph.NodeFromStringOrDie("C"));
 
   initial_tm.AddDemand(
       id_one, {nc::net::Bandwidth::FromGBitsPerSecond(FLAGS_ab_aggregate_gbps),

@@ -361,7 +361,7 @@ Manifest MetricsParser::ParseManifest() const {
   return {std::move(entry_map)};
 }
 
-void MetricsParser::Parse() {
+void MetricsParser::Parse(bool parallel) {
   std::map<std::string, std::vector<MetricProcessor*>> interested;
   for (const std::string& file : metric_files_) {
     for (const auto& processor : processors_) {
@@ -381,9 +381,15 @@ void MetricsParser::Parse() {
     to_run.emplace_back(StrCat(metric_dir_, "/", file), &interested_processors);
   }
 
-  RunInParallel<FileAndProcessors>(to_run, [](const FileAndProcessors& data) {
-    ParseSingleFile(data.first, *(data.second));
-  }, to_run.size());
+  if (parallel) {
+    RunInParallel<FileAndProcessors>(to_run, [](const FileAndProcessors& data) {
+      ParseSingleFile(data.first, *(data.second));
+    }, to_run.size());
+  } else {
+    for (const FileAndProcessors& file_and_processors : to_run) {
+      ParseSingleFile(file_and_processors.first, *file_and_processors.second);
+    }
+  }
 }
 
 class AsciiTable {

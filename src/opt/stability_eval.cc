@@ -192,6 +192,20 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm,
   ctr::RoutingConfigurationDelta ctr_delta =
       ctr_before->GetDifference(*ctr_after);
 
+  ctr::MinMaxOptimizer minmax_opt(path_provider, 1.0, true);
+  auto minmax_before = minmax_opt.Optimize(*tm_before);
+  auto minmax_after = minmax_opt.Optimize(*tm_after);
+  ctr::RoutingConfigurationDelta minmax_delta =
+      minmax_before->GetDifference(*minmax_after);
+
+  ctr::MinMaxPathBasedOptimizer minmax_pb_opt(path_provider, 1.0, true, 10);
+  auto minmax_pb_before = minmax_pb_opt.Optimize(*tm_before);
+  auto minmax_pb_after = minmax_pb_opt.Optimize(*tm_after);
+  ctr::RoutingConfigurationDelta minmax_pb_delta =
+      minmax_pb_before->GetDifference(*minmax_pb_after);
+
+  RecordDeltas(topology_string, tm_string, "MinMax(LD)", minmax_delta);
+  RecordDeltas(topology_string, tm_string, "MinMax(K10)", minmax_pb_delta);
   RecordDeltas(topology_string, tm_string, "CTR", ctr_delta);
   RecordDeltas(topology_string, tm_string, "CTR_LIM", ctr_delta_limits);
   RecordDeltas(topology_string, tm_string, "B4", b4_delta);
