@@ -77,6 +77,13 @@ static auto* stability_scale_factor =
             "By how much the TM had to be scaled to make B4 fit", "Topology",
             "Traffic matrix");
 
+static auto* stability_total_flow_delay_delta =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string, std::string>(
+            "stability_total_flow_delay_delta",
+            "Change in the total sum of delays experienced by all flows.",
+            "Topology", "Traffic matrix", "Optimizer");
+
 DEFINE_string(topology_files, "", "A list of topology files");
 DEFINE_double(demand_fraction, 0.05, "By how much to vary demand");
 DEFINE_double(flow_count_fraction, 0.05, "By how much to vary flow counts.");
@@ -111,12 +118,15 @@ void RecordDeltas(const std::string& topology, const std::string& tm,
       stability_update_count->GetHandle(topology, tm, opt);
   auto* remove_count_handle =
       stability_remove_count->GetHandle(topology, tm, opt);
+  auto* total_delay_delta_handle =
+      stability_total_flow_delay_delta->GetHandle(topology, tm, opt);
 
   volume_delta_handle->AddValue(delta.total_volume_fraction_delta);
   volume_delta_lp_handle->AddValue(delta.total_volume_fraction_on_longer_path);
   flow_count_delta_handle->AddValue(delta.total_flow_fraction_delta);
   flow_count_delta_lp_handle->AddValue(
       delta.total_flow_fraction_on_longer_path);
+  total_delay_delta_handle->AddValue(delta.total_per_flow_delay_delta);
 
   size_t route_adds;
   size_t route_removals;
@@ -171,6 +181,18 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm,
   std::mt19937 rnd(seed);
   auto b4_before_and_after =
       RunB4(tm, topology_string, tm_string, path_provider, &rnd);
+
+  // Will check to see if the matrix is trivially satisfiable---if all
+  // aggregates fit on the shortest path.
+  size_t max_num_paths =
+      b4_before_and_after.second->MaxNumberOfPathsInAggregate();
+  CHECK(max_num_paths > 0);
+  if (max_num_paths == 1) {
+    LOG(INFO) << "Will skip trivially satisfiable topology " << topology_string
+              << " matrix " << tm_string;
+    return;
+  }
+
   ctr::RoutingConfigurationDelta b4_delta =
       b4_before_and_after.first->GetDifference(*b4_before_and_after.second);
 
@@ -268,6 +290,7 @@ int main(int argc, char** argv) {
           nc::File::ReadFileToStringOrDie(matrix_file), nodes_in_order, &graph);
       ctr::TrafficMatrix traffic_matrix(*demand_matrix,
                                         GetFlowCountMap(*demand_matrix));
+
       if (traffic_matrix.demands().size() > FLAGS_max_matrix_size) {
         continue;
       }

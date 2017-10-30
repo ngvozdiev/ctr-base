@@ -27,6 +27,7 @@ static constexpr char kVolumeChangeLongerPathMetric[] =
 static constexpr char kAddCountMetric[] = "stability_add_count";
 static constexpr char kRemoveCountMetric[] = "stability_remove_count";
 static constexpr char kUpdateCountMetric[] = "stability_update_count";
+static constexpr char kDelayDeltaMetric[] = "stability_total_flow_delay_delta";
 
 using namespace nc::metrics::parser;
 
@@ -34,6 +35,7 @@ using namespace nc::metrics::parser;
 struct OptimizerTMState {
   double volume_delta = 0;
   double volume_on_longer_path = 0;
+  double delay_delta = 0;
   size_t add_count = 0;
   size_t update_count = 0;
   size_t remove_count = 0;
@@ -126,6 +128,12 @@ class SingleMetricProcessor : public MetricProcessor {
   std::map<uint32_t, OptimizerTMState*> manifest_index_to_state_;
 };
 
+static void PlotCDF(const std::vector<nc::viz::DataSeries1D>& to_plot,
+                    const std::string& output) {
+  nc::viz::PythonGrapher volume_plotter(output);
+  volume_plotter.PlotCDF({}, to_plot);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   CHECK(!FLAGS_metrics_dir.empty()) << "need --metrics_dir";
@@ -161,12 +169,19 @@ int main(int argc, char** argv) {
         tm_state->update_count = entry.uint32_value();
       });
 
+  auto delay_delta_processor = nc::make_unique<SingleMetricProcessor>(
+      kDelayDeltaMetric, &data_storage,
+      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
+        tm_state->delay_delta = entry.double_value();
+      });
+
   MetricsParser parser(FLAGS_metrics_dir);
   parser.AddProcessor(std::move(volume_processor));
   parser.AddProcessor(std::move(volume_longer_path_processor));
   parser.AddProcessor(std::move(add_count_processor));
   parser.AddProcessor(std::move(remove_count_processor));
   parser.AddProcessor(std::move(update_count_processor));
+  parser.AddProcessor(std::move(delay_delta_processor));
   parser.Parse();
 
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
@@ -174,29 +189,39 @@ int main(int argc, char** argv) {
 
   std::vector<nc::viz::DataSeries1D> volume_to_plot;
   std::vector<nc::viz::DataSeries1D> volume_on_shorter_path_to_plot;
+  std::vector<nc::viz::DataSeries1D> num_paths_updated_to_plot;
+  nc::viz::DataSeries1D delay_delta_to_plot;
 
   for (const std::string& opt : optimizers) {
     LOG(INFO) << "Handle " << opt;
     volume_to_plot.push_back({opt, {}});
     volume_on_shorter_path_to_plot.push_back({opt, {}});
+    num_paths_updated_to_plot.push_back({opt, {}});
 
     nc::viz::DataSeries1D& volume_data_series = volume_to_plot.back();
     nc::viz::DataSeries1D& volume_on_shorter_path_data_series =
         volume_on_shorter_path_to_plot.back();
+    nc::viz::DataSeries1D& num_paths_updated_data_series =
+        num_paths_updated_to_plot.back();
+
     const TMStateMap& state_map = nc::FindOrDie(data, opt);
     for (const auto& topolog_and_tm_and_rest : state_map) {
-      const OptimizerTMState& optimizer_tm_state =
-          *(topolog_and_tm_and_rest.second);
-      volume_data_series.data.emplace_back(optimizer_tm_state.volume_delta);
+      const OptimizerTMState& tm_state = *(topolog_and_tm_and_rest.second);
+      volume_data_series.data.emplace_back(tm_state.volume_delta);
       volume_on_shorter_path_data_series.data.emplace_back(
-          optimizer_tm_state.volume_delta -
-          optimizer_tm_state.volume_on_longer_path);
+          tm_state.volume_delta - tm_state.volume_on_longer_path);
+      num_paths_updated_data_series.data.emplace_back(
+          tm_state.add_count + tm_state.remove_count + tm_state.update_count);
+
+      if (opt == "CTR_LIM") {
+        delay_delta_to_plot.data.emplace_back(tm_state.delay_delta);
+      }
     }
   }
 
-  nc::viz::PythonGrapher volume_plotter("stability_total_volume_out");
-  volume_plotter.PlotCDF({}, volume_to_plot);
-  nc::viz::PythonGrapher volume_on_shorter_path_plotter(
-      "stability_total_volume_shorter_path_out");
-  volume_on_shorter_path_plotter.PlotCDF({}, volume_on_shorter_path_to_plot);
+  PlotCDF(volume_to_plot, "stability_total_volume_out");
+  PlotCDF(volume_on_shorter_path_to_plot,
+          "stability_total_volume_shorter_path_out");
+  PlotCDF(num_paths_updated_to_plot, "stability_num_paths_updated_out");
+  PlotCDF({delay_delta_to_plot}, "stability_delay_delta_out");
 }

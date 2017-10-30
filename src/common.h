@@ -230,6 +230,17 @@ class RoutingConfiguration : public TrafficMatrix {
   // Returns the max link utilization.
   double MaxLinkUtilization() const;
 
+  // Returns the maximum number of paths an aggregate has.
+  size_t MaxNumberOfPathsInAggregate() const {
+    size_t out = 0;
+    for (const auto& aggregate_and_routes : configuration_) {
+      size_t count = aggregate_and_routes.second.size();
+      out = std::max(out, count);
+    }
+
+    return out;
+  }
+
   // Makes a copy.
   std::unique_ptr<RoutingConfiguration> Copy() const;
 
