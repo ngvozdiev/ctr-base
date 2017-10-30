@@ -135,6 +135,9 @@ target_link_libraries(plot_queue_size_dist metrics_parser gflags)
 add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
 target_link_libraries(plot_algorithm_eval metrics_parser gflags)
 
+add_executable(plot_stability_eval src/plot_stability_eval.cc)
+target_link_libraries(plot_stability_eval metrics_parser gflags)
+
 add_executable(plot_top_grow src/plot_top_grow.cc)
 target_link_libraries(plot_top_grow metrics_parser gflags)
 

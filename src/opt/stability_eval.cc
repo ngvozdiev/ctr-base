@@ -278,7 +278,8 @@ int main(int argc, char** argv) {
       ctr::PathProvider path_provider(&graph);
       for (size_t i = 0; i < FLAGS_try_count; ++i) {
         size_t seed = FLAGS_seed + i;
-        ParseMatrix(*scaled_tm, matrix_file, topology_file, seed,
+        ParseMatrix(*scaled_tm, nc::File::ExtractFileName(matrix_file),
+                    nc::File::ExtractFileName(topology_file), seed,
                     &path_provider);
       }
     }

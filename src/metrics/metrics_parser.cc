@@ -659,7 +659,7 @@ SimpleParseDistributionData(const std::string& metrics_dir,
       make_unique<DistProcessor>(metric_regex, fields_to_match, dist_callback);
   MetricsParser parser(metrics_dir);
   parser.AddProcessor(std::move(dist_processor));
-  parser.Parse();
+  parser.Parse(false);
 
   std::map<std::pair<std::string, std::string>,
            std::vector<std::pair<uint64_t, DiscreteDist>>> out;
@@ -792,7 +792,7 @@ NumericMetricsResultHandle* MetricsParserParse(const char* metrics_file,
   parser.AddProcessor(std::move(uint32_processor));
   parser.AddProcessor(std::move(uint64_processor));
 
-  parser.Parse();
+  parser.Parse(false);
   return return_handle;
 }
 
@@ -822,7 +822,7 @@ BytesMetricsResultHandle* MetricsParserBytesParse(const char* metrics_file,
   MetricsParser parser(metrics_file);
   parser.AddProcessor(std::move(bytes_processor));
 
-  parser.Parse();
+  parser.Parse(false);
   return return_handle;
 }
 
