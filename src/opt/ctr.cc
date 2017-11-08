@@ -28,7 +28,7 @@ using nc::lp::VariableIndex;
 
 using PathPtr = const nc::net::Walk*;
 
-static constexpr double kM1 = 1000000000.0;
+static constexpr double kM1 = 100000.0;
 static constexpr double kM2 = 0.001;
 static constexpr double kLinkFullThreshold = 0.9999;
 
@@ -89,7 +89,7 @@ bool CTROptimizer::AddFreePaths(
 
     if (total_path_count > hard_path_limit_) {
       if (!hard_limit_exceeded_printed) {
-        LOG(INFO) << "Hard limit " << hard_path_limit_ << "exceeded ";
+        LOG(INFO) << "Hard limit " << hard_path_limit_ << " exceeded ";
         hard_limit_exceeded_printed = true;
       }
 
@@ -97,6 +97,7 @@ bool CTROptimizer::AddFreePaths(
       if (paths_in_output.empty()) {
         PathPtr path = path_provider_->AvoidingPathOrNull(aggregate_id, {});
         CHECK(path != nullptr) << "Cannot get shortest path for aggregate";
+        paths_in_output.emplace_back(path);
       }
 
       continue;
@@ -461,10 +462,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       double path_cap = PathLimitFraction(aggregate_id, path);
       total_cap += path_cap;
 
-      //      if (FLAGS_debug_ctr) {
-      //        LOG(ERROR) << path->ToStringNoPorts(*graph_) << " cap " <<
-      //        path_cap;
-      //      }
+      CHECK(path->IsPath(*graph_));
       if (path_cap == 0) {
         continue;
       }
@@ -562,9 +560,11 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
         duration_cast<milliseconds>(problem_constructed_at - start_at);
     LOG(INFO) << nc::Substitute(
         "Problem constructed in $0ms, non-zero matrix elements $1, paths $2, "
-        "single-path aggregates $3 ",
+        "single-path aggregates $3, frozen aggregates $4",
         duration_cast<milliseconds>(problem_construction_duration).count(),
-        problem_matrix.size(), total_paths, total_single_aggregate_paths);
+        problem_matrix.size(), total_paths, total_single_aggregate_paths,
+        frozen_aggregates_.size());
+    problem.DumpToFile("out.lp");
   }
 
   std::unique_ptr<Solution> solution = problem.Solve();
