@@ -96,7 +96,13 @@ static auto* kPathPktsMetric =
 static auto* kQueueSizeDistMetric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
-            "queue_size_ms", "Distribution of queue sizes of packets");
+            "queue_size_ms", "Distribution of queue sizes seen by packets");
+
+static auto* kPropagationDelayDistMetric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
+            "propagation_delay_ms",
+            "Distribution of propagation delays seen by packets");
 
 static auto* kLinkCapacities =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
@@ -224,6 +230,7 @@ void InputPacketObserver::Record() {
 
 void OutputPacketObserver::RecordDist() {
   kQueueSizeDistMetric->GetHandle()->AddValue(queueing_time_dist_ms_);
+  kPropagationDelayDistMetric->GetHandle()->AddValue(propagation_time_dist_ms_);
 }
 
 }  // namespace ctr

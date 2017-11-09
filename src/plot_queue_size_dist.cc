@@ -1,15 +1,18 @@
 #include <gflags/gflags.h>
 #include <stddef.h>
+#include <chrono>
 #include <cstdint>
-#include <iostream>
 #include <map>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ncode_common/src/logging.h"
+#include "ncode_common/src/map_util.h"
+#include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/stats.h"
 #include "ncode_common/src/viz/grapher.h"
+#include "common.h"
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(input, "", "The metrics file.");
@@ -78,9 +81,9 @@ static std::vector<double> LinkUtilization(
     v *= 8;                       // Bytes to bits.
     v *= num_periods_per_second;  // Per period to per second.
     v /= 1000000.0;               // bits per second to Mbps.
-    v /= rate_Mbps;  // rate to utilization.
+    v /= rate_Mbps;               // rate to utilization.
     CHECK(v >= 0);
-    CHECK(v <= 1.0);
+    //    CHECK(v <= 1.0);
   }
 
   //  LOG(FATAL) << "Bin count " << binned.size() << " num records per bin "
@@ -88,6 +91,39 @@ static std::vector<double> LinkUtilization(
   //             << record_period.count() << "ms";
 
   return binned;
+}
+
+static std::vector<double> LinkHeadroomFractions(
+    const std::vector<double>& bytes_seen,
+    std::chrono::milliseconds record_period, double rate_Mbps) {
+  nc::net::Bandwidth link_rate =
+      nc::net::Bandwidth::FromMBitsPerSecond(rate_Mbps);
+  double num_periods_per_second = 1000.0 / record_period.count();
+  size_t num_records_per_bin = FLAGS_bin_size_sec * num_periods_per_second;
+
+  std::vector<double> out;
+  std::vector<uint64_t> values;
+  for (size_t i = 0; i < bytes_seen.size(); ++i) {
+    if (i != 0 && i % num_records_per_bin == 0) {
+      ctr::AggregateHistory history(values, record_period, 1);
+      nc::net::Bandwidth max_rate =
+          history.MaxRateAtQueue(std::chrono::milliseconds(10));
+      out.emplace_back(max_rate / link_rate);
+
+      values.clear();
+    }
+
+    values.emplace_back(bytes_seen[i]);
+  }
+
+  if (!values.empty()) {
+    ctr::AggregateHistory history(values, record_period, 1);
+    nc::net::Bandwidth max_rate =
+        history.MaxRateAtQueue(std::chrono::milliseconds(10));
+    out.emplace_back(max_rate / link_rate);
+  }
+
+  return out;
 }
 
 // For each link returns a vector with 101 values---the 100 percentiles in the
@@ -112,7 +148,27 @@ static std::map<std::string, std::vector<double>> AllLinkUtilizations() {
   return out;
 }
 
-static std::vector<double> GetLinkUtilizationsAtPercentile(
+static std::map<std::string, std::vector<double>> AllHeadroomFractions() {
+  std::chrono::milliseconds record_period = GetRecordPeriod();
+  std::map<StrPair, NumDataVector> bytes_seen_data =
+      SimpleParseNumericDataNoTimestamps(FLAGS_input, kBytesSeenMetric, ".*");
+  std::map<std::string, double> rates = GetRatesMbps();
+
+  std::map<std::string, std::vector<double>> out;
+  for (const auto& id_and_data : bytes_seen_data) {
+    const std::string& link_id = id_and_data.first.second;
+    const std::vector<double>& bytes_seen = id_and_data.second;
+    double rate_Mbps = nc::FindOrDie(rates, link_id);
+
+    std::vector<double> headroom_fractions =
+        LinkHeadroomFractions(Diff(bytes_seen), record_period, rate_Mbps);
+    out.emplace(link_id, nc::Percentiles(&headroom_fractions, 100));
+  }
+
+  return out;
+}
+
+static std::vector<double> GetValueAtPercentile(
     const std::map<std::string, std::vector<double>>& utilizations, size_t p) {
   std::vector<double> out;
   for (const auto& link_and_utilization : utilizations) {
@@ -128,9 +184,38 @@ static void PlotLinkUtilizations() {
       AllLinkUtilizations();
 
   nc::viz::PythonGrapher grapher("link_utilization_plot_out");
-  grapher.PlotCDF(
-      {}, {{"max", GetLinkUtilizationsAtPercentile(link_utilizations, 100)},
-           {"median", GetLinkUtilizationsAtPercentile(link_utilizations, 50)}});
+  grapher.PlotCDF({},
+                  {{"max", GetValueAtPercentile(link_utilizations, 100)},
+                   {"median", GetValueAtPercentile(link_utilizations, 50)}});
+}
+
+static void PlotHeadroomFractions() {
+  std::map<std::string, std::vector<double>> headroom_fractions =
+      AllHeadroomFractions();
+
+  nc::viz::PythonGrapher grapher("headroom_fraction_plot_out");
+  auto p100 = GetValueAtPercentile(headroom_fractions, 100);
+  auto p50 = GetValueAtPercentile(headroom_fractions, 80);
+  CHECK(headroom_fractions.size() == p100.size());
+  CHECK(p50.size() == p100.size());
+
+  std::vector<std::pair<double, double>> fractions_tied;
+  for (size_t i = 0; i < p100.size(); ++i) {
+    fractions_tied.emplace_back(p100[i], p50[i]);
+  }
+  std::sort(fractions_tied.begin(), fractions_tied.end());
+
+  nc::viz::DataSeries2D p100_data;
+  p100_data.label = "max";
+  nc::viz::DataSeries2D p50_data;
+  p50_data.label = "median";
+
+  for (size_t i = 0; i < p100.size(); ++i) {
+    p100_data.data.emplace_back(i, fractions_tied[i].first);
+    p50_data.data.emplace_back(i, fractions_tied[i].second);
+  }
+
+  grapher.PlotLine({}, {p100_data, p50_data});
 }
 
 int main(int argc, char** argv) {
@@ -157,5 +242,6 @@ int main(int argc, char** argv) {
   grapher.PlotLine({}, {data_series});
 
   PlotLinkUtilizations();
+  PlotHeadroomFractions();
   return 0;
 }

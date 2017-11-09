@@ -848,6 +848,34 @@ std::chrono::milliseconds AggregateHistory::MaxQueueAtRate(
       static_cast<uint64_t>(max_time_to_drain * 1000));
 }
 
+nc::net::Bandwidth AggregateHistory::MaxRateAtQueue(
+    std::chrono::milliseconds max_queue) const {
+  nc::net::Bandwidth min_bound = mean_rate();
+  nc::net::Bandwidth max_bound = max_rate();
+
+  nc::net::Bandwidth curr_estimate = max_bound;
+  while (true) {
+    CHECK(max_bound >= min_bound);
+    nc::net::Bandwidth delta = max_bound - min_bound;
+    if (delta <= nc::net::Bandwidth::FromKBitsPerSecond(1)) {
+      break;
+    }
+
+    nc::net::Bandwidth guess = min_bound + (max_bound - min_bound) / 2;
+    std::chrono::milliseconds queue_at_guess = MaxQueueAtRate(guess);
+    bool is_ok = queue_at_guess < max_queue;
+    if (is_ok) {
+      curr_estimate = guess;
+      // Will try to go lower.
+      max_bound = guess;
+    } else {
+      min_bound = guess;
+    }
+  }
+
+  return curr_estimate;
+}
+
 std::vector<nc::net::Bandwidth> AggregateHistory::PerSecondMeans() const {
   CHECK(1000 % bin_size_.count() == 0);
   size_t bins_in_second = 1000 / bin_size_.count();

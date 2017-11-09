@@ -86,20 +86,29 @@ class OutputPacketObserver : public nc::htsim::PacketObserver {
 
   void ObservePacket(const nc::htsim::Packet& pkt) override {
     nc::EventQueueTime queueing_time = pkt.queueing_time();
+    nc::EventQueueTime prop_time = pkt.propagation_time();
     uint64_t queueing_time_ms = event_queue_->TimeToRawMillis(queueing_time);
+    uint64_t prop_time_ms = event_queue_->TimeToRawMillis(prop_time);
     queueing_time_dist_ms_.Add(queueing_time_ms, 1);
+    propagation_time_dist_ms_.Add(prop_time_ms, 1);
   }
 
   const nc::DiscreteDistribution<uint64_t>& queueing_time_dist_ms() const {
     return queueing_time_dist_ms_;
   }
 
+  const nc::DiscreteDistribution<uint64_t>& propagation_time_dist_ms() const {
+    return propagation_time_dist_ms_;
+  }
+
   // Records the distribution. Should be called at the end of the simulation.
   void RecordDist();
 
  private:
-  // Keeps track of the queueing times of all packets that leave the network.
+  // Keeps track of the queueing/propagation times of all packets that leave the
+  // network.
   nc::DiscreteDistribution<uint64_t> queueing_time_dist_ms_;
+  nc::DiscreteDistribution<uint64_t> propagation_time_dist_ms_;
 
   // The event queue, converts to / from sim time.
   const nc::EventQueue* event_queue_;

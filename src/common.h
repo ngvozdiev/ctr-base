@@ -300,6 +300,10 @@ class AggregateHistory {
   // Maximum queue size at a given rate.
   std::chrono::milliseconds MaxQueueAtRate(nc::net::Bandwidth bandwidth) const;
 
+  // Returns the max rate at which no bin will experience queue longer than
+  // 'max_queue'.
+  nc::net::Bandwidth MaxRateAtQueue(std::chrono::milliseconds max_queue) const;
+
   // Returns a vector with the per-second mean rates.
   std::vector<nc::net::Bandwidth> PerSecondMeans() const;
 
