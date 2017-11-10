@@ -143,7 +143,7 @@ static void UpdateCommodityScaleMetric(
                                  history.mean_rate());
   }
   nc::lp::DemandMatrix demand_matrix(std::move(matrix_elements), graph);
-  metric->GetHandle()->AddValue(demand_matrix.MaxCommodityScaleFractor());
+  metric->GetHandle()->AddValue(demand_matrix.MaxCommodityScaleFractor(1.0));
 }
 
 static void RecordPathSplitsAndTotalDelay(
@@ -287,7 +287,8 @@ RoutingSystemUpdateResult RoutingSystem::Update(
     // Record the number of iterations.
     scale_loop_iteration_count->GetHandle()->AddValue(i_count);
 
-    double scale_factor = output->ToDemandMatrix()->MaxCommodityScaleFractor();
+    double scale_factor =
+        output->ToDemandMatrix()->MaxCommodityScaleFractor(1.0);
     max_commodity_scale_predicted_input->GetHandle()->AddValue(scale_factor);
 
     // And also the per-path splits from the output.

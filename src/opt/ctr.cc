@@ -105,6 +105,7 @@ bool CTROptimizer::AddFreePaths(
 
     std::vector<PathPtr> paths_up_to_free;
     size_t remaining_paths = per_aggregate_path_limit_ - paths_in_output.size();
+    CLOG(INFO, YELLOW) << "RP1 " << remaining_paths;
     if (paths_in_output.size() > per_aggregate_path_limit_) {
       remaining_paths = 0;
     }
@@ -117,6 +118,7 @@ bool CTROptimizer::AddFreePaths(
       size_t& start_k_index = ksp_indices_[aggregate_id];
       paths_up_to_free = path_provider_->KShortestUntilAvoidingPath(
           aggregate_id, links_with_no_capacity, start_k_index, remaining_paths);
+      CLOG(INFO, YELLOW) << "PUF1 " << paths_up_to_free.size();
       start_k_index += paths_up_to_free.size();
     }
 
@@ -127,10 +129,6 @@ bool CTROptimizer::AddFreePaths(
                                                         links_with_no_capacity);
       if (path != nullptr) {
         InsertInPaths(&paths_in_output, *path, &free_paths_added);
-        //        if (FLAGS_debug_ctr) {
-        //          CLOG(INFO, YELLOW) << "Added path (i) "
-        //                             << path->ToStringNoPorts(*graph_);
-        //        }
         total_path_count += paths_in_output.size();
         continue;
       }
@@ -139,8 +137,10 @@ bool CTROptimizer::AddFreePaths(
       // paths to the aggregate. Will add as many paths as we can from the list
       // of k shortest.
       size_t start_k_index = ksp_indices_[aggregate_id];
+      CLOG(INFO, YELLOW) << "RP2 " << remaining_paths;
       paths_up_to_free = path_provider_->KShorestPaths(
           aggregate_id, start_k_index, remaining_paths);
+      CLOG(INFO, YELLOW) << "PUF2 " << paths_up_to_free.size();
       if (paths_up_to_free.empty()) {
         continue;
       }
@@ -154,19 +154,9 @@ bool CTROptimizer::AddFreePaths(
 
       InsertInPaths(&paths_in_output, *paths_up_to_free.back(),
                     &free_paths_added);
-      //      if (FLAGS_debug_ctr) {
-      //        CLOG(INFO, YELLOW) << "Added path (ii) "
-      //                           <<
-      //                           paths_up_to_free.back()->ToStringNoPorts(*graph_);
-      //      }
     } else {
       for (const nc::net::Walk* path_to_insert : paths_up_to_free) {
         InsertInPaths(&paths_in_output, *path_to_insert, &free_paths_added);
-        //        if (FLAGS_debug_ctr) {
-        //          CLOG(INFO, YELLOW) << "Added path (iii) "
-        //                             <<
-        //                             path_to_insert->ToStringNoPorts(*graph_);
-        //        }
       }
     }
 
@@ -299,13 +289,13 @@ double CTROptimizer::OptimizePrivate(
                 << " links with no capacity " << links_with_no_capacity.Count();
     }
 
-    if (prev_obj_value != std::numeric_limits<double>::max() &&
-        std::abs(prev_obj_value - obj_value) < 0.01) {
-      if (FLAGS_debug_ctr) {
-        LOG(INFO) << "Unable to make progress";
-      }
-      break;
-    }
+    //    if (prev_obj_value != std::numeric_limits<double>::max() &&
+    //        std::abs(prev_obj_value - obj_value) < 0.01) {
+    //      if (FLAGS_debug_ctr) {
+    //        LOG(INFO) << "Unable to make progress";
+    //      }
+    //      break;
+    //    }
 
     prev_obj_value = obj_value;
     max_oversubscription = run_output.max_oversubscription;

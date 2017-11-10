@@ -1,10 +1,8 @@
 #include <gflags/gflags.h>
-#include <stddef.h>
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
-#include <iomanip>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <string>
@@ -16,11 +14,13 @@
 #include "ncode_common/src/event_queue.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/htsim/match.h"
+#include "ncode_common/src/htsim/network.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/strutil.h"
+#include "ncode_common/src/viz/grapher.h"
 #include "common.h"
 #include "controller.h"
 #include "mean_est/mean_est.h"
@@ -31,6 +31,7 @@
 #include "opt/opt.h"
 #include "opt/path_provider.h"
 #include "pcap_data.h"
+#include "prob_model/dist_model.h"
 #include "routing_system.h"
 #include "tldr.h"
 
@@ -54,6 +55,8 @@ DEFINE_uint64(duration_ms, 90000, "For how long to run (in simulated time)");
 DEFINE_double(exceed_probability, 0.001,
               "Probability convolution to exceed rate");
 DEFINE_bool(sp_opt, false, "If true will run SP routing instead of CTR");
+DEFINE_bool(headroom_delay_plot, false,
+            "If true will only plot headroom vs delay and quit.");
 DEFINE_double(demand_scale, 1.0, "Will scale all packet traces by this much");
 
 // A global variable that will keep a reference to the event queue, useful for
@@ -111,13 +114,6 @@ static void HandleDefault(
     const std::string& src_device_id = graph.GetNode(id.src())->id();
     device_factory.AddBinSequence(src_device_id, key_for_aggregate,
                                   std::move(bin_sequence));
-
-    // Will also add the reverse aggregate for ACKs.
-    //    auto ack_history =
-    //        ctr::GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100),
-    //                             milliseconds(FLAGS_history_bin_size_ms),
-    //                             milliseconds(FLAGS_period_duration_ms), 10);
-    //    network_container->AddAggregate(id.Reverse(), ack_history);
   }
 
   // Records per-path stats.
@@ -145,6 +141,72 @@ static std::string StripExtension(const std::string& filename) {
   return filename.substr(0, found);
 }
 
+static constexpr size_t kTopAggregateFlowCount = 10000;
+
+static std::unique_ptr<ctr::TrafficMatrix> FromDemandMatrix(
+    const nc::lp::DemandMatrix& demand_matrix) {
+  nc::net::Bandwidth max_demand = nc::net::Bandwidth::Zero();
+  for (const auto& element : demand_matrix.elements()) {
+    max_demand = std::max(max_demand, element.demand);
+  }
+
+  // Will assign flow counts so that the max bandwidth aggregate has
+  // kTopAggregateFlowCount, and all other aggregates proportionally less.
+  std::map<ctr::AggregateId, ctr::DemandAndFlowCount> demands_and_counts;
+  for (const auto& element : demand_matrix.elements()) {
+    size_t flow_count = kTopAggregateFlowCount * (element.demand / max_demand);
+    flow_count = std::max(1ul, flow_count);
+
+    ctr::AggregateId id(element.src, element.dst);
+    demands_and_counts[id] = {element.demand, flow_count};
+  }
+
+  return nc::make_unique<ctr::TrafficMatrix>(demand_matrix.graph(),
+                                             demands_and_counts);
+}
+
+// Produces a plot of increase in headroom vs increase in total propagation
+// delay for a topology/tm combo.
+static void HeadroomVsDelayPlot(const nc::net::GraphStorage& graph,
+                                const nc::lp::DemandMatrix& demand_matrix) {
+  using namespace ctr;
+  using namespace std::chrono;
+
+  auto tm = FromDemandMatrix(demand_matrix);
+  std::vector<std::pair<double, double>> xy;
+  for (double link_multiplier = 1.0; link_multiplier > 0.0;
+       link_multiplier -= 0.02) {
+    PathProvider path_provider(&graph);
+    CTROptimizer ctr_optimizer(&path_provider, link_multiplier, false, false);
+    std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(*tm);
+
+    double max_utilization = routing->MaxLinkUtilization();
+    LOG(INFO) << "MU " << max_utilization << " LM " << link_multiplier << " "
+              << demand_matrix.MaxCommodityScaleFractor(link_multiplier);
+    if (max_utilization > link_multiplier + 0.001) {
+      break;
+    }
+
+    double y =
+        duration_cast<milliseconds>(routing->TotalPerFlowDelay()).count();
+    xy.emplace_back(link_multiplier, y);
+  }
+
+  CHECK(!xy.empty());
+
+  // The lowest delay is achieved at link_multiplier=1.0. Will normalize
+  // everything by that.
+  double lowest_delay = xy.front().second;
+  for (auto& datapoint : xy) {
+    datapoint.second /= lowest_delay;
+  }
+
+  nc::viz::PythonGrapher grapher("headroom_delay_plot");
+  nc::viz::DataSeries2D to_plot;
+  to_plot.data = std::move(xy);
+  grapher.PlotLine({}, {to_plot});
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
@@ -170,6 +232,17 @@ int main(int argc, char** argv) {
   builder.ScaleDelay(FLAGS_link_delay_scale);
   nc::net::GraphStorage graph(builder);
 
+  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
+      nc::lp::DemandMatrix::LoadRepetitaOrDie(
+          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
+          &graph);
+  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+
+  if (FLAGS_headroom_delay_plot) {
+    HeadroomVsDelayPlot(graph, *demand_matrix);
+    return 0;
+  }
+
   nc::net::Delay diameter = graph.Stats().sp_delay_percentiles.back();
   if (diameter < milliseconds(10)) {
     LOG(FATAL) << "Graph diameter too small ("
@@ -185,11 +258,6 @@ int main(int argc, char** argv) {
                                      << fit_store;
 
   ctr::PcapTraceFitStore trace_fit_store(fit_store, &trace_store);
-  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
-          &graph);
-  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
   size_t i = -1;
   std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>>
