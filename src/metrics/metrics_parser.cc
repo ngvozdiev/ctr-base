@@ -361,7 +361,7 @@ Manifest MetricsParser::ParseManifest() const {
   return {std::move(entry_map)};
 }
 
-void MetricsParser::Parse() {
+void MetricsParser::Parse(bool parallel) {
   std::map<std::string, std::vector<MetricProcessor*>> interested;
   for (const std::string& file : metric_files_) {
     for (const auto& processor : processors_) {
@@ -381,9 +381,15 @@ void MetricsParser::Parse() {
     to_run.emplace_back(StrCat(metric_dir_, "/", file), &interested_processors);
   }
 
-  RunInParallel<FileAndProcessors>(to_run, [](const FileAndProcessors& data) {
-    ParseSingleFile(data.first, *(data.second));
-  }, to_run.size());
+  if (parallel) {
+    RunInParallel<FileAndProcessors>(to_run, [](const FileAndProcessors& data) {
+      ParseSingleFile(data.first, *(data.second));
+    }, to_run.size());
+  } else {
+    for (const FileAndProcessors& file_and_processors : to_run) {
+      ParseSingleFile(file_and_processors.first, *file_and_processors.second);
+    }
+  }
 }
 
 class AsciiTable {
@@ -653,7 +659,7 @@ SimpleParseDistributionData(const std::string& metrics_dir,
       make_unique<DistProcessor>(metric_regex, fields_to_match, dist_callback);
   MetricsParser parser(metrics_dir);
   parser.AddProcessor(std::move(dist_processor));
-  parser.Parse();
+  parser.Parse(false);
 
   std::map<std::pair<std::string, std::string>,
            std::vector<std::pair<uint64_t, DiscreteDist>>> out;
@@ -786,7 +792,7 @@ NumericMetricsResultHandle* MetricsParserParse(const char* metrics_file,
   parser.AddProcessor(std::move(uint32_processor));
   parser.AddProcessor(std::move(uint64_processor));
 
-  parser.Parse();
+  parser.Parse(false);
   return return_handle;
 }
 
@@ -816,7 +822,7 @@ BytesMetricsResultHandle* MetricsParserBytesParse(const char* metrics_file,
   MetricsParser parser(metrics_file);
   parser.AddProcessor(std::move(bytes_processor));
 
-  parser.Parse();
+  parser.Parse(false);
   return return_handle;
 }
 

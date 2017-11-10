@@ -96,7 +96,22 @@ static auto* kPathPktsMetric =
 static auto* kQueueSizeDistMetric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
-            "queue_size_ms", "Distribution of queue sizes of packets");
+            "queue_size_ms", "Distribution of queue sizes seen by packets");
+
+static auto* kPropagationDelayDistMetric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
+            "propagation_delay_ms",
+            "Distribution of propagation delays seen by packets");
+
+static auto* kLinkCapacities =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<double, std::string>(
+        "queue_rate_Mbps", "Service rates of queues", "Queue (link)");
+
+static auto* kRecordPeriod =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
+        "record_period_ms",
+        "All periodic readings are taken with this period.");
 
 static std::chrono::milliseconds GetQueueSizeMs(
     const nc::htsim::QueueStats& stats, nc::net::Bandwidth rate) {
@@ -133,6 +148,12 @@ NetInstrument::NetInstrument(
     : nc::EventConsumer(kNetInstrumentId, event_queue),
       period_(record_period),
       queues_(queues) {
+  kRecordPeriod->GetHandle()->AddValue(record_period.count());
+  for (const nc::htsim::Queue* queue : queues) {
+    double rate_mbps = queue->GetRate().Mbps();
+    kLinkCapacities->GetHandle(queue->id())->AddValue(rate_mbps);
+  }
+
   for (nc::htsim::TCPSource* tcp_source : tcp_sources) {
     tcp_source->set_complection_times_callback([tcp_source, event_queue](
         nc::EventQueueTime duration, uint64_t close_count) {
@@ -209,6 +230,7 @@ void InputPacketObserver::Record() {
 
 void OutputPacketObserver::RecordDist() {
   kQueueSizeDistMetric->GetHandle()->AddValue(queueing_time_dist_ms_);
+  kPropagationDelayDistMetric->GetHandle()->AddValue(propagation_time_dist_ms_);
 }
 
 }  // namespace ctr

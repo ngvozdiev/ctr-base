@@ -77,6 +77,13 @@ static auto* stability_scale_factor =
             "By how much the TM had to be scaled to make B4 fit", "Topology",
             "Traffic matrix");
 
+static auto* stability_total_flow_delay_delta =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string, std::string>(
+            "stability_total_flow_delay_delta",
+            "Change in the total sum of delays experienced by all flows.",
+            "Topology", "Traffic matrix", "Optimizer");
+
 DEFINE_string(topology_files, "", "A list of topology files");
 DEFINE_double(demand_fraction, 0.05, "By how much to vary demand");
 DEFINE_double(flow_count_fraction, 0.05, "By how much to vary flow counts.");
@@ -111,12 +118,15 @@ void RecordDeltas(const std::string& topology, const std::string& tm,
       stability_update_count->GetHandle(topology, tm, opt);
   auto* remove_count_handle =
       stability_remove_count->GetHandle(topology, tm, opt);
+  auto* total_delay_delta_handle =
+      stability_total_flow_delay_delta->GetHandle(topology, tm, opt);
 
   volume_delta_handle->AddValue(delta.total_volume_fraction_delta);
   volume_delta_lp_handle->AddValue(delta.total_volume_fraction_on_longer_path);
   flow_count_delta_handle->AddValue(delta.total_flow_fraction_delta);
   flow_count_delta_lp_handle->AddValue(
       delta.total_flow_fraction_on_longer_path);
+  total_delay_delta_handle->AddValue(delta.total_per_flow_delay_delta);
 
   size_t route_adds;
   size_t route_removals;
@@ -171,6 +181,18 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm,
   std::mt19937 rnd(seed);
   auto b4_before_and_after =
       RunB4(tm, topology_string, tm_string, path_provider, &rnd);
+
+  // Will check to see if the matrix is trivially satisfiable---if all
+  // aggregates fit on the shortest path.
+  size_t max_num_paths =
+      b4_before_and_after.second->MaxNumberOfPathsInAggregate();
+  CHECK(max_num_paths > 0);
+  if (max_num_paths == 1) {
+    LOG(INFO) << "Will skip trivially satisfiable topology " << topology_string
+              << " matrix " << tm_string;
+    return;
+  }
+
   ctr::RoutingConfigurationDelta b4_delta =
       b4_before_and_after.first->GetDifference(*b4_before_and_after.second);
 
@@ -192,6 +214,20 @@ static void ParseMatrix(const ctr::TrafficMatrix& tm,
   ctr::RoutingConfigurationDelta ctr_delta =
       ctr_before->GetDifference(*ctr_after);
 
+  ctr::MinMaxOptimizer minmax_opt(path_provider, 1.0, true);
+  auto minmax_before = minmax_opt.Optimize(*tm_before);
+  auto minmax_after = minmax_opt.Optimize(*tm_after);
+  ctr::RoutingConfigurationDelta minmax_delta =
+      minmax_before->GetDifference(*minmax_after);
+
+  ctr::MinMaxPathBasedOptimizer minmax_pb_opt(path_provider, 1.0, true, 10);
+  auto minmax_pb_before = minmax_pb_opt.Optimize(*tm_before);
+  auto minmax_pb_after = minmax_pb_opt.Optimize(*tm_after);
+  ctr::RoutingConfigurationDelta minmax_pb_delta =
+      minmax_pb_before->GetDifference(*minmax_pb_after);
+
+  RecordDeltas(topology_string, tm_string, "MinMax(LD)", minmax_delta);
+  RecordDeltas(topology_string, tm_string, "MinMax(K10)", minmax_pb_delta);
   RecordDeltas(topology_string, tm_string, "CTR", ctr_delta);
   RecordDeltas(topology_string, tm_string, "CTR_LIM", ctr_delta_limits);
   RecordDeltas(topology_string, tm_string, "B4", b4_delta);
@@ -254,6 +290,7 @@ int main(int argc, char** argv) {
           nc::File::ReadFileToStringOrDie(matrix_file), nodes_in_order, &graph);
       ctr::TrafficMatrix traffic_matrix(*demand_matrix,
                                         GetFlowCountMap(*demand_matrix));
+
       if (traffic_matrix.demands().size() > FLAGS_max_matrix_size) {
         continue;
       }
@@ -264,7 +301,8 @@ int main(int argc, char** argv) {
       ctr::PathProvider path_provider(&graph);
       for (size_t i = 0; i < FLAGS_try_count; ++i) {
         size_t seed = FLAGS_seed + i;
-        ParseMatrix(*scaled_tm, matrix_file, topology_file, seed,
+        ParseMatrix(*scaled_tm, nc::File::ExtractFileName(matrix_file),
+                    nc::File::ExtractFileName(topology_file), seed,
                     &path_provider);
       }
     }

@@ -109,7 +109,7 @@ static std::pair<TCPFlowGroup, TCPFlowGroup> AddFlows(size_t num_flows) {
   return {short_flow_group, long_flow_group};
 }
 
-static constexpr size_t kLongFlowCount = 500;
+static constexpr size_t kLongFlowCount = 100;
 
 static void AddTopStream(NetworkContainer* container) {
   GraphNodeIndex src = container->graph()->NodeFromStringOrDie("N0");
@@ -152,10 +152,10 @@ static void AddBottomStream(const std::string& src_id,
   GraphNodeIndex src = container->graph()->NodeFromStringOrDie(src_id);
   GraphNodeIndex dst = container->graph()->NodeFromStringOrDie(dst_id);
 
-  // Flows will be constantly at 800Mbps.
+  // Flows will be constantly at 500Mbps.
   Bandwidth total_rate = FLAGS_only_short_flows
                              ? Bandwidth::FromMBitsPerSecond(8)
-                             : Bandwidth::FromMBitsPerSecond(800);
+                             : Bandwidth::FromMBitsPerSecond(500);
 
   container->AddAggregate(
       {src, dst}, ctr::GetDummyHistory(
@@ -211,21 +211,21 @@ int main(int argc, char** argv) {
   ctr::PathProvider path_provider(&graph);
   std::unique_ptr<ctr::Optimizer> opt;
   if (FLAGS_opt == "CTR") {
-    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider, 0.95, true, false);
+    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider, 0.98, true, false);
   } else if (FLAGS_opt == "B4") {
-    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false, 0.92);
+    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, false, 0.98);
   } else if (FLAGS_opt == "B4(P)") {
-    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true, 0.95);
+    opt = nc::make_unique<ctr::B4Optimizer>(&path_provider, true, 0.98);
   } else if (FLAGS_opt == "MinMax") {
-    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.9, false);
+    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.98, false);
   } else if (FLAGS_opt == "MinMaxLD") {
-    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.9, true);
+    opt = nc::make_unique<ctr::MinMaxOptimizer>(&path_provider, 0.98, true);
   } else if (FLAGS_opt == "SP") {
     opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
   }
 
   ctr::MeanScaleEstimatorFactory estimator_factory(
-      {1.05, FLAGS_decay_factor, FLAGS_decay_factor, 10});
+      {1.1, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);

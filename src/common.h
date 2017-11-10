@@ -27,6 +27,10 @@ class AggregateId {
   AggregateId(nc::net::GraphNodeIndex src, nc::net::GraphNodeIndex dst)
       : src_(src), dst_(dst) {}
 
+  explicit AggregateId(const std::pair<nc::net::GraphNodeIndex,
+                                       nc::net::GraphNodeIndex>& src_and_dst)
+      : src_(src_and_dst.first), dst_(src_and_dst.second) {}
+
   nc::net::GraphNodeIndex src() const { return src_; }
 
   nc::net::GraphNodeIndex dst() const { return dst_; }
@@ -226,6 +230,17 @@ class RoutingConfiguration : public TrafficMatrix {
   // Returns the max link utilization.
   double MaxLinkUtilization() const;
 
+  // Returns the maximum number of paths an aggregate has.
+  size_t MaxNumberOfPathsInAggregate() const {
+    size_t out = 0;
+    for (const auto& aggregate_and_routes : configuration_) {
+      size_t count = aggregate_and_routes.second.size();
+      out = std::max(out, count);
+    }
+
+    return out;
+  }
+
   // Makes a copy.
   std::unique_ptr<RoutingConfiguration> Copy() const;
 
@@ -284,6 +299,10 @@ class AggregateHistory {
 
   // Maximum queue size at a given rate.
   std::chrono::milliseconds MaxQueueAtRate(nc::net::Bandwidth bandwidth) const;
+
+  // Returns the max rate at which no bin will experience queue longer than
+  // 'max_queue'.
+  nc::net::Bandwidth MaxRateAtQueue(std::chrono::milliseconds max_queue) const;
 
   // Returns a vector with the per-second mean rates.
   std::vector<nc::net::Bandwidth> PerSecondMeans() const;

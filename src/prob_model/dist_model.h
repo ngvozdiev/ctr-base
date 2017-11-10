@@ -128,7 +128,7 @@ class Distribution {
   // A cumulative sum of probabilities.
   std::vector<double> probabilities_cumulative_;
 
-  // Protected the cumulative probabilities.
+  // Protects the cumulative probabilities.
   std::mutex cumulative_probs_mu_;
 
   DISALLOW_COPY_AND_ASSIGN(Distribution);

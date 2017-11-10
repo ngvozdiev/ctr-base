@@ -1,7 +1,12 @@
 #include <gflags/gflags.h>
+#include <stddef.h>
 #include <algorithm>
 #include <chrono>
+#include <functional>
+#include <map>
+#include <memory>
 #include <ratio>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -10,16 +15,20 @@
 #include "ncode_common/src/common.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
+#include "ncode_common/src/lp/mc_flow.h"
+#include "ncode_common/src/map_util.h"
 #include "ncode_common/src/net/algorithm.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
+#include "ncode_common/src/perfect_hash.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/viz/graph.h"
 #include "ncode_common/src/viz/grapher.h"
 #include "ncode_common/src/viz/web_page.h"
+#include "common.h"
+#include "opt/oversubscription_model.h"
 
 DEFINE_string(topology_files, "", "Topology files");
-DEFINE_double(delay_scale, 1.3, "By how much to scale the delays of all links");
 
 static std::vector<std::string> GetTopologyFiles() {
   std::vector<std::string> out;
@@ -50,19 +59,13 @@ static void DumpGraphToHTML(const std::string& out,
   nc::File::WriteStringToFile(page.Construct(), out);
 }
 
-// Returns the link with max delay.
-const nc::net::GraphLink* MaxDelayLink(const nc::net::GraphStorage& graph) {
-  nc::net::Delay max_delay = nc::net::Delay::zero();
-  const nc::net::GraphLink* out = nullptr;
-  for (const auto& link_index : graph.AllLinks()) {
-    const nc::net::GraphLink* link = graph.GetLink(link_index);
-    if (link->delay() > max_delay) {
-      out = link;
-      max_delay = link->delay();
-    }
-  }
-  CHECK(out != nullptr);
-  return out;
+static double TreenessFraction(const nc::net::GraphStorage& graph) {
+  // Will assume all links are bidirectional.
+  double links = graph.LinkCount();
+  links = links / 2;
+
+  double links_to_remove = (links - (graph.NodeCount() - 1));
+  return links_to_remove / links;
 }
 
 int main(int argc, char** argv) {
@@ -71,39 +74,37 @@ int main(int argc, char** argv) {
   std::vector<std::string> topology_files = GetTopologyFiles();
   CHECK(!topology_files.empty());
 
-  std::vector<double> all_links_to_remove;
+  std::vector<std::pair<double, std::string>> treeness_and_topologies;
+  std::vector<double> treeness_fractions;
   for (const std::string& topology_file : topology_files) {
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file));
     builder.RemoveMultipleLinks();
-    builder.ScaleDelay(FLAGS_delay_scale);
     nc::net::GraphStorage graph(builder);
 
-    const nc::net::GraphLink* max_delay_link = MaxDelayLink(graph);
-    if (graph.AllNodes().Count() < 10) {
+    if (graph.NodeCount() < 10) {
+      LOG(INFO) << "Skipping " << topology_file;
       continue;
     }
 
-    size_t links_in_tree = graph.AllNodes().Count() - 1;
-    size_t bidirectional_links = graph.AllLinks().Count() / 2;
-    double links_to_remove = bidirectional_links - links_in_tree;
-    all_links_to_remove.emplace_back(links_to_remove / bidirectional_links);
+    LOG(INFO) << "Processing " << topology_file << " size "
+              << graph.NodeCount();
+    double tf = TreenessFraction(graph);
+    treeness_fractions.emplace_back(tf);
+    treeness_and_topologies.emplace_back(tf, topology_file);
 
-    LOG(INFO) << topology_file << " " << graph.AllNodes().Count() << " "
-              << graph.AllLinks().Count() << " max delay link "
-              << max_delay_link->ToStringNoPorts() << " delay "
-              << max_delay_link->delay().count();
-
-    if (topology_files.size() == 1) {
-      DumpGraphToHTML("out.html", graph);
-    }
+    DumpGraphToHTML(
+        nc::StrCat("meshy_out/", nc::File::ExtractFileName(topology_file), "_",
+                   tf, ".html"),
+        graph);
   }
 
-  if (topology_files.size() > 1) {
-    nc::viz::DataSeries1D data_1d;
-    data_1d.data = std::move(all_links_to_remove);
-
-    nc::viz::PythonGrapher python_grapher("meshy_ltr");
-    python_grapher.PlotCDF({}, {data_1d});
+  std::sort(treeness_and_topologies.begin(), treeness_and_topologies.end());
+  for (const auto& treeness_and_graph : treeness_and_topologies) {
+    LOG(INFO) << treeness_and_graph.first << " at "
+              << treeness_and_graph.second;
   }
+
+  nc::viz::PythonGrapher python_grapher("meshy_out");
+  python_grapher.PlotCDF({}, {{"treeness", treeness_fractions}});
 }

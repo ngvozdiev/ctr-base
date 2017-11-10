@@ -121,7 +121,7 @@ add_executable(tm_util src/tm_util.cc)
 target_link_libraries(tm_util ctr_base gflags)
 
 add_executable(meshy_util src/meshy_util.cc)
-target_link_libraries(meshy_util ncode gflags)
+target_link_libraries(meshy_util ctr_base gflags)
 
 add_executable(trace_pick_util src/trace_pick_util.cc)
 target_link_libraries(trace_pick_util ctr_base gflags)
@@ -130,10 +130,13 @@ add_executable(plot_completion_time_delta src/plot_completion_time_delta.cc)
 target_link_libraries(plot_completion_time_delta metrics_parser gflags)
 
 add_executable(plot_queue_size_dist src/plot_queue_size_dist.cc)
-target_link_libraries(plot_queue_size_dist metrics_parser gflags)
+target_link_libraries(plot_queue_size_dist metrics_parser ctr_base gflags)
 
 add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
 target_link_libraries(plot_algorithm_eval metrics_parser gflags)
+
+add_executable(plot_stability_eval src/plot_stability_eval.cc)
+target_link_libraries(plot_stability_eval metrics_parser gflags)
 
 add_executable(plot_top_grow src/plot_top_grow.cc)
 target_link_libraries(plot_top_grow metrics_parser gflags)

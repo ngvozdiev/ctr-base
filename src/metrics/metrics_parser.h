@@ -230,8 +230,11 @@ class MetricsParser {
   }
 
   // Parses all files in the metrics dir, passing entries to the processors that
-  // are interested in them.
-  void Parse();
+  // are interested in them. Processors for multiple metrics will run in
+  // parallel it is the job of the caller to ensure that processors share no
+  // state, or they are properly locked. If this is not desired, set the
+  // parallel argument to false.
+  void Parse(bool parallel = true);
 
   // Parses all metrics files.
   Manifest ParseManifest() const;

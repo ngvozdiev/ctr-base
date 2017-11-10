@@ -407,8 +407,8 @@ static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
   std::vector<std::pair<size_t, TopologyAndTM>> runs_ordered =
       TopologiesAndTMOrderedBySize(state_map);
 
-  std::vector<std::pair<double, double>> xy;
-  std::vector<std::pair<double, double>> xy_cached;
+  std::vector<double> y;
+  std::vector<double> y_cached;
   for (const auto& size_and_topology : runs_ordered) {
     size_t size = size_and_topology.first;
     const TopologyAndTM& topology_and_tm = size_and_topology.second;
@@ -423,15 +423,15 @@ static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
     CHECK(runtime_data_vector.size() == 1);
     CHECK(runtime_data_cached_vector.size() == 1);
 
-    xy.emplace_back(size, runtime_data_vector.front());
-    xy_cached.emplace_back(size, runtime_data_cached_vector.front());
+    y.emplace_back(runtime_data_vector.front());
+    y_cached.emplace_back(runtime_data_cached_vector.front());
   }
 
-  std::vector<nc::viz::DataSeries2D> to_plot;
-  to_plot.push_back({"Regular", xy_cached});
-  to_plot.push_back({"Cold run", xy});
+  std::vector<nc::viz::DataSeries1D> to_plot;
+  to_plot.push_back({"Regular", y_cached});
+  to_plot.push_back({"Cold run", y});
   nc::viz::PythonGrapher grapher("runtime");
-  grapher.PlotLine({}, to_plot);
+  grapher.PlotCDF({}, to_plot);
 }
 
 int main(int argc, char** argv) {
@@ -501,6 +501,13 @@ int main(int argc, char** argv) {
   for (const std::string& opt : optimizers) {
     LOG(INFO) << "Handle " << opt;
     const TMStateMap& state_map = nc::FindOrDie(data, opt);
+
+    std::set<std::string> topologies;
+    for (const auto& topolog_and_tm_and_rest : state_map) {
+      const std::string topology = topolog_and_tm_and_rest.first.first;
+      topologies.emplace(topology);
+    }
+    LOG(INFO) << "Top count " << topologies.size();
 
     auto result_ptr = HandleSingleOptimizer(opt, state_map);
     result_ptrs.emplace_back(std::move(result_ptr));
