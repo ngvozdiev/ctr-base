@@ -61,6 +61,12 @@ using RouteAndFraction = std::pair<const nc::net::Walk*, double>;
 // For each aggregate, a bandwidth demand and a flow count.
 class TrafficMatrix {
  public:
+  // Generates a TM where each aggregate's flow count is proportional to its
+  // traffic volume.
+  static std::unique_ptr<TrafficMatrix> ProportionalFromDemandMatrix(
+      const nc::lp::DemandMatrix& demand_matrix,
+      size_t top_aggregate_flow_count = 1000);
+
   // Constructs an empty traffic matrix, or optionally let the caller
   // pre-populate it with demands and flow counts.
   explicit TrafficMatrix(

@@ -158,7 +158,7 @@ class CTROptimizer : public Optimizer {
   // Each aggregate will only have up to this many K shortest paths added to it.
   // After this limit is reached, paths will be added in a way that does not
   // ensure optimality of the solution.
-  size_t per_aggregate_path_limit_ = 10000;
+  size_t per_aggregate_path_limit_ = 1000;
 
   // How far away does the unlimited solution need to be from the limited one in
   // order to use the unlimited.

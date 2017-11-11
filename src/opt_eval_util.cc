@@ -98,30 +98,6 @@ static auto* tm_scale_factor =
 
 namespace ctr {
 
-static constexpr size_t kTopAggregateFlowCount = 10000;
-
-static std::unique_ptr<TrafficMatrix> FromDemandMatrix(
-    const nc::lp::DemandMatrix& demand_matrix) {
-  nc::net::Bandwidth max_demand = nc::net::Bandwidth::Zero();
-  for (const auto& element : demand_matrix.elements()) {
-    max_demand = std::max(max_demand, element.demand);
-  }
-
-  // Will assign flow counts so that the max bandwidth aggregate has
-  // kTopAggregateFlowCount, and all other aggregates proportionally less.
-  std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
-  for (const auto& element : demand_matrix.elements()) {
-    size_t flow_count = kTopAggregateFlowCount * (element.demand / max_demand);
-    flow_count = std::max(1ul, flow_count);
-
-    AggregateId id(element.src, element.dst);
-    demands_and_counts[id] = {element.demand, flow_count};
-  }
-
-  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
-                                        demands_and_counts);
-}
-
 static void RecordRoutingConfig(const std::string& topology,
                                 const std::string& tm, const std::string& opt,
                                 const RoutingConfiguration& routing) {
@@ -256,7 +232,8 @@ static void RunOptimizers(const OptEvalInput& input) {
   // PathProvider, but have to run B4 first.
   PathProvider b4_path_provider(graph);
 
-  std::unique_ptr<TrafficMatrix> tm = FromDemandMatrix(*input.demand_matrix);
+  std::unique_ptr<TrafficMatrix> tm =
+      TrafficMatrix::ProportionalFromDemandMatrix(*input.demand_matrix);
   std::unique_ptr<RoutingConfiguration> routing;
   routing = RunB4(*tm, top_file, tm_file, &b4_path_provider);
 

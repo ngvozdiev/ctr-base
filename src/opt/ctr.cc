@@ -28,7 +28,7 @@ using nc::lp::VariableIndex;
 
 using PathPtr = const nc::net::Walk*;
 
-static constexpr double kM1 = 100000.0;
+static constexpr double kOversubscriptionAllowance = 0.01;
 static constexpr double kM2 = 0.001;
 static constexpr double kLinkFullThreshold = 0.9999;
 
@@ -105,7 +105,6 @@ bool CTROptimizer::AddFreePaths(
 
     std::vector<PathPtr> paths_up_to_free;
     size_t remaining_paths = per_aggregate_path_limit_ - paths_in_output.size();
-    CLOG(INFO, YELLOW) << "RP1 " << remaining_paths;
     if (paths_in_output.size() > per_aggregate_path_limit_) {
       remaining_paths = 0;
     }
@@ -118,7 +117,6 @@ bool CTROptimizer::AddFreePaths(
       size_t& start_k_index = ksp_indices_[aggregate_id];
       paths_up_to_free = path_provider_->KShortestUntilAvoidingPath(
           aggregate_id, links_with_no_capacity, start_k_index, remaining_paths);
-      CLOG(INFO, YELLOW) << "PUF1 " << paths_up_to_free.size();
       start_k_index += paths_up_to_free.size();
     }
 
@@ -137,10 +135,8 @@ bool CTROptimizer::AddFreePaths(
       // paths to the aggregate. Will add as many paths as we can from the list
       // of k shortest.
       size_t start_k_index = ksp_indices_[aggregate_id];
-      CLOG(INFO, YELLOW) << "RP2 " << remaining_paths;
       paths_up_to_free = path_provider_->KShorestPaths(
           aggregate_id, start_k_index, remaining_paths);
-      CLOG(INFO, YELLOW) << "PUF2 " << paths_up_to_free.size();
       if (paths_up_to_free.empty()) {
         continue;
       }
@@ -407,6 +403,16 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
   // appropriately.
   nc::net::GraphLinkMap<nc::net::Bandwidth> single_path_aggregate_capacity;
 
+  // In order to size the max oversubscription multiplier we need to get each
+  // aggregate's range---the difference between its longest and shortest
+  // paths. The range is then multiplied by the number of flows in the
+  // aggregate to get the worst possible move the solver can make in terms of
+  // increasing the aggregate's delay. A multiplier is then chosen so that a
+  // small change in it will always be more than the sum of those worst
+  // possible moves, this forces the solver to always prefer to increase delay
+  // if possible instead of increasing oversubscription.
+  double total_worst_move_cost = 0;
+
   // Per-aggregate constraints.
   for (const auto& aggregate_id_and_flow_count : input_->demands()) {
     const AggregateId& aggregate_id = aggregate_id_and_flow_count.first;
@@ -447,25 +453,27 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
     ConstraintIndex per_aggregate_constraint = problem.AddConstraint();
     problem.SetConstraintRange(per_aggregate_constraint, 1, 1);
 
+    double max_path_cost = 0;
     double total_cap = 0;
     for (PathPtr path : paths) {
       double path_cap = PathLimitFraction(aggregate_id, path);
-      total_cap += path_cap;
-
-      CHECK(path->IsPath(*graph_));
       if (path_cap == 0) {
         continue;
       }
+
+      total_cap += path_cap;
 
       // Each path in each aggregate will have a variable associated with it.
       VariableIndex variable = problem.AddVariable();
       problem.SetVariableRange(variable, 0, path_cap);
 
-      // The cost, delay in seconds.
-      double uniqueness_weight = kM2 * flow_count * PathCostUnrounded(path) /
-                                 PathCostUnrounded(shortest_path);
-      problem.SetObjectiveCoefficient(
-          variable, flow_count * PathCostUnrounded(path) + uniqueness_weight);
+      // The cost is path delay.
+      double cost = PathCostUnrounded(path);
+      max_path_cost = std::max(max_path_cost, cost);
+      double sp_cost = PathCostUnrounded(shortest_path);
+      double uniqueness_weight = kM2 * flow_count * cost / sp_cost;
+      problem.SetObjectiveCoefficient(variable,
+                                      flow_count * cost + uniqueness_weight);
 
       PathAndCost path_and_cost(aggregate_id, variable,
                                 demand_and_flow_count.first, path);
@@ -480,16 +488,25 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
 
     CHECK(total_cap >= 1);
     total_paths += paths.size();
+    total_worst_move_cost += max_path_cost * flow_count;
+  }
+
+  double oversub_coefficient =
+      total_worst_move_cost / kOversubscriptionAllowance;
+  if (FLAGS_debug_ctr) {
+    CLOG(INFO, GREEN) << "Oversubscription coefficient set to "
+                      << oversub_coefficient;
   }
 
   // There will be one max oversubscription variable.
   VariableIndex max_oversubscription_var = problem.AddVariable();
   problem.SetVariableRange(max_oversubscription_var, 1.0, Problem::kInifinity);
-  problem.SetObjectiveCoefficient(max_oversubscription_var, kM1);
+  problem.SetObjectiveCoefficient(max_oversubscription_var,
+                                  oversub_coefficient);
 
   // The max oversubscription will be at least 1. This means
   // we have to offset the objective function back by kM1.
-  problem.SetObjectiveOffset(-1.0 * (kM1));
+  problem.SetObjectiveOffset(-1.0 * (oversub_coefficient));
 
   // Will first add per-link constraints.
   for (const auto& link_and_paths : link_to_paths) {
