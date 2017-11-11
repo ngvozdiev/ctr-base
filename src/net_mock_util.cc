@@ -1,14 +1,13 @@
 #include <gflags/gflags.h>
-#include <stddef.h>
-#include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
-#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -16,6 +15,7 @@
 #include "ncode_common/src/event_queue.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/htsim/match.h"
+#include "ncode_common/src/htsim/network.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/net/net_common.h"
@@ -31,6 +31,7 @@
 #include "opt/opt.h"
 #include "opt/path_provider.h"
 #include "pcap_data.h"
+#include "prob_model/dist_model.h"
 #include "routing_system.h"
 #include "tldr.h"
 
@@ -111,13 +112,6 @@ static void HandleDefault(
     const std::string& src_device_id = graph.GetNode(id.src())->id();
     device_factory.AddBinSequence(src_device_id, key_for_aggregate,
                                   std::move(bin_sequence));
-
-    // Will also add the reverse aggregate for ACKs.
-    //    auto ack_history =
-    //        ctr::GetDummyHistory(nc::net::Bandwidth::FromKBitsPerSecond(100),
-    //                             milliseconds(FLAGS_history_bin_size_ms),
-    //                             milliseconds(FLAGS_period_duration_ms), 10);
-    //    network_container->AddAggregate(id.Reverse(), ack_history);
   }
 
   // Records per-path stats.
@@ -170,6 +164,12 @@ int main(int argc, char** argv) {
   builder.ScaleDelay(FLAGS_link_delay_scale);
   nc::net::GraphStorage graph(builder);
 
+  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
+      nc::lp::DemandMatrix::LoadRepetitaOrDie(
+          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
+          &graph);
+  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
+
   nc::net::Delay diameter = graph.Stats().sp_delay_percentiles.back();
   if (diameter < milliseconds(10)) {
     LOG(FATAL) << "Graph diameter too small ("
@@ -185,11 +185,6 @@ int main(int argc, char** argv) {
                                      << fit_store;
 
   ctr::PcapTraceFitStore trace_fit_store(fit_store, &trace_store);
-  std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
-          &graph);
-  demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
   size_t i = -1;
   std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>>

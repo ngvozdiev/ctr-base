@@ -52,8 +52,8 @@ static void MakeFitRecursive(
     return;
   }
 
-  if (candidate->IsFeasible({})) {
-    double csf = candidate->MaxCommodityScaleFractor();
+  if (candidate->IsFeasible({}, 1.0)) {
+    double csf = candidate->MaxCommodityScaleFractor(1.0);
     if (std::abs(*best_csf - target_csf) > std::abs(csf - target_csf)) {
       *best_so_far = std::move(candidate);
       *best_csf = csf;

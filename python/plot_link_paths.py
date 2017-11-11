@@ -8,6 +8,9 @@ import itertools
 import matplotlib.patches as mpatches
 import argparse
 
+import matplotlib
+matplotlib.rcParams.update({'font.size': 14})
+
 parser = argparse.ArgumentParser(description='Plots link occupancy')
 parser.add_argument('--file', type=str, help='Metric file')
 parser.add_argument('--sofile', type=str, help='Library file for parser', default='libmetrics_parser.dylib')
@@ -21,7 +24,6 @@ INTERESTING_LINKS = ['N0->N1', 'N4->N5', 'N8->N9', 'N12->N13']
 p = parser_wrapper.MetricsParser(args.file, args.sofile)
 data = p.Parse(args.metric, '.*', deltas=True)
 print data
-exit
 
 ax_f, axarr = plt.subplots(len(INTERESTING_LINKS), sharex=True, sharey=True)
 
@@ -64,7 +66,7 @@ for i, link in enumerate(INTERESTING_LINKS):
             x, y = value
             x = np.array(x, dtype=np.float64) * 0.000000000001
             y = np.array(y, dtype=np.float64) * (100.0 / 1000.0 / 1000.0 / 1000.0) * 8
-            x, y = parser_wrapper.Bin(x, y, 1)
+            x, y = parser_wrapper.Bin(x, y, 100)
             xs.append(x)
             fs.append(interpolate.interp1d(x,y, bounds_error=False, fill_value=0))
             labels.append(AggFromPath(path))
@@ -84,7 +86,7 @@ for i, link in enumerate(INTERESTING_LINKS):
 #    ngons[0].set_hatch('//')
 
     ax.set_ylabel('Gbps')
-    ax.legend(loc=1)
+    ax.legend(loc=1, prop={'size': 10})
 
 #color_items = color_map.items()
 #ax.legend([plt.Rectangle((0, 0), 1, 1, fc=v) for _, v in color_items],
@@ -94,5 +96,8 @@ ax_f.subplots_adjust(hspace=0)
 plt.setp([a.get_xticklabels() for a in ax_f.axes[:-1]], visible=False)
 plt.xlim([args.x_min, args.x_max])
 plt.ylim([0,0.999])
+start, end = ax.get_xlim()
+ax.xaxis.set_ticks(np.arange(start, end, 300))
 plt.xlabel('seconds')
+plt.savefig('link_paths_out.pdf', bbox_inches='tight')
 plt.show()

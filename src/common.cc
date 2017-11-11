@@ -71,6 +71,30 @@ TrafficMatrix::TrafficMatrix(
   }
 }
 
+std::unique_ptr<TrafficMatrix> TrafficMatrix::ProportionalFromDemandMatrix(
+    const nc::lp::DemandMatrix& demand_matrix,
+    size_t top_aggregate_flow_count) {
+  nc::net::Bandwidth max_demand = nc::net::Bandwidth::Zero();
+  for (const auto& element : demand_matrix.elements()) {
+    max_demand = std::max(max_demand, element.demand);
+  }
+
+  // Will assign flow counts so that the max bandwidth aggregate has
+  // kTopAggregateFlowCount, and all other aggregates proportionally less.
+  std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
+  for (const auto& element : demand_matrix.elements()) {
+    size_t flow_count =
+        top_aggregate_flow_count * (element.demand / max_demand);
+    flow_count = std::max(1ul, flow_count);
+
+    AggregateId id(element.src, element.dst);
+    demands_and_counts[id] = {element.demand, flow_count};
+  }
+
+  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
+                                        demands_and_counts);
+}
+
 std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
   std::vector<nc::lp::DemandMatrixElement> elements;
   for (const auto& aggregate_and_demand : demands_) {
@@ -341,7 +365,7 @@ std::string TrafficMatrix::ToString() const {
 
   out.emplace_back(nc::StrCat(
       "TM with ", static_cast<uint64_t>(demands_.size()),
-      " demands, scale factor ", demand_matrix->MaxCommodityScaleFractor(),
+      " demands, scale factor ", demand_matrix->MaxCommodityScaleFractor(1.0),
       " sp link utilizations: ", nc::Join(sp_utilizations, ",")));
   for (const auto& aggregate_and_demand : demands_) {
     const AggregateId& aggregate = aggregate_and_demand.first;
@@ -367,7 +391,7 @@ std::string TrafficMatrix::SummaryToString() const {
   size_t aggregate_count = demands_.size();
 
   auto demand_matrix = ToDemandMatrix();
-  double mcsf = demand_matrix->MaxCommodityScaleFractor();
+  double mcsf = demand_matrix->MaxCommodityScaleFractor(1.0);
 
   std::vector<nc::net::Bandwidth> demands;
   std::vector<size_t> flow_counts;
