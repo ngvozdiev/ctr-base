@@ -37,6 +37,8 @@ static auto* total_delay_fraction =
 static void HeadroomVsDelayEval(const ctr::OptEvalInput& input) {
   using namespace ctr;
   using namespace std::chrono;
+  LOG(INFO) << "Processing topology " << input.topology_file << " tm "
+            << input.tm_file;
 
   const nc::lp::DemandMatrix& demand_matrix = *(input.demand_matrix);
   const nc::net::GraphStorage* graph = demand_matrix.graph();
