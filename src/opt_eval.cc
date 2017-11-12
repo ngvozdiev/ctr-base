@@ -23,6 +23,9 @@ DEFINE_uint64(topology_size_limit, 100000,
               "Topologies with size more than this will be skipped");
 DEFINE_uint64(topology_delay_limit_ms, 10,
               "Topologies with diameter less than this limit will be skipped");
+DEFINE_uint64(tm_per_topology, std::numeric_limits<uint64_t>::max(),
+              "How many TMs to run for each topology");
+DEFINE_uint64(seed, 1, "Seed used when choosing TMs for each topology");
 
 using namespace std::chrono;
 
@@ -68,6 +71,9 @@ GetOptEvalInputs() {
   // Inputs.
   std::vector<OptEvalInput> inputs;
 
+  // Randomness to pick tms for each topology.
+  std::mt19937 rnd(FLAGS_seed);
+
   for (const std::string& topology_file : topology_files) {
     std::vector<std::string> node_order;
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
@@ -107,6 +113,7 @@ GetOptEvalInputs() {
       continue;
     }
 
+    std::vector<OptEvalInput> inputs_for_topology;
     std::string top_file_trimmed = nc::Split(topology_file, "/").back();
     for (const std::string& tm_file : matrix_files) {
       std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
@@ -120,8 +127,17 @@ GetOptEvalInputs() {
 
       demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
       std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
-      inputs.emplace_back(top_file_trimmed, tm_file_trimmed,
-                          std::move(demand_matrix));
+      inputs_for_topology.emplace_back(top_file_trimmed, tm_file_trimmed,
+                                       std::move(demand_matrix));
+    }
+
+    std::shuffle(inputs_for_topology.begin(), inputs_for_topology.end(), rnd);
+    inputs_for_topology.resize(
+        std::min(inputs_for_topology.size(),
+                 static_cast<size_t>(FLAGS_tm_per_topology)));
+    for (auto& input : inputs_for_topology) {
+      inputs.emplace_back(input.topology_file, input.tm_file,
+                          std::move(input.demand_matrix));
     }
 
     graphs.emplace_back(std::move(graph));

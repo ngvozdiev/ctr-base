@@ -19,6 +19,8 @@ struct OptEvalInput {
         tm_file(tm_file),
         demand_matrix(std::move(demand_matrix)) {}
 
+  OptEvalInput() {}
+
   std::string topology_file;
   std::string tm_file;
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix;
