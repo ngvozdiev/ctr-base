@@ -34,7 +34,7 @@ static auto* total_delay_fraction =
 
 // Produces a plot of increase in headroom vs increase in total propagation
 // delay for a topology/tm combo.
-static void HeadroomVsDelayEval(const ctr::OptEvalInput& input) {
+static void HeadroomVsDelayEval(const ctr::OptEvalInput& input, bool verbose) {
   using namespace ctr;
   using namespace std::chrono;
   LOG(INFO) << "Processing topology " << input.topology_file << " tm "
@@ -55,6 +55,12 @@ static void HeadroomVsDelayEval(const ctr::OptEvalInput& input) {
     std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(*tm);
 
     double max_utilization = routing->MaxLinkUtilization();
+    LOG_IF(INFO, verbose) << "link multiplier " << link_multiplier
+                          << " max utilization " << max_utilization
+                          << " scale factor "
+                          << demand_matrix.MaxCommodityScaleFractor(
+                                 link_multiplier);
+
     if (max_utilization > link_multiplier + 0.001) {
       break;
     }
@@ -91,6 +97,6 @@ int main(int argc, char** argv) {
 
   nc::RunInParallel<ctr::OptEvalInput>(
       to_process, [](const ctr::OptEvalInput& input) {
-        HeadroomVsDelayEval(input);
+        HeadroomVsDelayEval(input, to_process.size() == 1);
       }, FLAGS_threads);
 }
