@@ -125,6 +125,11 @@ GetOptEvalInputs() {
         continue;
       }
 
+      if (demand_matrix->IsTriviallySatisfiable()) {
+        LOG(INFO) << "Skipping " << tm_file << " trivially satisfiable";
+        continue;
+      }
+
       demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
       std::string tm_file_trimmed = nc::Split(tm_file, "/").back();
       inputs_for_topology.emplace_back(top_file_trimmed, tm_file_trimmed,
