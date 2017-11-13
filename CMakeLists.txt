@@ -144,6 +144,9 @@ target_link_libraries(plot_stability_eval metrics_parser gflags)
 add_executable(plot_top_grow src/plot_top_grow.cc)
 target_link_libraries(plot_top_grow metrics_parser gflags)
 
+add_executable(plot_headroom_delay src/plot_headroom_delay.cc)
+target_link_libraries(plot_headroom_delay metrics_parser gflags)
+
 add_executable(opt_eval_util src/opt_eval_util.cc)
 target_link_libraries(opt_eval_util ctr_base)
 

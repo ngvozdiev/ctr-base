@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
   std::tie(graphs, to_process) = ctr::GetOptEvalInputs();
 
   nc::RunInParallel<ctr::OptEvalInput>(
-      to_process, [](const ctr::OptEvalInput& input) {
+      to_process, [&to_process](const ctr::OptEvalInput& input) {
         HeadroomVsDelayEval(input, to_process.size() == 1);
       }, FLAGS_threads);
 }
