@@ -32,13 +32,7 @@ static auto* total_delay_fraction =
             "total_delay_fraction", "Fraction of total delay at no headroom",
             "Topology", "Traffic matrix");
 
-// Produces a plot of increase in headroom vs increase in total propagation
-// delay for a topology/tm combo.
-static void HeadroomVsDelayEval(const ctr::OptEvalInput& input, bool verbose) {
-  using namespace ctr;
-  using namespace std::chrono;
-  LOG(INFO) << "Processing topology " << input.topology_file << " tm "
-            << input.tm_file;
+
 
   const nc::lp::DemandMatrix& demand_matrix = *(input.demand_matrix);
   const nc::net::GraphStorage* graph = demand_matrix.graph();

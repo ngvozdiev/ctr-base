@@ -70,9 +70,15 @@ target_link_libraries(metrics_parser ${PROTOBUF_LIBRARIES} ncode)
 add_library(geo_lib src/geo/geo.cc src/geo/geo.h)
 target_link_libraries(geo_lib ncode)
 
+add_library(topology_input src/topology_input.cc)
+target_link_libraries(topology_input ncode gflags)
+
+add_library(demand_matrix_input src/demand_matrix_input.cc)
+target_link_libraries(demand_matrix_input topology_input gflags)
+
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
-set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/pcap_data.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h src/routing_system.h src/net_mock.h src/tldr.h src/controller.h src/net_instrument.h src/opt_eval.h)
-add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/pcap_data.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc src/mean_est/mean_est.cc src/routing_system.cc src/net_mock.cc src/controller.cc src/tldr.cc src/net_instrument.cc src/opt_eval.cc)
+set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/pcap_data.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h src/routing_system.h src/net_mock.h src/tldr.h src/controller.h src/net_instrument.h)
+add_library(ctr_base STATIC src/opt/opt.cc src/opt/path_provider.cc src/common.cc src/opt/ctr.cc src/opt/oversubscription_model.cc src/pcap_data.cc ${PCAP_DATA_PROTO_SRCS} ${CTR_BASE_HEADER_FILES} src/prob_model/dist_model.cc src/prob_model/multi_rate_queue.cc src/mean_est/mean_est.cc src/routing_system.cc src/net_mock.cc src/controller.cc src/tldr.cc src/net_instrument.cc)
 target_link_libraries(ctr_base ncode gflags_nothreads metrics ${FFTW_LIBRARIES} ${PROTOBUF_LIBRARIES})
 
 add_executable(stability_eval src/opt/stability_eval.cc)
@@ -99,9 +105,6 @@ target_link_libraries(net_mock_util ctr_base)
 add_executable(ladder_tcp_util src/ladder_tcp_util)
 target_link_libraries(ladder_tcp_util ctr_base)
 
-add_executable(headroom_delay_util src/headroom_delay_util)
-target_link_libraries(headroom_delay_util ctr_base)
-
 if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_opt_test src/opt/opt_test.cc ctr_base)
    add_test_exec(dist_model_test src/prob_model/dist_model_test.cc ctr_base)
@@ -122,6 +125,9 @@ target_link_libraries(metrics_explore metrics_parser gflags)
 
 add_executable(tm_util src/tm_util.cc)
 target_link_libraries(tm_util ctr_base gflags)
+
+add_executable(tm_gen_util src/tm_gen_util.cc)
+target_link_libraries(tm_gen_util topology_input ctr_base gflags)
 
 add_executable(meshy_util src/meshy_util.cc)
 target_link_libraries(meshy_util ctr_base gflags)
@@ -144,11 +150,8 @@ target_link_libraries(plot_stability_eval metrics_parser gflags)
 add_executable(plot_top_grow src/plot_top_grow.cc)
 target_link_libraries(plot_top_grow metrics_parser gflags)
 
-add_executable(plot_headroom_delay src/plot_headroom_delay.cc)
-target_link_libraries(plot_headroom_delay metrics_parser gflags)
-
 add_executable(opt_eval_util src/opt_eval_util.cc)
-target_link_libraries(opt_eval_util ctr_base)
+target_link_libraries(opt_eval_util demand_matrix_input ctr_base)
 
 add_library(flow_track_lib STATIC src/flow_track.cc)
 target_link_libraries(flow_track_lib ncode gflags_nothreads)
@@ -160,4 +163,4 @@ add_executable(geo_main src/geo/geo_main.cc)
 target_link_libraries(geo_main geo_lib gflags)
 
 add_executable(top_grow src/top_grow.cc)
-target_link_libraries(top_grow geo_lib ctr_base metrics gflags)
+target_link_libraries(top_grow geo_lib ctr_base demand_matrix_input metrics gflags)
