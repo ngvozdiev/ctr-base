@@ -14,11 +14,17 @@ namespace ctr {
 
 // Combination of a demand filename and demand matrix.
 struct DemandMatrixAndFilename {
-  DemandMatrixAndFilename(const std::string& demand_file,
+  DemandMatrixAndFilename(const std::string& topology_file,
+                          const std::string& file,
                           std::unique_ptr<nc::lp::DemandMatrix> demand_matrix)
-      : demand_file(demand_file), demand_matrix(std::move(demand_matrix)) {}
+      : topology_file(topology_file),
+        file(file),
+        demand_matrix(std::move(demand_matrix)) {}
 
-  std::string demand_file;
+  DemandMatrixAndFilename() {}
+
+  std::string topology_file;
+  std::string file;
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix;
 };
 

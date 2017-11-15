@@ -17,7 +17,7 @@
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/perfect_hash.h"
-#include "opt_eval.h"
+#include "demand_matrix_input.h"
 #include "common.h"
 #include "metrics/metrics.h"
 #include "opt/ctr.h"
@@ -32,31 +32,17 @@ DEFINE_bool(scale_to_make_b4_fit, true,
             "running the rest of the optimizers.");
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 
-static auto* path_stretch_ms =
+static auto* aggregate_sp_delay_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
-            "opt_path_stretch_ms",
-            "How far away from the shortest path a path is (absolute)",
-            "Topology", "Traffic matrix", "Optimizer");
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string>(
+            "aggregate_sp_delay_ms", "Delay of each aggregate's shortest path",
+            "Topology", "Traffic matrix");
 
-static auto* path_sp_delay_ms =
+static auto* aggregate_rate_Mbps =
     nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
-            "opt_path_sp_delay_ms", "Delay of the shortest path", "Topology",
-            "Traffic matrix", "Optimizer");
-
-static auto* path_stretch_rel =
-    nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<double, std::string, std::string, std::string>(
-            "opt_path_stretch_rel",
-            "How far away from the shortest path a path is (relative)",
-            "Topology", "Traffic matrix", "Optimizer");
-
-static auto* path_flow_count =
-    nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
-            "opt_path_flow_count", "Number of flows on each path", "Topology",
-            "Traffic matrix", "Optimizer");
+        -> GetThreadSafeMetric<double, std::string, std::string>(
+            "aggregate_rate_Mbps", "Rate of each aggregate", "Topology",
+            "Traffic matrix");
 
 static auto* aggregate_path_count =
     nc::metrics::DefaultMetricManager()
@@ -64,10 +50,16 @@ static auto* aggregate_path_count =
             "opt_path_count", "Number of paths in each aggregate", "Topology",
             "Traffic matrix", "Optimizer");
 
-static auto* link_utilization =
+static auto* path_delay_ms =
     nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<double, std::string, std::string, std::string>(
-            "opt_link_utilization", "Per-link utilization", "Topology",
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_path_delay_ms", "Delay of each path", "Topology",
+            "Traffic matrix", "Optimizer");
+
+static auto* path_flow_count =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<uint32_t, std::string, std::string, std::string>(
+            "opt_path_flow_count", "Number of flows on each path", "Topology",
             "Traffic matrix", "Optimizer");
 
 static auto* path_unmet_demand =
@@ -96,7 +88,75 @@ static auto* tm_scale_factor =
             "By how much the TM had to be scaled to make B4 fit", "Topology",
             "Traffic matrix");
 
+static auto* total_delay_fraction =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string>(
+            "total_delay_fraction", "Fraction of total delay at no headroom",
+            "Topology", "Traffic matrix");
+
+static auto* link_utilization =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string, std::string>(
+            "opt_link_utilization", "Per-link utilization", "Topology",
+            "Traffic matrix", "Optimizer");
+
 namespace ctr {
+
+static constexpr double kHeadroomStrideSize = 0.02;
+
+static void RecordHeadroomVsDelay(const std::string& top_file,
+                                  const std::string& tm_file,
+                                  const TrafficMatrix& tm) {
+  using namespace ctr;
+  using namespace std::chrono;
+  const nc::net::GraphStorage* graph = tm.graph();
+
+  std::vector<double> values;
+  for (double link_multiplier = 1.0; link_multiplier > 0.0;
+       link_multiplier -= kHeadroomStrideSize) {
+    PathProvider path_provider(graph);
+    CTROptimizer ctr_optimizer(&path_provider, link_multiplier, false, false);
+    std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(tm);
+
+    double max_utilization = routing->MaxLinkUtilization();
+    if (max_utilization > link_multiplier + 0.001) {
+      break;
+    }
+
+    double value = duration_cast<seconds>(routing->TotalPerFlowDelay()).count();
+    values.emplace_back(value);
+  }
+
+  // The lowest delay is achieved at link_multiplier=1.0. Will normalize
+  // everything by that.
+  CHECK(!values.empty());
+  double lowest_delay = values.front();
+  auto* metric_handle = total_delay_fraction->GetHandle(top_file, tm_file);
+  for (auto value : values) {
+    metric_handle->AddValue(value / lowest_delay);
+  }
+}
+
+static void RecordTrafficMatrixStats(const std::string& topology,
+                                     const std::string& tm,
+                                     const TrafficMatrix& traffic_matrix) {
+  const nc::net::GraphStorage* graph = traffic_matrix.graph();
+  auto* sp_delay_handle = aggregate_sp_delay_ms->GetHandle(topology, tm);
+  auto* rate_handle = aggregate_rate_Mbps->GetHandle(topology, tm);
+  for (const auto& aggregate_and_demand : traffic_matrix.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_and_demand.second;
+
+    microseconds shortest_path_delay = aggregate_id.GetSPDelay(*graph);
+    milliseconds sp_delay_ms = duration_cast<milliseconds>(shortest_path_delay);
+
+    // Will limit the delay at 1ms.
+    sp_delay_ms = std::max(sp_delay_ms, milliseconds(1));
+    sp_delay_handle->AddValue(sp_delay_ms.count());
+    rate_handle->AddValue(demand_and_flow_count.first.Mbps());
+  }
+}
 
 static void RecordRoutingConfig(const std::string& topology,
                                 const std::string& tm, const std::string& opt,
@@ -111,13 +171,10 @@ static void RecordRoutingConfig(const std::string& topology,
   const std::map<const nc::net::Walk*, nc::net::Bandwidth>& per_flow_rates =
       model.per_flow_bandwidth_map();
 
-  auto* path_stretch_handle = path_stretch_ms->GetHandle(topology, tm, opt);
-  auto* path_sp_delay_handle = path_sp_delay_ms->GetHandle(topology, tm, opt);
   auto* path_flow_count_handle = path_flow_count->GetHandle(topology, tm, opt);
-  auto* path_stretch_rel_handle =
-      path_stretch_rel->GetHandle(topology, tm, opt);
   auto* unmet_demand_handle = path_unmet_demand->GetHandle(topology, tm, opt);
   auto* path_count_handle = aggregate_path_count->GetHandle(topology, tm, opt);
+  auto* path_delay = path_delay_ms->GetHandle(topology, tm, opt);
 
   for (const auto& aggregate_and_aggregate_output : routing.routes()) {
     const AggregateId& aggregate_id = aggregate_and_aggregate_output.first;
@@ -131,37 +188,22 @@ static void RecordRoutingConfig(const std::string& topology,
     nc::net::Bandwidth required_per_flow =
         total_aggregate_demand / total_num_flows;
 
-    microseconds shortest_path_delay = aggregate_id.GetSPDelay(*graph);
-    milliseconds sp_delay_ms = duration_cast<milliseconds>(shortest_path_delay);
-
-    // Will limit the delay at 1ms.
-    sp_delay_ms = std::max(sp_delay_ms, milliseconds(1));
-
-    size_t path_count = 0;
     for (const auto& route : routes) {
       const nc::net::Walk* path = route.first;
       double fraction = route.second;
       CHECK(fraction > 0);
 
-      microseconds path_delay = path->delay();
-      CHECK(path_delay >= shortest_path_delay);
-      ++path_count;
-
-      milliseconds path_delay_ms = duration_cast<milliseconds>(path_delay);
-      path_delay_ms = std::max(path_delay_ms, milliseconds(1));
+      microseconds delay = path->delay();
+      milliseconds delay_ms = duration_cast<milliseconds>(delay);
+      delay_ms = std::max(delay_ms, milliseconds(1));
+      path_delay->AddValue(delay_ms.count());
 
       nc::net::Bandwidth per_flow_rate =
           nc::FindOrDieNoPrint(per_flow_rates, path);
       nc::net::Bandwidth unmet = std::max(nc::net::Bandwidth::Zero(),
                                           required_per_flow - per_flow_rate);
-      double delta_rel =
-          static_cast<double>(path_delay_ms.count()) / sp_delay_ms.count();
-      milliseconds delta = path_delay_ms - sp_delay_ms;
 
-      path_sp_delay_handle->AddValue(path_delay_ms.count());
-      path_stretch_handle->AddValue(delta.count());
       path_flow_count_handle->AddValue(fraction * total_num_flows);
-      path_stretch_rel_handle->AddValue(delta_rel);
       unmet_demand_handle->AddValue(unmet.bps());
 
       for (nc::net::GraphLinkIndex link : path->links()) {
@@ -169,7 +211,7 @@ static void RecordRoutingConfig(const std::string& topology,
       }
     }
 
-    path_count_handle->AddValue(path_count);
+    path_count_handle->AddValue(routes.size());
   }
 
   auto* link_load_handle = link_utilization->GetHandle(topology, tm, opt);
@@ -222,9 +264,9 @@ static std::unique_ptr<ctr::RoutingConfiguration> RunB4(
   return {};
 }
 
-static void RunOptimizers(const OptEvalInput& input) {
+static void RunOptimizers(const DemandMatrixAndFilename& input) {
   const std::string& top_file = input.topology_file;
-  const std::string& tm_file = input.tm_file;
+  const std::string& tm_file = input.file;
   const nc::net::GraphStorage* graph = input.demand_matrix->graph();
   LOG(ERROR) << "Running " << top_file << " " << tm_file;
 
@@ -237,6 +279,8 @@ static void RunOptimizers(const OptEvalInput& input) {
   std::unique_ptr<RoutingConfiguration> routing;
   routing = RunB4(*tm, top_file, tm_file, &b4_path_provider);
 
+  RecordTrafficMatrixStats(top_file, tm_file, *tm);
+  RecordHeadroomVsDelay(top_file, tm_file, *tm);
   RecordRoutingConfig(top_file, tm_file, "B4", *routing);
 
   PathProvider path_provider(graph);
@@ -291,12 +335,12 @@ int main(int argc, char** argv) {
   nc::metrics::DefaultMetricManager()->set_timestamp_provider(
       std::move(timestamp_provider));
 
-  std::vector<std::unique_ptr<nc::net::GraphStorage>> graphs;
-  std::vector<ctr::OptEvalInput> to_process;
-  std::tie(graphs, to_process) = ctr::GetOptEvalInputs();
+  std::vector<ctr::TopologyAndFilename> topologies;
+  std::vector<ctr::DemandMatrixAndFilename> to_process;
+  std::tie(topologies, to_process) = ctr::GetDemandMatrixInputs();
 
-  nc::RunInParallel<ctr::OptEvalInput>(
-      to_process, [](const ctr::OptEvalInput& input) {
+  nc::RunInParallel<ctr::DemandMatrixAndFilename>(
+      to_process, [](const ctr::DemandMatrixAndFilename& input) {
         ctr::RunOptimizers(input);
       }, FLAGS_threads);
 }

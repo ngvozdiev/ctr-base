@@ -57,9 +57,9 @@ GetDemandMatrixInputs() {
 
   for (const TopologyAndFilename& topology : topologies) {
     const std::vector<std::string>& node_order = topology.node_order;
-    std::vector<std::string> matrix_files = GetMatrixFiles(topology.name);
+    std::vector<std::string> matrix_files = GetMatrixFiles(topology.file);
     if (matrix_files.empty()) {
-      LOG(ERROR) << "No matrices for " << topology;
+      LOG(ERROR) << "No matrices for " << topology.file;
       continue;
     }
 
@@ -80,7 +80,8 @@ GetDemandMatrixInputs() {
       }
 
       demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
-      inputs_for_topology.emplace_back(tm_file, std::move(demand_matrix));
+      inputs_for_topology.emplace_back(topology.file, tm_file,
+                                       std::move(demand_matrix));
     }
 
     std::shuffle(inputs_for_topology.begin(), inputs_for_topology.end(), rnd);
@@ -88,7 +89,7 @@ GetDemandMatrixInputs() {
         std::min(inputs_for_topology.size(),
                  static_cast<size_t>(FLAGS_tm_per_topology)));
     for (auto& input : inputs_for_topology) {
-      demands_and_matrices.emplace_back(input.demand_file,
+      demands_and_matrices.emplace_back(input.topology_file, input.file,
                                         std::move(input.demand_matrix));
     }
   }

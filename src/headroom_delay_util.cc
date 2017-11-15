@@ -32,52 +32,7 @@ static auto* total_delay_fraction =
             "total_delay_fraction", "Fraction of total delay at no headroom",
             "Topology", "Traffic matrix");
 
-// Produces a plot of increase in headroom vs increase in total propagation
-// delay for a topology/tm combo.
-static void HeadroomVsDelayEval(const ctr::OptEvalInput& input, bool verbose) {
-  using namespace ctr;
-  using namespace std::chrono;
-  LOG(INFO) << "Processing topology " << input.topology_file << " tm "
-            << input.tm_file;
 
-  const nc::lp::DemandMatrix& demand_matrix = *(input.demand_matrix);
-  const nc::net::GraphStorage* graph = demand_matrix.graph();
-
-  const std::string& top_file = input.topology_file;
-  const std::string& tm_file = input.tm_file;
-
-  auto tm = TrafficMatrix::ProportionalFromDemandMatrix(demand_matrix);
-  std::vector<double> values;
-  for (double link_multiplier = 1.0; link_multiplier > 0.0;
-       link_multiplier -= FLAGS_stride_size) {
-    PathProvider path_provider(graph);
-    CTROptimizer ctr_optimizer(&path_provider, link_multiplier, false, false);
-    std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(*tm);
-
-    double max_utilization = routing->MaxLinkUtilization();
-    LOG_IF(INFO, verbose) << "link multiplier " << link_multiplier
-                          << " max utilization " << max_utilization
-                          << " scale factor "
-                          << demand_matrix.MaxCommodityScaleFractor(
-                                 link_multiplier);
-
-    if (max_utilization > link_multiplier + 0.001) {
-      break;
-    }
-
-    double value = duration_cast<seconds>(routing->TotalPerFlowDelay()).count();
-    values.emplace_back(value);
-  }
-
-  // The lowest delay is achieved at link_multiplier=1.0. Will normalize
-  // everything by that.
-  CHECK(!values.empty());
-  double lowest_delay = values.front();
-  auto* metric_handle = total_delay_fraction->GetHandle(top_file, tm_file);
-  for (auto value : values) {
-    metric_handle->AddValue(value / lowest_delay);
-  }
-}
 
 using TopologyAndMatrix = std::tuple<std::string, std::string, double>;
 int main(int argc, char** argv) {

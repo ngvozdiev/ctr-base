@@ -24,7 +24,7 @@
 #include "opt/ctr.h"
 #include "opt/opt.h"
 #include "opt/path_provider.h"
-#include "opt_eval.h"
+#include "demand_matrix_input.h"
 
 DEFINE_string(cities_file, "cities5000.txt", "Location of the cities file");
 DEFINE_double(
@@ -183,7 +183,7 @@ static std::unique_ptr<RoutingConfiguration> RunOptimizer(
 }
 
 static void RecordStretch(
-    const OptEvalInput& input, const RoutingConfiguration& routing,
+    const DemandMatrixAndFilename& input, const RoutingConfiguration& routing,
     const std::vector<const RoutingConfiguration*> new_routings,
     const std::string& opt, bool new_link) {
   nc::DiscreteDistribution<int64_t> dist;
@@ -220,15 +220,15 @@ static void RecordStretch(
     }
   }
 
-  absolute_path_stretch_ms->GetHandle(input.topology_file, input.tm_file, opt,
+  absolute_path_stretch_ms->GetHandle(input.topology_file, input.file, opt,
                                       new_link)
       ->AddValue(dist);
-  relative_path_stretch->GetHandle(input.topology_file, input.tm_file, opt,
+  relative_path_stretch->GetHandle(input.topology_file, input.file, opt,
                                    new_link)
       ->AddValue(dist_relative);
 }
 
-static void Record(const OptEvalInput& input,
+static void Record(const DemandMatrixAndFilename& input,
                    const RoutingConfiguration& routing,
                    const RoutingConfiguration& new_routing,
                    const std::string& opt, bool new_link, double threshold) {
@@ -264,24 +264,24 @@ static void Record(const OptEvalInput& input,
   std::string threshold_str = nc::ToStringMaxDecimals(threshold, 1);
   double increasing_flow_fraction = increasing_flow_count / total_flow_count;
   double decreasing_flow_fraction = decreasing_flow_count / total_flow_count;
-  increasing_delay_flows->GetHandle(input.topology_file, input.tm_file, opt,
+  increasing_delay_flows->GetHandle(input.topology_file, input.file, opt,
                                     new_link, threshold_str)
       ->AddValue(increasing_flow_fraction);
-  decreasing_delay_flows->GetHandle(input.topology_file, input.tm_file, opt,
+  decreasing_delay_flows->GetHandle(input.topology_file, input.file, opt,
                                     new_link, threshold_str)
       ->AddValue(decreasing_flow_fraction);
 
   double increasing_fraction = increasing_delay_count / delta.aggregates.size();
   double decreasing_fraction = decreasing_delay_count / delta.aggregates.size();
-  increasing_delay_aggregate->GetHandle(input.topology_file, input.tm_file, opt,
+  increasing_delay_aggregate->GetHandle(input.topology_file, input.file, opt,
                                         new_link, threshold_str)
       ->AddValue(increasing_fraction);
-  decreasing_delay_aggreggate->GetHandle(input.topology_file, input.tm_file,
-                                         opt, new_link, threshold_str)
+  decreasing_delay_aggreggate->GetHandle(input.topology_file, input.file, opt,
+                                         new_link, threshold_str)
       ->AddValue(decreasing_fraction);
 }
 
-static void RecordOverloadAndTotal(const OptEvalInput& input,
+static void RecordOverloadAndTotal(const DemandMatrixAndFilename& input,
                                    const RoutingConfiguration& routing,
                                    const RoutingConfiguration& new_routing,
                                    const std::string& opt, bool new_link) {
@@ -289,7 +289,7 @@ static void RecordOverloadAndTotal(const OptEvalInput& input,
   size_t overloaded_after = routing.OverloadedAggregates();
   double net_overload = overloaded_after - overloaded_before;
   double overload_fraction = net_overload / routing.demands().size();
-  increasing_overload_delta->GetHandle(input.topology_file, input.tm_file, opt,
+  increasing_overload_delta->GetHandle(input.topology_file, input.file, opt,
                                        new_link)
       ->AddValue(overload_fraction);
 
@@ -297,18 +297,16 @@ static void RecordOverloadAndTotal(const OptEvalInput& input,
   nc::net::Delay total_delay_after = new_routing.TotalPerFlowDelay();
   double change = (total_delay_after.count() - total_delay_before.count()) /
                   static_cast<double>(total_delay_before.count());
-  total_delay_delta->GetHandle(input.topology_file, input.tm_file, opt,
-                               new_link)
+  total_delay_delta->GetHandle(input.topology_file, input.file, opt, new_link)
       ->AddValue(change);
-  total_delay->GetHandle(input.topology_file, input.tm_file, opt, new_link)
+  total_delay->GetHandle(input.topology_file, input.file, opt, new_link)
       ->AddValue(total_delay_after.count());
 }
 
-static void RecordLinkDelay(const OptEvalInput& input,
+static void RecordLinkDelay(const DemandMatrixAndFilename& input,
                             std::chrono::microseconds delay,
                             const std::string& opt, bool new_link) {
-  link_delay_micros->GetHandle(input.topology_file, input.tm_file, opt,
-                               new_link)
+  link_delay_micros->GetHandle(input.topology_file, input.file, opt, new_link)
       ->AddValue(delay.count());
 }
 
@@ -322,9 +320,10 @@ static const nc::geo::CityData* GetCity(const std::string& name,
   return city_data;
 }
 
-static void ProcessInput(const OptEvalInput& input, const std::string& opt,
+static void ProcessInput(const DemandMatrixAndFilename& input,
+                         const std::string& opt,
                          nc::geo::Localizer* localizer) {
-  LOG(INFO) << "Processing " << input.topology_file << " tm " << input.tm_file
+  LOG(INFO) << "Processing " << input.topology_file << " tm " << input.file
             << " opt " << opt;
   const nc::lp::DemandMatrix& old_demand_matrix = *(input.demand_matrix);
   const nc::net::GraphStorage* old_graph = old_demand_matrix.graph();
@@ -384,16 +383,18 @@ int main(int argc, char** argv) {
   nc::metrics::DefaultMetricManager()->set_timestamp_provider(
       std::move(timestamp_provider));
 
-  std::vector<std::unique_ptr<nc::net::GraphStorage>> graphs;
-  std::vector<ctr::OptEvalInput> to_process;
-  std::tie(graphs, to_process) = ctr::GetOptEvalInputs();
+  std::vector<ctr::TopologyAndFilename> topologies;
+  std::vector<ctr::DemandMatrixAndFilename> to_process;
+  std::tie(topologies, to_process) = ctr::GetDemandMatrixInputs();
 
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
   for (const auto& opt : optimizers) {
-    nc::RunInParallel<ctr::OptEvalInput>(
-        to_process, [&opt, &localizer](const ctr::OptEvalInput& input) {
+    nc::RunInParallel<ctr::DemandMatrixAndFilename>(
+        to_process,
+        [&opt, &localizer](const ctr::DemandMatrixAndFilename& input) {
           ctr::ProcessInput(input, opt, &localizer);
-        }, FLAGS_threads);
+        },
+        FLAGS_threads);
 
     //    for (const auto& input : to_process) {
     //      ctr::ProcessInput(input, opt, &localizer);

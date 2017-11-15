@@ -70,7 +70,7 @@ std::vector<TopologyAndFilename> GetTopologyInputs() {
       continue;
     }
 
-    out.emplace_back(std::move(graph), topology_file);
+    out.emplace_back(std::move(graph), node_order, topology_file);
   }
 
   return out;
