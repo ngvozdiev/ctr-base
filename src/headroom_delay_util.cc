@@ -65,7 +65,7 @@ static void HeadroomVsDelayEval(const ctr::OptEvalInput& input, bool verbose) {
       break;
     }
 
-    double value = duration_cast<seconds>(routing->TotalPerFlowDelay()).count();
+    double value = duration_cast<milliseconds>(routing->TotalPerFlowDelay()).count();
     values.emplace_back(value);
   }
 

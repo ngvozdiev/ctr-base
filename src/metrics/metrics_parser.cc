@@ -133,7 +133,7 @@ static void ParseSingleFile(const std::string& file,
     if (!ReadDelimitedFrom(&entry, &coded_stream)) {
       LOG(INFO) << "Unable to read entry";
     }
-
+ 
     for (MetricProcessor* processor : interested_processors) {
       processor->ProcessEntry(entry, *manifest_entries[manifest_index],
                               manifest_index);
