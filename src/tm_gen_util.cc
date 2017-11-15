@@ -18,15 +18,22 @@
 #include "ncode_common/src/viz/grapher.h"
 
 DEFINE_string(topology, "", "A file with a topology");
-DEFINE_string(output_suffix, "tm_gen",
-              "Traffic matrices will be saved to files with this suffix");
+DEFINE_string(output_pattern,
+              "demand_matrices/scale_factor_$2/locality_$1/$0_$3.demands",
+              "Traffic matrices will be saved to files named after this "
+              "pattern, with $0 replaced by the topology name, $1 replaced by "
+              "locality, $2 replaced by scale factor and $3 replaced by a "
+              "unique integer identifier.");
 DEFINE_double(min_scale_factor, 1.3,
               "The generated matrix should be scaleable by at least this much "
               "without becoming unfeasible.");
 DEFINE_double(locality, 0.0,
               "How much of does locality factor into the traffic matrix.");
 DEFINE_uint64(seed, 1ul, "Seed for the generated TM.");
-DEFINE_uint64(tm_count, 1, "How many TMs to generate");
+DEFINE_uint64(tm_count, 1, "Number of TMs to generate.");
+DEFINE_uint64(threads, 2, "Number of threads to use.");
+
+using DemandMatrixVector = std::vector<std::unique_ptr<nc::lp::DemandMatrix>>;
 
 static void PlotRateVsDistance(const nc::lp::DemandMatrix& matrix) {
   const nc::net::GraphStorage* graph = matrix.graph();
@@ -53,9 +60,38 @@ static void PlotRateVsDistance(const nc::lp::DemandMatrix& matrix) {
   grapher.PlotLine({}, {to_plot});
 }
 
-static std::vector<std::unique_ptr<nc::lp::DemandMatrix>> GetMatrices(
-    nc::net::GraphStorage* graph) {
-  nc::lp::DemandGenerator generator(graph, FLAGS_seed);
+static DemandMatrixVector GetMatrices(
+    const nc::lp::DemandGenerator& demand_generator, size_t count,
+    uint64_t seed) {
+  std::mt19937 gen;
+  std::vector<std::unique_ptr<nc::lp::DemandMatrix>> matrices;
+  for (size_t i = 0; i < count; ++i) {
+    auto tm =
+        demand_generator.Generate(FLAGS_min_scale_factor, FLAGS_locality, rnd);
+
+    // Will ignore all aggregates less than 1Mbps.
+    tm = tm->Filter([](const nc::lp::DemandMatrixElement& element) {
+      return element.demand < nc::net::Bandwidth::FromMBitsPerSecond(1);
+    });
+
+    matrices.emplace_back(std::move(tm));
+  }
+
+  return matrices;
+}
+
+static std::vector<std::unique_ptr<nc::lp::DemandMatrix>> GetAllMatrices(
+    const nc::net::GraphStorage* graph) {
+  nc::lp::DemandGenerator demand_generator;
+  std::vector<std::mt19937> random_generators;
+  for (size_t i = 0; i < FLAGS_threads; ++i) {
+    random_generators.emplace_back(FLAGS_seed + i);
+  }
+
+  std::vector<DemandMatrixVector> all_matrices(FLAGS_threads);
+  nc::RunInParallelWithResult()
+
+      nc::lp::DemandGenerator generator(graph, FLAGS_seed);
 
   std::vector<std::unique_ptr<nc::lp::DemandMatrix>> matrices;
   for (size_t i = 0; i < FLAGS_tm_count; ++i) {
