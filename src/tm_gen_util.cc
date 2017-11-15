@@ -53,6 +53,16 @@ static void PlotRateVsDistance(const nc::lp::DemandMatrix& matrix) {
   grapher.PlotLine({}, {to_plot});
 }
 
+static void PlotAggregateRates(const nc::lp::DemandMatrix& matrix) {
+  std::vector<double> to_plot;
+  for (const auto& element : matrix.elements()) {
+    to_plot.emplace_back(element.demand.Mbps());
+  }
+
+  nc::viz::PythonGrapher grapher("aggregate_rates");
+  grapher.PlotCDF({}, {{"", to_plot}});
+}
+
 static std::vector<std::unique_ptr<nc::lp::DemandMatrix>> GetMatrices(
     nc::net::GraphStorage* graph) {
   nc::lp::DemandGenerator generator(graph, FLAGS_seed);
@@ -91,6 +101,7 @@ int main(int argc, char** argv) {
     nc::File::WriteStringToFileOrDie(demand_matrix.ToRepetita(node_order),
                                      output);
     PlotRateVsDistance(demand_matrix);
+    PlotAggregateRates(demand_matrix);
 
     LOG(INFO) << "TM " << demand_matrix.ToString();
     LOG(INFO) << "Written TM to " << output;
