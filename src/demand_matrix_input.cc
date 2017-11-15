@@ -40,7 +40,7 @@ static std::vector<std::string> GetMatrixFiles(
   }
 
   std::string matrix_location =
-      nc::StringReplace(topology_file, ".graph", ".*.demands", true);
+      nc::StringReplace(topology_file, ".graph", "_*.demands", true);
   return nc::Glob(matrix_location);
 }
 
