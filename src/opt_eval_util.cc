@@ -114,6 +114,10 @@ static void RecordHeadroomVsDelay(const std::string& top_file,
   std::vector<double> values;
   for (double link_multiplier = 1.0; link_multiplier > 0.0;
        link_multiplier -= kHeadroomStrideSize) {
+    if (!tm.ToDemandMatrix()->IsFeasible({}, link_multiplier)) {
+      break;
+    }
+
     PathProvider path_provider(graph);
     CTROptimizer ctr_optimizer(&path_provider, link_multiplier, false, false);
     std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(tm);
