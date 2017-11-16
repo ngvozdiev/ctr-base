@@ -110,6 +110,7 @@ static void RecordHeadroomVsDelay(const std::string& top_file,
   using namespace ctr;
   using namespace std::chrono;
   const nc::net::GraphStorage* graph = tm.graph();
+  PathProvider path_provider(graph);
 
   std::vector<double> values;
   for (double link_multiplier = 1.0; link_multiplier > 0.0;
@@ -118,7 +119,6 @@ static void RecordHeadroomVsDelay(const std::string& top_file,
       break;
     }
 
-    PathProvider path_provider(graph);
     CTROptimizer ctr_optimizer(&path_provider, link_multiplier, false, false);
     std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(tm);
 
