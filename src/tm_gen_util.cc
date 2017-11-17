@@ -48,10 +48,10 @@ void ProcessMatrix(const Input& input) {
       generator.Generate(FLAGS_min_scale_factor, FLAGS_locality, &gen);
 
   // Will ignore all aggregates less than 1Mbps.
-  demand_matrix =
-      demand_matrix->Filter([](const nc::lp::DemandMatrixElement& element) {
-        return element.demand < nc::net::Bandwidth::FromMBitsPerSecond(1);
-      });
+  //  demand_matrix =
+  //      demand_matrix->Filter([](const nc::lp::DemandMatrixElement& element) {
+  //        return element.demand < nc::net::Bandwidth::FromMBitsPerSecond(1);
+  //      });
 
   std::string output_location =
       nc::Substitute(FLAGS_output_pattern.c_str(), topology_filename,
