@@ -366,7 +366,7 @@ std::string TrafficMatrix::ToString() const {
   out.emplace_back(
       nc::StrCat("TM with ", static_cast<uint64_t>(demands_.size()),
                  " demands, scale factor ",
-                 demand_matrix->MaxCommodityScaleFractor({}, 1.0),
+                 demand_matrix->MaxCommodityScaleFactor({}, 1.0),
                  " sp link utilizations: ", nc::Join(sp_utilizations, ",")));
   for (const auto& aggregate_and_demand : demands_) {
     const AggregateId& aggregate = aggregate_and_demand.first;
@@ -392,7 +392,7 @@ std::string TrafficMatrix::SummaryToString() const {
   size_t aggregate_count = demands_.size();
 
   auto demand_matrix = ToDemandMatrix();
-  double mcsf = demand_matrix->MaxCommodityScaleFractor({}, 1.0);
+  double mcsf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
 
   std::vector<nc::net::Bandwidth> demands;
   std::vector<size_t> flow_counts;

@@ -45,18 +45,6 @@ class ShortestPathOptimizer : public Optimizer {
       const TrafficMatrix& tm) override;
 };
 
-class MinMaxProblem : public nc::lp::SingleCommodityFlowProblem {
- public:
-  MinMaxProblem(const nc::net::GraphStorage* graph, double capacity_multiplier,
-                bool also_minimize_delay);
-
-  double Solve(
-      std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths);
-
-  bool also_minimize_delay_;
-  double capacity_multiplier_;
-};
-
 // Returns a solution that minimizes the maximum utilization of any link in the
 // network. The solution will be optimal, and the paths that it uses will not
 // come from the path provider (i.e., they will not conform to any policy).

@@ -122,18 +122,11 @@ class DemandGenerator {
 
     auto demand_matrix =
         SinglePass(locality, nc::net::Bandwidth::FromMBitsPerSecond(1), rnd);
-
-    ctr::MinMaxProblem problem(graph_, 1.0, true);
-    for (const auto& element : demand_matrix->elements()) {
-      problem.AddDemand(element.src, element.dst, element.demand.Mbps());
-    }
-
-    double max_link_utilization = problem.Solve(nullptr);
-    double csf = demand_matrix->MaxCommodityScaleFractor({}, 1.0);
-    LOG(INFO) << "M " << max_link_utilization << " csf " << csf;
+    double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
     CHECK(csf != 0);
     demand_matrix = demand_matrix->Scale(csf);
     demand_matrix = demand_matrix->Scale(1.0 / commodity_scale_factor);
+    LOG(INFO) << "M " << csf;
     return demand_matrix;
   }
 
