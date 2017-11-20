@@ -29,12 +29,11 @@ DEFINE_string(focus_stretch_on, "",
               "If empty will plot path stretch for all flows in the data set. "
               "If not will plot only flows in the TM idenified by this.");
 
-static constexpr char kPathStretchMetric[] = "opt_path_stretch_rel";
-static constexpr char kPathStretchAbsMetric[] = "opt_path_stretch_ms";
-static constexpr char kPathDelayMetric[] = "opt_path_sp_delay_ms";
+static constexpr char kAggregateSPDelayMetric[] = "aggregate_sp_delay_ms";
+static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
+static constexpr char kPathDelayMetric[] = "opt_path_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
-static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr char kRuntimeMetric[] = "ctr_runtime_ms";
 static constexpr char kRuntimeCachedMetric[] = "ctr_runtime_cached_ms";
 static constexpr size_t kDiscreteMultiplier = 1000;
@@ -42,13 +41,48 @@ static constexpr size_t kPercentilesCount = 10000;
 
 using namespace nc::metrics::parser;
 
+struct AggregateTMState {
+  // Delay of the shortest path.
+  uint32_t sp_delay_ms;
+
+  // For each path delay and flow count.
+  std::vector<std::pair<uint32_t, uint32_t>> paths;
+};
+
+struct TMState {
+  std::vector<uint32_t> aggregate_sp_delay_ms;
+};
+
 struct OptimizerTMState {
-  std::vector<float> path_stretch;
-  std::vector<uint32_t> path_stretch_abs_ms;
-  std::vector<uint32_t> path_sp_delay_ms;
   std::vector<uint32_t> path_flow_count;
+  std::vector<uint32_t> path_delay_ms;
   std::vector<uint32_t> aggregate_path_count;
   std::vector<double> link_utilization;
+  const TMState* parent_state;
+
+  std::vector<AggregateTMState> GetAggregates() const {
+    size_t path_index = 0;
+    std::vector<AggregateTMState> out;
+    for (size_t i = 0; i < aggregate_path_count.size(); ++i) {
+      uint32_t path_count = aggregate_path_count[i];
+      uint32_t sp_delay_ms = parent_state->aggregate_sp_delay_ms[i];
+
+      std::vector<std::pair<uint32_t, uint32_t>> paths;
+      for (size_t j = 0; j < path_count; ++j) {
+        uint32_t delay_ms = path_delay_ms[path_index];
+        uint32_t flow_count = path_flow_count[path_index];
+        paths.emplace_back(delay_ms, flow_count);
+
+        ++path_index;
+      }
+
+      out.emplace_back();
+      out.back().paths = std::move(paths);
+      out.back().sp_delay_ms = sp_delay_ms;
+    }
+
+    return out;
+  }
 };
 
 using TopologyAndTM = std::pair<std::string, std::string>;
@@ -59,24 +93,40 @@ using DataMap = std::map<std::pair<std::string, std::string>, DataVector>;
 
 class DataStorage {
  public:
-  OptimizerTMState* GetTMState(const std::string& topology,
-                               const std::string& optimizer,
-                               const std::string& tm) {
+  OptimizerTMState* GetOptimizerTMState(const std::string& topology,
+                                        const std::string& optimizer,
+                                        const std::string& tm) {
     std::unique_lock<std::mutex> lock(mu_);
     TMStateMap& tm_state_map = data_[optimizer];
-    std::unique_ptr<OptimizerTMState>& tm_state_ptr =
+    std::unique_ptr<OptimizerTMState>& opt_tm_state_ptr =
         tm_state_map[{topology, tm}];
 
-    if (!tm_state_ptr) {
-      tm_state_ptr = nc::make_unique<OptimizerTMState>();
+    if (!opt_tm_state_ptr) {
+      opt_tm_state_ptr = nc::make_unique<OptimizerTMState>();
+      opt_tm_state_ptr->parent_state = GetTMStatePrivate(topology, tm);
     }
-    return tm_state_ptr.get();
+    return opt_tm_state_ptr.get();
+  }
+
+  TMState* GetTMState(const std::string& topology, const std::string& tm) {
+    std::unique_lock<std::mutex> lock(mu_);
+    return GetTMStatePrivate(topology, tm);
   }
 
   const std::map<std::string, TMStateMap>& data() const { return data_; }
 
  private:
+  TMState* GetTMStatePrivate(const std::string& topology,
+                             const std::string& tm) {
+    std::unique_ptr<TMState>& tm_state_ptr = tm_state_data_[{topology, tm}];
+    if (!tm_state_ptr) {
+      tm_state_ptr = nc::make_unique<TMState>();
+    }
+    return tm_state_ptr.get();
+  }
+
   std::map<std::string, TMStateMap> data_;
+  std::map<TopologyAndTM, std::unique_ptr<TMState>> tm_state_data_;
 
   // Protects 'data_'.
   std::mutex mu_;
@@ -102,7 +152,7 @@ class SingleMetricProcessor : public MetricProcessor {
   bool InterestedInFields(const nc::metrics::PBManifestEntry& manifest_entry,
                           uint32_t manifest_index) override {
     // Fields are assumed to be topology,TM,optimizer.
-    CHECK(manifest_entry.fields_size() == 3);
+    CHECK(manifest_entry.fields_size() == 3) << metric_;
     CHECK(manifest_entry.fields(0).type() ==
           nc::metrics::PBMetricField_Type_STRING);
     CHECK(manifest_entry.fields(1).type() ==
@@ -118,7 +168,8 @@ class SingleMetricProcessor : public MetricProcessor {
       return false;
     }
 
-    OptimizerTMState* tm_state = storage_->GetTMState(topology, optimizer, tm);
+    OptimizerTMState* tm_state =
+        storage_->GetOptimizerTMState(topology, optimizer, tm);
 
     CHECK(!nc::ContainsKey(manifest_index_to_state_, manifest_index));
     manifest_index_to_state_[manifest_index] = tm_state;
@@ -147,6 +198,68 @@ class SingleMetricProcessor : public MetricProcessor {
 
   // Maps from a manifest index to state.
   std::map<uint32_t, OptimizerTMState*> manifest_index_to_state_;
+};
+
+class SingleTMMetricProcessor : public MetricProcessor {
+ public:
+  using UpdateStateCallback = std::function<void(
+      const nc::metrics::PBMetricEntry& entry, TMState* tm_state)>;
+
+  SingleTMMetricProcessor(const std::string& metric, DataStorage* storage,
+                          const std::set<TopologyAndTM>* to_ignore,
+                          UpdateStateCallback callback)
+      : metric_(metric),
+        callback_(callback),
+        to_ignore_(to_ignore),
+        storage_(storage) {}
+
+  bool InterestedInMetric(const std::string& metric_id) override {
+    return metric_ == metric_id;
+  }
+
+  bool InterestedInFields(const nc::metrics::PBManifestEntry& manifest_entry,
+                          uint32_t manifest_index) override {
+    // Fields are assumed to be topology,TM.
+    CHECK(manifest_entry.fields_size() == 2) << metric_;
+    CHECK(manifest_entry.fields(0).type() ==
+          nc::metrics::PBMetricField_Type_STRING);
+    CHECK(manifest_entry.fields(1).type() ==
+          nc::metrics::PBMetricField_Type_STRING);
+
+    const std::string& topology = manifest_entry.fields(0).string_value();
+    const std::string& tm = manifest_entry.fields(1).string_value();
+    if (nc::ContainsKey(*to_ignore_, make_pair(topology, tm))) {
+      return false;
+    }
+
+    TMState* tm_state = storage_->GetTMState(topology, tm);
+
+    CHECK(!nc::ContainsKey(manifest_index_to_state_, manifest_index));
+    manifest_index_to_state_[manifest_index] = tm_state;
+    return true;
+  }
+
+  void ProcessEntry(const nc::metrics::PBMetricEntry& entry,
+                    const nc::metrics::PBManifestEntry& manifest_entry,
+                    uint32_t manifest_index) override {
+    nc::Unused(manifest_entry);
+    TMState* tm_state = nc::FindOrDie(manifest_index_to_state_, manifest_index);
+    callback_(entry, tm_state);
+  }
+
+ private:
+  const std::string metric_;
+
+  UpdateStateCallback callback_;
+
+  // Combinations of TM and topology to ignore.
+  const std::set<TopologyAndTM>* to_ignore_;
+
+  // The storage that produces OptimizerTMState instances.
+  DataStorage* storage_;
+
+  // Maps from a manifest index to state.
+  std::map<uint32_t, TMState*> manifest_index_to_state_;
 };
 
 // Returns the set of fields for which all aggregates use only one path.
@@ -195,15 +308,18 @@ static std::vector<double> GetPathRatios(const TMStateMap& tm_state_map,
       }
     }
 
+    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
     double total_sp_delay = 0;
     double total_delay = 0;
-    for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
-      double flow_count = tm_state.path_flow_count[i];
-      double abs_stretch = tm_state.path_stretch_abs_ms[i];
-      double sp_delay = tm_state.path_sp_delay_ms[i];
-
-      total_sp_delay += sp_delay * flow_count;
-      total_delay += (sp_delay + abs_stretch) * flow_count;
+    for (const auto& aggregate : aggregates) {
+      double sp_delay_ms = aggregate.sp_delay_ms;
+      for (const auto& delay_and_count : aggregate.paths) {
+        double path_delay_ms = delay_and_count.first;
+        double abs_stretch = path_delay_ms - sp_delay_ms;
+        uint32_t flow_count = delay_and_count.second;
+        total_sp_delay += sp_delay_ms * flow_count;
+        total_delay += (sp_delay_ms + abs_stretch) * flow_count;
+      }
     }
 
     double change = (total_delay - total_sp_delay) / total_sp_delay;
@@ -231,14 +347,16 @@ static std::vector<double> GetTotalDelays(const TMStateMap& tm_state_map) {
   std::vector<double> out;
   for (const auto& key_and_data : tm_state_map) {
     const OptimizerTMState& tm_state = *(key_and_data.second);
-
+    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
     double total_delay = 0;
-    for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
-      double flow_count = tm_state.path_flow_count[i];
-      double abs_stretch = tm_state.path_stretch_abs_ms[i];
-      double sp_delay = tm_state.path_sp_delay_ms[i];
-
-      total_delay += (sp_delay + abs_stretch) * flow_count;
+    for (const auto& aggregate : aggregates) {
+      double sp_delay_ms = aggregate.sp_delay_ms;
+      for (const auto& delay_and_count : aggregate.paths) {
+        double path_delay_ms = delay_and_count.first;
+        double abs_stretch = path_delay_ms - sp_delay_ms;
+        uint32_t flow_count = delay_and_count.second;
+        total_delay += (sp_delay_ms + abs_stretch) * flow_count;
+      }
     }
 
     out.emplace_back(total_delay);
@@ -255,23 +373,24 @@ GetStretchDistribution(const TMStateMap& tm_state_map) {
 
   for (const auto& key_and_data : tm_state_map) {
     const OptimizerTMState& tm_state = *(key_and_data.second);
-
+    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
     double max = 0;
-    for (size_t i = 0; i < tm_state.path_flow_count.size(); ++i) {
-      double stretch = tm_state.path_stretch[i];
-      max = std::max(max, stretch);
+    for (const auto& aggregate : aggregates) {
+      double sp_delay_ms = aggregate.sp_delay_ms;
+      for (const auto& delay_and_count : aggregate.paths) {
+        double path_delay_ms = delay_and_count.first;
+        uint32_t flow_count = delay_and_count.second;
+        CHECK(path_delay_ms >= sp_delay_ms);
+        double abs_stretch = path_delay_ms - sp_delay_ms;
+        double rel_stretch = abs_stretch / sp_delay_ms;
+        max = std::max(rel_stretch, max);
 
-      if (FLAGS_focus_stretch_on.empty() ||
-          FLAGS_focus_stretch_on == key_and_data.first.second) {
-        double abs_stretch = tm_state.path_stretch_abs_ms[i];
         // Have to discretize the value.
         uint64_t value_discrete =
             static_cast<uint64_t>(kDiscreteMultiplier * abs_stretch);
-        size_t flow_count = tm_state.path_flow_count[i];
         dist.Add(value_discrete, flow_count);
       }
     }
-
     maxs.emplace_back(max);
   }
 
@@ -449,22 +568,16 @@ int main(int argc, char** argv) {
   }
 
   DataStorage data_storage;
-  auto path_stretch_processor = nc::make_unique<SingleMetricProcessor>(
-      kPathStretchMetric, &data_storage, &to_ignore,
-      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
-        tm_state->path_stretch.emplace_back(entry.double_value());
-      });
-
-  auto path_stretch_abs_processor = nc::make_unique<SingleMetricProcessor>(
-      kPathStretchAbsMetric, &data_storage, &to_ignore,
-      [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
-        tm_state->path_stretch_abs_ms.emplace_back(entry.uint32_value());
+  auto sp_delay_processor = nc::make_unique<SingleTMMetricProcessor>(
+      kAggregateSPDelayMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, TMState* tm_state) {
+        tm_state->aggregate_sp_delay_ms.emplace_back(entry.uint32_value());
       });
 
   auto path_delay_processor = nc::make_unique<SingleMetricProcessor>(
       kPathDelayMetric, &data_storage, &to_ignore,
       [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
-        tm_state->path_sp_delay_ms.emplace_back(entry.uint32_value());
+        tm_state->path_delay_ms.emplace_back(entry.uint32_value());
       });
 
   auto path_flow_count_processor = nc::make_unique<SingleMetricProcessor>(
@@ -486,8 +599,7 @@ int main(int argc, char** argv) {
       });
 
   MetricsParser parser(FLAGS_metrics_dir);
-  parser.AddProcessor(std::move(path_stretch_processor));
-  parser.AddProcessor(std::move(path_stretch_abs_processor));
+  parser.AddProcessor(std::move(sp_delay_processor));
   parser.AddProcessor(std::move(path_delay_processor));
   parser.AddProcessor(std::move(path_flow_count_processor));
   parser.AddProcessor(std::move(link_utilization_processor));
