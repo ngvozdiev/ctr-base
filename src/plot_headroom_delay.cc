@@ -12,11 +12,15 @@
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/stats.h"
 #include "ncode_common/src/strutil.h"
+#include "ncode_common/src/substitute.h"
 #include "ncode_common/src/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(input, "", "The metrics file.");
 DEFINE_double(at_link_multiplier, 0.9, "What headroom value to plot.");
+DEFINE_string(output_pattern, "headroom_delay_plot_out_$0",
+              "What the output folder should be named. $0 will be replaced "
+              "with 'at_link_multiplier'");
 
 static constexpr char kStrideSizeMetric[] = "stride_size";
 static constexpr char kTotalDelayMetric[] = "total_delay_fraction";
@@ -122,14 +126,13 @@ static void PlotValues() {
   }
 
   nc::viz::PythonGrapher grapher(
-      nc::StrCat("headroom_delay_plot_out_", FLAGS_at_link_multiplier));
+      nc::Substitute(FLAGS_output_pattern.c_str(), FLAGS_at_link_multiplier));
   nc::viz::PlotParameters2D params;
   params.title = nc::StrCat("Total delay multiplier at link multiplier ",
                             FLAGS_at_link_multiplier);
   params.x_label = "topology (ranked by median delay multiplier)";
   params.y_label = "total delay multiplier";
-  grapher.PlotLine(params,
-                   {{"median", y_median}, {"min", y_min}, {"max", y_max}});
+  grapher.PlotLine(params, {{"median", y_median}, {"max", y_max}});
 }
 
 int main(int argc, char** argv) {

@@ -150,6 +150,9 @@ target_link_libraries(plot_stability_eval metrics_parser gflags)
 add_executable(plot_top_grow src/plot_top_grow.cc)
 target_link_libraries(plot_top_grow metrics_parser gflags)
 
+add_executable(plot_headroom_delay src/plot_headroom_delay.cc)
+target_link_libraries(plot_headroom_delay metrics_parser gflags)
+
 add_executable(opt_eval_util src/opt_eval_util.cc)
 target_link_libraries(opt_eval_util demand_matrix_input ctr_base)
 
@@ -164,3 +167,6 @@ target_link_libraries(geo_main geo_lib gflags)
 
 add_executable(top_grow src/top_grow.cc)
 target_link_libraries(top_grow geo_lib ctr_base demand_matrix_input metrics gflags)
+
+add_executable(sfml_main src/sfml/sfml_main.cc)
+target_link_libraries(sfml_main ncode sfml-graphics sfml-system sfml-window)

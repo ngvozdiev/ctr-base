@@ -25,11 +25,14 @@ DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
 DEFINE_bool(ignore_trivial, true,
             "Ignores topologies/TM combinations where traffic fits on the "
             "shortest path.");
-DEFINE_string(focus_stretch_on, "",
-              "If empty will plot path stretch for all flows in the data set. "
-              "If not will plot only flows in the TM idenified by this.");
+DEFINE_string(output_prefix, "",
+              "Prefix that will be added to all output directories.");
+DEFINE_string(
+    locality_plot, "",
+    "If non-empty will plot locality for the given topology/tm combination.");
 
 static constexpr char kAggregateSPDelayMetric[] = "aggregate_sp_delay_ms";
+static constexpr char kAggregateRateMetric[] = "aggregate_rate_Mbps";
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr char kPathDelayMetric[] = "opt_path_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
@@ -45,12 +48,16 @@ struct AggregateTMState {
   // Delay of the shortest path.
   uint32_t sp_delay_ms;
 
+  // Demand of the aggregate.
+  double rate_Mbps;
+
   // For each path delay and flow count.
   std::vector<std::pair<uint32_t, uint32_t>> paths;
 };
 
 struct TMState {
   std::vector<uint32_t> aggregate_sp_delay_ms;
+  std::vector<double> aggregate_rate_Mbps;
 };
 
 struct OptimizerTMState {
@@ -66,6 +73,7 @@ struct OptimizerTMState {
     for (size_t i = 0; i < aggregate_path_count.size(); ++i) {
       uint32_t path_count = aggregate_path_count[i];
       uint32_t sp_delay_ms = parent_state->aggregate_sp_delay_ms[i];
+      double rate_Mbps = parent_state->aggregate_rate_Mbps[i];
 
       std::vector<std::pair<uint32_t, uint32_t>> paths;
       for (size_t j = 0; j < path_count; ++j) {
@@ -79,6 +87,7 @@ struct OptimizerTMState {
       out.emplace_back();
       out.back().paths = std::move(paths);
       out.back().sp_delay_ms = sp_delay_ms;
+      out.back().rate_Mbps = rate_Mbps;
     }
 
     return out;
@@ -114,6 +123,11 @@ class DataStorage {
   }
 
   const std::map<std::string, TMStateMap>& data() const { return data_; }
+
+  const std::map<TopologyAndTM, std::unique_ptr<TMState>>& tm_state_data()
+      const {
+    return tm_state_data_;
+  }
 
  private:
   TMState* GetTMStatePrivate(const std::string& topology,
@@ -553,6 +567,35 @@ static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
   grapher.PlotCDF({}, to_plot);
 }
 
+static void PlotLocality(const TMState& tm_state) {
+  std::vector<std::pair<double, double>> values;
+  CHECK(tm_state.aggregate_rate_Mbps.size() ==
+        tm_state.aggregate_sp_delay_ms.size())
+      << tm_state.aggregate_rate_Mbps.size() << " vs "
+      << tm_state.aggregate_sp_delay_ms.size();
+  for (size_t i = 0; i < tm_state.aggregate_rate_Mbps.size(); ++i) {
+    values.emplace_back(tm_state.aggregate_sp_delay_ms[i],
+                        tm_state.aggregate_rate_Mbps[i]);
+  }
+
+  std::sort(values.begin(), values.end());
+  double total = 0;
+  for (size_t i = 0; i < values.size(); ++i) {
+    std::pair<double, double>& delay_and_rate = values[i];
+    total += delay_and_rate.second;
+    delay_and_rate.second = total;
+  }
+
+  nc::viz::PythonGrapher grapher(
+      nc::StrCat(FLAGS_output_prefix, "locality_plot"));
+
+  nc::viz::PlotParameters2D params;
+  params.title = "SP delay vs cumulative rate";
+  params.x_label = "SP delay (ms)";
+  params.y_label = "Total cumulative rate (Mbps)";
+  grapher.PlotLine(params, {{"", values}});
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   CHECK(!FLAGS_metrics_dir.empty()) << "need --metrics_dir";
@@ -572,6 +615,12 @@ int main(int argc, char** argv) {
       kAggregateSPDelayMetric, &data_storage, &to_ignore,
       [](const nc::metrics::PBMetricEntry& entry, TMState* tm_state) {
         tm_state->aggregate_sp_delay_ms.emplace_back(entry.uint32_value());
+      });
+
+  auto rate_processor = nc::make_unique<SingleTMMetricProcessor>(
+      kAggregateRateMetric, &data_storage, &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, TMState* tm_state) {
+        tm_state->aggregate_rate_Mbps.emplace_back(entry.double_value());
       });
 
   auto path_delay_processor = nc::make_unique<SingleMetricProcessor>(
@@ -600,11 +649,23 @@ int main(int argc, char** argv) {
 
   MetricsParser parser(FLAGS_metrics_dir);
   parser.AddProcessor(std::move(sp_delay_processor));
+  parser.AddProcessor(std::move(rate_processor));
   parser.AddProcessor(std::move(path_delay_processor));
   parser.AddProcessor(std::move(path_flow_count_processor));
   parser.AddProcessor(std::move(link_utilization_processor));
   parser.AddProcessor(std::move(aggregate_path_count_processor));
   parser.Parse();
+
+  if (!FLAGS_locality_plot.empty()) {
+    std::vector<std::string> split = nc::Split(FLAGS_locality_plot, ":");
+    CHECK(split.size() == 2);
+
+    const auto& tm_state_data = data_storage.tm_state_data();
+    const TMState& tm_state =
+        *(nc::FindOrDieNoPrint(tm_state_data, {split[0], split[1]}));
+    PlotLocality(tm_state);
+    return 0;
+  }
 
   // The data is grouped by optimizer.
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
@@ -625,11 +686,16 @@ int main(int argc, char** argv) {
     result_ptrs.emplace_back(std::move(result_ptr));
   }
 
-  PLOT("path_rel_stretch_out", result_ptrs[i]->path_stretch_rel_data);
-  PLOT1D("aggregate_path_count_out", result_ptrs[i]->aggregate_path_count);
-  PLOT1D("path_rel_stretch_max_out", result_ptrs[i]->path_stretch_max_rel_data);
-  PLOT1D("link_utilization_out", result_ptrs[i]->link_utilization_data);
-  PLOT1D("ratios_out", result_ptrs[i]->ratios_data);
+  PLOT(nc::StrCat(FLAGS_output_prefix, "path_rel_stretch_out"),
+       result_ptrs[i]->path_stretch_rel_data);
+  PLOT1D(nc::StrCat(FLAGS_output_prefix, "aggregate_path_count_out"),
+         result_ptrs[i]->aggregate_path_count);
+  PLOT1D(nc::StrCat(FLAGS_output_prefix, "path_rel_stretch_max_out"),
+         result_ptrs[i]->path_stretch_max_rel_data);
+  PLOT1D(nc::StrCat(FLAGS_output_prefix, "link_utilization_out"),
+         result_ptrs[i]->link_utilization_data);
+  PLOT1D(nc::StrCat(FLAGS_output_prefix, "ratios_out"),
+         result_ptrs[i]->ratios_data);
 
   PlotTotalDelay(data, optimizers);
   PlotCTRRuntime(data);
