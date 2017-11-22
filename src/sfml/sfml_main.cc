@@ -201,19 +201,23 @@ class VAxis : public sf::Drawable, public sf::Transformable {
         const AxisStyle& style)
       : arrow_(sf::Vector2f(0, -length), length, style.arrow_style),
         label_(label, style.label_font, style.label_font_size) {
+    float max_tick_label_width = 0;
     for (const auto& location_and_label : ticks) {
-      DrawTick(location_and_label.first, location_and_label.second, style);
+      float tick_label_width =
+          DrawTick(location_and_label.first, location_and_label.second, style);
+      max_tick_label_width = std::max(max_tick_label_width, tick_label_width);
     }
 
     float w_offset = label_.getLocalBounds().width / 2;
     float h_offset = label_.getLocalBounds().height / 2;
-    float offset_total = style.label_offset + w_offset;
-    label_.setPosition(-offset_total - w_offset - 10, -length / 2 + h_offset);
+    label_.rotate(90);
+    label_.setPosition(-style.label_offset - h_offset - max_tick_label_width,
+                       -length / 2 - w_offset);
     label_.setColor(style.tick_lines_style.color);
   }
 
-  void DrawTick(float location, const std::string& label,
-                const AxisStyle& style) {
+  float DrawTick(float location, const std::string& label,
+                 const AxisStyle& style) {
     float tick_length = style.tick_length;
     sf::ConvexShape tick_line =
         Line(sf::Vector2f(tick_length, 0), style.tick_lines_style);
@@ -226,6 +230,7 @@ class VAxis : public sf::Drawable, public sf::Transformable {
     tick_text.setPosition(-tick_length - w_offset - 10, -location - h_offset);
     tick_text.setColor(style.tick_lines_style.color);
     tick_labels_.emplace_back(tick_text);
+    return tick_text.getLocalBounds().width;
   }
 
  private:
@@ -254,6 +259,22 @@ class VAxis : public sf::Drawable, public sf::Transformable {
   std::vector<sf::Text> tick_labels_;
 };
 
+// Given a range and number of ticks will produce ticks along the range.
+static std::vector<std::pair<float, std::string>> GetTicks(double from,
+                                                           double to,
+                                                           double step) {
+  for (double value = from; value <= to; value += step) {
+
+  }
+}
+
+class Plot2D {
+ public:
+  Plot2D(float width, float height, )
+
+      private:
+};
+
 // File to use for all fonts.
 static constexpr char kDefaultFontSize[] = "DejaVuSans.ttf";
 
@@ -266,8 +287,8 @@ int main() {
   AxisStyle axis_style(axis_arrow_style, kDefaultFontSize, tick_line_style, 10,
                        10, kDefaultFontSize, 15, 15);
 
-  HAxis haxis(100.0f, "some label", {{10.0f, "10"}, {50.0f, "2"}}, axis_style);
-  VAxis vaxis(100.0f, "some labez", {{10.0f, "1"}, {50.0f, "200"}}, axis_style);
+  HAxis haxis(200.0f, "some label", {{10.0f, "10"}, {50.0f, "2"}}, axis_style);
+  VAxis vaxis(200.0f, "some labez", {{10.0f, "1"}, {50.0f, "200"}}, axis_style);
   haxis.move(200, 200);
   vaxis.move(200, 200);
 
