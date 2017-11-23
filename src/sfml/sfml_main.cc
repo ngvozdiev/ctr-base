@@ -1,3 +1,4 @@
+#include <gflags/gflags.h>
 #include <stddef.h>
 #include <SFML/Graphics.hpp>
 #include <algorithm>
@@ -23,6 +24,9 @@
 #include "../controller.h"
 #include "../net_mock.h"
 #include "manual_network.h"
+
+DEFINE_string(pcap_trace_store, "trace_store.pb",
+              "A file with information about .pcap traces");
 
 template <typename T>
 T DotProduct(const sf::Vector2<T>& lhs, const sf::Vector2<T>& rhs) {
@@ -473,6 +477,8 @@ class TimePlot : public sf::Drawable, public sf::Transformable {
     plot_ = GenerateTrianglesStrip(points, line_style);
   }
 
+  const PlotParams& params() const { return params_; }
+
  private:
   // adapted from
   // https://github.com/SFML/SFML/wiki/Source%3A-line-with-thickness
@@ -562,17 +568,23 @@ class TimePlot : public sf::Drawable, public sf::Transformable {
 // File to use for all fonts.
 static constexpr char kDefaultFontFile[] = "DejaVuSans.ttf";
 
-static void BootstrapNetwork(
-    std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>>&& sequences,
-    ctr::manual::NetworkContainer* network_container,
-    ctr::MockSimDeviceFactory* device_factory) {
+static void BootstrapNetwork(const ctr::PcapTraceStore& trace_store,
+                             const std::vector<ctr::AggregateId>& aggregates,
+                             ctr::manual::NetworkContainer* network_container,
+                             ctr::MockSimDeviceFactory* device_factory) {
   const nc::net::GraphStorage* graph = network_container->graph();
 
-  for (auto& id_and_bin_sequence : sequences) {
-    const ctr::AggregateId& id = id_and_bin_sequence.first;
-    std::unique_ptr<ctr::BinSequence>& bin_sequence =
-        id_and_bin_sequence.second;
+  // Bin sequences will be allocated at random.
+  std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>> sequences;
+  std::vector<const ctr::PcapDataTrace*> all_traces = trace_store.AllTraces();
+  CHECK(all_traces.size() >= aggregates.size());
+  for (size_t i = 0; i < aggregates.size(); ++i) {
+    const ctr::AggregateId& id = aggregates[i];
+    const ctr::PcapDataTrace* trace = all_traces[i];
+    std::vector<ctr::BinSequence::TraceAndSlice> slices =
+        trace->TracesAndSlices(trace->AllSlices());
 
+    auto bin_sequence = nc::make_unique<ctr::BinSequence>(slices);
     nc::htsim::MatchRuleKey key_for_aggregate =
         network_container->AddAggregate(id);
 
@@ -585,6 +597,42 @@ static void BootstrapNetwork(
   network_container->AddElementsFromGraph(device_factory, nullptr, nullptr);
   device_factory->Init();
 }
+
+class QueueMonitor : public nc::EventConsumer {
+ public:
+  QueueMonitor(const nc::htsim::Queue* queue, TimePlot* plot,
+               nc::EventQueue* event_queue)
+      : nc::EventConsumer("QueueMonitor", event_queue),
+        period_(plot->params().time_step()),
+        prev_bytes_seen_(0),
+        queue_(queue),
+        plot_(plot) {
+    EnqueueIn(event_queue->ToTime(period_));
+  }
+
+  void HandleEvent() override {
+    Record();
+    EnqueueIn(event_queue()->ToTime(period_));
+  }
+
+ private:
+  void Record() {
+    const nc::htsim::QueueStats& stats = queue_->GetStats();
+    uint64_t delta_bytes = stats.bytes_seen - prev_bytes_seen_;
+
+    // This is bytes per period. Need to convert to Mbps.
+    double periods_per_sec = 1000.0 / period_.count();
+    double bits_per_sec = delta_bytes * 8 * periods_per_sec;
+    double delta_Mbps = bits_per_sec / 1000000.0;
+    plot_->AddData(delta_Mbps);
+    prev_bytes_seen_ = stats.bytes_seen;
+  }
+
+  std::chrono::milliseconds period_;
+  uint64_t prev_bytes_seen_;
+  const nc::htsim::Queue* queue_;
+  TimePlot* plot_;
+};
 
 int main() {
   sf::ContextSettings settings;
@@ -601,18 +649,16 @@ int main() {
 
   PlotParams plot_params;
   plot_params.set_time_span(std::chrono::milliseconds(10000));
-  plot_params.set_time_step(std::chrono::milliseconds(100));
+  plot_params.set_time_step(std::chrono::milliseconds(20));
   plot_params.set_range_y({0, 5000});
-  plot_params.set_y_label("some y label");
+  plot_params.set_y_label("Mbps");
 
   TimePlot plot(300, 150, plot_params, plot_style);
   plot.move(200, 200);
 
-  std::mt19937 rnd(1);
-  std::uniform_real_distribution<> y_dist(0, 5000);
-
+  ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
   nc::net::GraphBuilder graph_builder =
-      nc::net::GenerateFullGraph(2, nc::net::Bandwidth::FromGBitsPerSecond(1),
+      nc::net::GenerateFullGraph(2, nc::net::Bandwidth::FromGBitsPerSecond(10),
                                  std::chrono::milliseconds(100));
   nc::net::GraphStorage graph(graph_builder);
   nc::SimTimeEventQueue event_queue;
@@ -622,6 +668,18 @@ int main() {
   ctr::MockSimDeviceFactory device_factory(
       ctr::manual::NetworkContainer::kDefaultEnterPort, &event_queue);
 
+  // Will only have one aggregate.
+  ctr::AggregateId aggregate_id(graph.NodeFromStringOrDie("N0"),
+                                graph.NodeFromStringOrDie("N1"));
+  BootstrapNetwork(trace_store, {aggregate_id}, &network_container,
+                   &device_factory);
+
+  auto path = graph.WalkFromStringOrDie("[N0->N1]");
+  network_container.InstallPaths(aggregate_id, {{path.get(), 1.0}});
+
+  std::vector<const nc::htsim::Queue*> all_queues = network_container.queues();
+  QueueMonitor monitor(all_queues[0], &plot, &event_queue);
+
   sf::Clock clock;
   while (window.isOpen()) {
     sf::Event event;
@@ -629,9 +687,9 @@ int main() {
       if (event.type == sf::Event::Closed) window.close();
     }
 
-    plot.AddData(y_dist(rnd));
     sf::Time time = clock.restart();
-    LOG(INFO) << "FPS" << 1 / time.asSeconds();
+    std::chrono::milliseconds delta_ms(time.asMilliseconds());
+    event_queue.RunAndStopIn(delta_ms);
 
     window.clear();
     window.draw(plot);

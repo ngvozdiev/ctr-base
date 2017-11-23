@@ -198,7 +198,7 @@ void NetworkContainer::SendPathMessages(const AggregateId& id,
   // of the first update will be the destination port of the first link.
   nc::net::GraphLinkIndex first_link_index = links.front();
   DevicePortNumber input_port = graph_->GetLink(first_link_index)->dst_port();
-  PacketTag tag = nc::FindOrDieNoPrint(path_to_tag_, path);
+  PacketTag tag = TagForPath(path);
   for (size_t i = 1; i < links.size(); ++i) {
     nc::net::GraphLinkIndex link_index = links[i];
     const nc::net::GraphLink* link = graph_->GetLink(link_index);

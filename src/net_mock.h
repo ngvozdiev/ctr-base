@@ -143,7 +143,7 @@ class MockSimDeviceFactory : public controller::DeviceFactory {
 
     auto new_device = nc::make_unique<MockSimDevice>(id, std::move(bins_for_id),
                                                      address, event_queue);
-    new_device->set_die_on_fail_to_match(true);
+    //    new_device->set_die_on_fail_to_match(true);
     mock_network_.AddMockDevice(new_device.get());
     return std::move(new_device);
   }
