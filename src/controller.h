@@ -198,15 +198,9 @@ class Controller : public ::nc::htsim::PacketHandler {
   // The routing system actually does the prediction and optimization.
   RoutingSystem* routing_system_;
 
-  struct WalkPtrComparator {
-    bool operator()(const nc::net::Walk* lhs, const nc::net::Walk* rhs) const {
-      return *lhs < *rhs;
-    }
-  };
-
   // Per-path tags.
-  std::map<const nc::net::Walk*, nc::htsim::PacketTag, WalkPtrComparator>
-      path_to_tag_;
+  std::map<const nc::net::Walk*, nc::htsim::PacketTag,
+           nc::net::WalkPtrComparator> path_to_tag_;
   std::map<nc::htsim::PacketTag, const nc::net::Walk*> tag_to_path_;
 
   const nc::net::GraphStorage* graph_;

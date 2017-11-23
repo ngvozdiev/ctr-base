@@ -546,6 +546,27 @@ class TimePlot : public sf::Drawable, public sf::Transformable {
   sf::VertexArray plot_;
 };
 
+std::unique_ptr<ctr::manual::NetworkContainer> BootstrapNetwork(
+    std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>>&& sequences,
+    const nc::net::GraphStorage& graph, nc::EventQueue* event_queue) {
+  auto network_container =
+      nc::make_unique<ctr::manual::NetworkContainer>(&graph, event_queue);
+  ctr::MockSimDeviceFactory device_factory(enter_port, event_queue);
+  for (auto& id_and_bin_sequence : sequences) {
+    const ctr::AggregateId& id = id_and_bin_sequence.first;
+    std::unique_ptr<ctr::BinSequence>& bin_sequence =
+        id_and_bin_sequence.second;
+
+    nc::htsim::MatchRuleKey key_for_aggregate =
+        network_container->AddAggregate(id);
+
+    // Will add the bin sequence to the source device.
+    const std::string& src_device_id = graph.GetNode(id.src())->id();
+    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
+                                  std::move(bin_sequence));
+  }
+}
+
 // File to use for all fonts.
 static constexpr char kDefaultFontFile[] = "DejaVuSans.ttf";
 
