@@ -1,15 +1,28 @@
+#include <stddef.h>
 #include <SFML/Graphics.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <deque>
+#include <map>
+#include <memory>
+#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
-#include <queue>
 
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/event_queue.h"
+#include "ncode_common/src/htsim/match.h"
 #include "ncode_common/src/logging.h"
+#include "ncode_common/src/net/net_common.h"
+#include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/strutil.h"
+#include "../common.h"
+#include "../controller.h"
+#include "../net_mock.h"
+#include "manual_network.h"
 
 template <typename T>
 T DotProduct(const sf::Vector2<T>& lhs, const sf::Vector2<T>& rhs) {
@@ -546,12 +559,15 @@ class TimePlot : public sf::Drawable, public sf::Transformable {
   sf::VertexArray plot_;
 };
 
-std::unique_ptr<ctr::manual::NetworkContainer> BootstrapNetwork(
+// File to use for all fonts.
+static constexpr char kDefaultFontFile[] = "DejaVuSans.ttf";
+
+static void BootstrapNetwork(
     std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>>&& sequences,
-    const nc::net::GraphStorage& graph, nc::EventQueue* event_queue) {
-  auto network_container =
-      nc::make_unique<ctr::manual::NetworkContainer>(&graph, event_queue);
-  ctr::MockSimDeviceFactory device_factory(enter_port, event_queue);
+    ctr::manual::NetworkContainer* network_container,
+    ctr::MockSimDeviceFactory* device_factory) {
+  const nc::net::GraphStorage* graph = network_container->graph();
+
   for (auto& id_and_bin_sequence : sequences) {
     const ctr::AggregateId& id = id_and_bin_sequence.first;
     std::unique_ptr<ctr::BinSequence>& bin_sequence =
@@ -561,14 +577,14 @@ std::unique_ptr<ctr::manual::NetworkContainer> BootstrapNetwork(
         network_container->AddAggregate(id);
 
     // Will add the bin sequence to the source device.
-    const std::string& src_device_id = graph.GetNode(id.src())->id();
-    device_factory.AddBinSequence(src_device_id, key_for_aggregate,
-                                  std::move(bin_sequence));
+    const std::string& src_device_id = graph->GetNode(id.src())->id();
+    device_factory->AddBinSequence(src_device_id, key_for_aggregate,
+                                   std::move(bin_sequence));
   }
-}
 
-// File to use for all fonts.
-static constexpr char kDefaultFontFile[] = "DejaVuSans.ttf";
+  network_container->AddElementsFromGraph(device_factory, nullptr, nullptr);
+  device_factory->Init();
+}
 
 int main() {
   sf::ContextSettings settings;
@@ -577,8 +593,6 @@ int main() {
   sf::RenderWindow window(sf::VideoMode(800, 600), "SFML works!",
                           sf::Style::Default, settings);
   window.setFramerateLimit(60);
-
-  ctr::controller::NetworkContainer container;
 
   sf::Font font;
   CHECK(font.loadFromFile(kDefaultFontFile));
@@ -596,6 +610,17 @@ int main() {
 
   std::mt19937 rnd(1);
   std::uniform_real_distribution<> y_dist(0, 5000);
+
+  nc::net::GraphBuilder graph_builder =
+      nc::net::GenerateFullGraph(2, nc::net::Bandwidth::FromGBitsPerSecond(1),
+                                 std::chrono::milliseconds(100));
+  nc::net::GraphStorage graph(graph_builder);
+  nc::SimTimeEventQueue event_queue;
+
+  ctr::manual::NetworkContainer network_container(
+      std::chrono::milliseconds(100), &graph, &event_queue);
+  ctr::MockSimDeviceFactory device_factory(
+      ctr::manual::NetworkContainer::kDefaultEnterPort, &event_queue);
 
   sf::Clock clock;
   while (window.isOpen()) {

@@ -2,9 +2,10 @@
 #define MANUAL_NET_H
 
 #include <chrono>
-#include <iostream>
 #include <map>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "ncode_common/src/htsim/match.h"
@@ -13,6 +14,11 @@
 #include "ncode_common/src/htsim/queue.h"
 #include "ncode_common/src/net/net_common.h"
 #include "../common.h"
+
+namespace ctr {
+class BinSequence;
+class MockSimDeviceFactory;
+} /* namespace ctr */
 
 namespace ctr {
 namespace controller {
@@ -46,6 +52,9 @@ class AggregateState {
 // controller. Aggregates and packet generators can be added to the network.
 class NetworkContainer {
  public:
+  static constexpr nc::net::DevicePortNumber kDefaultEnterPort =
+      nc::net::DevicePortNumber(1000);
+
   NetworkContainer(std::chrono::milliseconds max_queue_depth,
                    const nc::net::GraphStorage* graph,
                    nc::EventQueue* event_queue);

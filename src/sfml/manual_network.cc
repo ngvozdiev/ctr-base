@@ -1,18 +1,22 @@
 #include "manual_network.h"
 
+#include <stddef.h>
+#include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <tuple>
-#include <type_traits>
 
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/event_queue.h"
 #include "ncode_common/src/free_list.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/map_util.h"
-#include "../controller.h"
+#include "../net_mock.h"
 
 namespace ctr {
 namespace manual {
 
-static constexpr nc::net::DevicePortNumber kDefaultEnterPort(1000);
+constexpr nc::net::DevicePortNumber NetworkContainer::kDefaultEnterPort;
 static constexpr nc::net::DevicePortNumber kDefaultDeviceBaseAddress(2000);
 
 NetworkContainer::NetworkContainer(std::chrono::milliseconds max_queue_depth,

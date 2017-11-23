@@ -996,8 +996,9 @@ std::vector<BinSequence::TraceAndSlice> PcapDataTrace::TracesAndSlices(
 
 std::string PcapDataTrace::Summary() const {
   std::string out;
-  nc::SubstituteAndAppend(&out, "Trace of $0 files, first is at $1\n",
-                          trace_pb_.pcap_files_size(), trace_pb_.pcap_files(0));
+  nc::SubstituteAndAppend(
+      &out, "Trace at offset $0 of $1 files, first is at $2\n", offset_in_file_,
+      trace_pb_.pcap_files_size(), trace_pb_.pcap_files(0));
   nc::SubstituteAndAppend(&out,
                           "Bin size $0 microseconds, $1 bins, $2 slices\n",
                           trace_pb_.bin_size_micros(), trace_pb_.bin_count(),
