@@ -598,6 +598,62 @@ static void BootstrapNetwork(const ctr::PcapTraceStore& trace_store,
   device_factory->Init();
 }
 
+class VisualLink : public sf::Drawable, public sf::Transformable {
+ public:
+  VisualLink(float width, float height, const nc::net::GraphLinkBase& link)
+      : link_(link) {}
+
+ private:
+  sf::VertexArray GenerateTrianglesStrip() {
+    using namespace sf;
+
+    double time_span = params_.time_span().count();
+    double time_step = params_.time_step().count();
+    float step_size = width_ * time_step / time_span;
+
+    VertexArray array(PrimitiveType::TrianglesStrip);
+    if (values_.size() < 2) {
+      return array;
+    }
+
+    // The first add the initial vertex.
+    array.append(Vertex(Vector2f(0, 0)));
+
+    float offset = 0;
+    for (size_t i = 0; i < values_.size(); ++i) {
+      float value = values_[i];
+      array.append(Vertex(Vector2f(offset, value)));
+
+      if (i != values_.size() - 1) {
+        offset += step_size;
+      }
+      array.append(Vertex(Vector2f(offset, 0)));
+    }
+
+    return array;
+  }
+
+  void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+    states.transform *= getTransform();
+
+    target.draw(x_axis_, states);
+    target.draw(y_axis_, states);
+    target.draw(plot_, states);
+  }
+
+  // The link.
+  const nc::net::GraphLinkBase link_;
+
+  // The current values.
+  std::deque<float> values_;
+
+  // Max number of values.
+  size_t max_values_count_;
+
+  // The actual plot.
+  sf::VertexArray plot_;
+};
+
 class QueueMonitor : public nc::EventConsumer {
  public:
   QueueMonitor(const nc::htsim::Queue* queue, TimePlot* plot,
