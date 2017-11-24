@@ -76,16 +76,20 @@ class NetworkContainer {
 
   const nc::net::GraphStorage* graph() { return graph_; }
 
+  nc::htsim::PacketTag TagForPathOrDie(const nc::net::Walk& path) const {
+    return nc::FindOrDieNoPrint(path_to_tag_, &path);
+  }
+
   std::vector<const nc::htsim::Queue*> queues() const;
 
   // Installs one or more paths for a given aggregate.
   void InstallPaths(const ctr::AggregateId& id,
                     const std::vector<RouteAndFraction>& routes_and_fractions);
 
-  std::pair<const nc::net::GraphLinkBase*, const nc::htsim::Queue*> GetLink(
+  std::pair<const nc::net::GraphLinkBase*, nc::htsim::Queue*> GetLink(
       const std::string& from, const std::string& to) const {
     const nc::net::GraphLinkBase* link = graph_->LinkPtrOrDie(from, to);
-    const nc::htsim::Queue* queue =
+    nc::htsim::Queue* queue =
         nc::FindOrDieNoPrint(queues_, std::make_pair(from, to)).get();
     return {link, queue};
   }
@@ -96,7 +100,7 @@ class NetworkContainer {
 
   void SendPathMessages(const AggregateId& id, const ::nc::net::Walk* path);
 
-  nc::htsim::PacketTag TagForPath(const nc::net::Walk* path);
+  nc::htsim::PacketTag TagForPath(const nc::net::Walk& path);
 
   nc::EventQueue* event_queue_;
   const nc::net::GraphStorage* graph_;
@@ -126,8 +130,7 @@ class NetworkContainer {
   std::map<AggregateId, std::vector<const nc::net::Walk*>>
       id_to_paths_installed_;
 
-  std::map<const nc::net::Walk*, nc::htsim::PacketTag,
-           nc::net::WalkPtrComparator> path_to_tag_;
+  std::map<const nc::net::Walk*, nc::htsim::PacketTag> path_to_tag_;
 };
 
 }  // namespace manual

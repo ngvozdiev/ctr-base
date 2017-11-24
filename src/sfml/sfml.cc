@@ -1,18 +1,12 @@
 #include "sfml.h"
 
-#include <chrono>
-#include <map>
-#include <memory>
-#include <string>
-#include <utility>
-#include <vector>
+#include <algorithm>
+#include <cmath>
+#include <tuple>
 
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/network.h"
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/htsim/queue.h"
-#include "ncode_common/src/net/net_common.h"
-#include "../common.h"
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/logging.h"
+#include "ncode_common/src/strutil.h"
 
 namespace ctr {
 namespace sfml {
@@ -50,7 +44,6 @@ T LinearDistance(sf::Vector2<T> from, sf::Vector2<T> to) {
 
 static constexpr float PI = 3.141592653;
 static constexpr float RadToDeg(float rad) { return 180 / PI * rad; }
-static constexpr float DegToRad(float deg) { return PI / 180 * deg; }
 
 sf::ConvexShape Line(const sf::Vector2f& point, const LineStyle& style) {
   sf::Vector2f perpendicular =
@@ -353,7 +346,7 @@ void DashedLine::draw(sf::RenderTarget& target, sf::RenderStates states) const {
 }
 
 VisualLink::VisualLink(sf::Vector2f from, sf::Vector2f to, float height,
-                       std::chrono::milliseconds time_step,
+                       bool flip_v, std::chrono::milliseconds time_step,
                        const nc::net::GraphLinkBase& link,
                        const VisualLinkStyle& style)
     : width_(LinearDistance(from, to)),
@@ -362,58 +355,103 @@ VisualLink::VisualLink(sf::Vector2f from, sf::Vector2f to, float height,
       style_(style),
       time_step_(time_step),
       base_line_(Line(sf::Vector2f(width_, 0), style.base_line_style)),
-      upper_line_(width_, style.top_line_style) {
+      upper_line_(width_, style.top_line_style),
+      flip_v_(flip_v) {
   using namespace std::chrono;
 
-  upper_line_.setPosition(0, -height_);
+  // Will create as many deques as there are tags.
+  for (const auto& tag_and_color : style.plot_colors) {
+    values_[tag_and_color.first];
+  }
+
+  if (flip_v) {
+    upper_line_.setPosition(0, height_);
+    rect_.setSize(sf::Vector2f(width_, height_));
+  } else {
+    upper_line_.setPosition(0, -height_);
+    rect_.setSize(sf::Vector2f(width_, -height_));
+  }
+
   max_values_count_ =
       duration_cast<milliseconds>(link.delay()).count() / time_step.count();
-  rect_.setSize(sf::Vector2f(width_, -height_));
   rect_.setFillColor(style_.background_color);
 
   basic_transform_.rotate(RadToDeg(atan2(to.y - from.y, to.x - from.x)), from);
   basic_transform_.translate(from);
 }
 
-void VisualLink::AddValue(double value) {
-  CHECK(value >= 0);
+void VisualLink::AddValues(
+    const std::map<nc::htsim::PacketTag, double>& new_values) {
   double max_y = link_.bandwidth().Mbps();
-  value = std::min(value, max_y);
 
-  values_.push_front(TransformY(value));
-  if (values_.size() > max_values_count_) {
-    values_.pop_back();
+  double value_cumulative = 0;
+  for (auto& tag_and_deque : values_) {
+    std::deque<float>& values = tag_and_deque.second;
+    nc::htsim::PacketTag tag = tag_and_deque.first;
+
+    double new_value = 0;
+    if (nc::ContainsKey(new_values, tag)) {
+      new_value = nc::FindOrDie(new_values, tag);
+    }
+    CHECK(new_value >= 0);
+
+    value_cumulative += new_value;
+    value_cumulative = std::min(value_cumulative, max_y);
+
+    values.push_front(TransformY(value_cumulative));
+    if (values.size() > max_values_count_) {
+      values.pop_back();
+    }
   }
 
-  plot_ = GenerateTrianglesStrip();
+  plot_.clear();
+  const std::deque<float>* bottom = nullptr;
+  for (const auto& tag_and_deque : values_) {
+    const std::deque<float>& values = tag_and_deque.second;
+    sf::Color color =
+        nc::FindOrDieNoPrint(style_.plot_colors, tag_and_deque.first);
+    sf::VertexArray strip = GenerateTrianglesStrip(color, values, bottom);
+    plot_.emplace_back(strip);
+    bottom = &values;
+  }
 }
 
-sf::VertexArray VisualLink::GenerateTrianglesStrip() {
+sf::VertexArray VisualLink::GenerateTrianglesStrip(
+    const sf::Color& color, const std::deque<float>& values,
+    const std::deque<float>* bottom) {
   using namespace sf;
+  if (bottom != nullptr) {
+    CHECK(values.size() == bottom->size());
+  }
+
   std::chrono::milliseconds time_span =
       std::chrono::duration_cast<std::chrono::milliseconds>(link_.delay());
   time_span = std::max(time_span, std::chrono::milliseconds(1));
 
   float step_size = width_ * time_step_.count() / time_span.count();
-
   VertexArray array(PrimitiveType::TrianglesStrip);
-  if (values_.size() < 2) {
+  if (values.size() < 2) {
     return array;
   }
 
   // The first add the initial vertex.
-  sf::Color color = style_.plot_color;
-  array.append(Vertex(Vector2f(0, 0), color));
+  float first_bottom = bottom == nullptr ? 0 : (*bottom)[0];
+  array.append(Vertex(Vector2f(0, first_bottom), color));
 
   float offset = 0;
-  for (size_t i = 0; i < values_.size(); ++i) {
-    float value = values_[i];
+  for (size_t i = 0; i < values.size(); ++i) {
+    float value = values[i];
     array.append(Vertex(Vector2f(offset, value), color));
 
-    if (i != values_.size() - 1) {
+    float point_y;
+    if (i != values.size() - 1) {
       offset += step_size;
+      point_y = bottom == nullptr ? 0 : (*bottom)[i + 1];
+    } else {
+      point_y = bottom == nullptr ? 0 : (*bottom)[i];
     }
-    array.append(Vertex(Vector2f(offset, 0), color));
+
+    array.append(Vertex(Vector2f(offset, point_y), color));
   }
 
   return array;
@@ -423,6 +461,10 @@ float VisualLink::TransformY(double y) {
   double min_y = 0;
   double max_y = link_.bandwidth().Mbps();
   double fraction = (y - min_y) / (max_y - min_y);
+
+  if (flip_v_) {
+    return height_ * fraction;
+  }
   return -height_ * fraction;
 }
 
@@ -430,18 +472,20 @@ void VisualLink::draw(sf::RenderTarget& target, sf::RenderStates states) const {
   states.transform *= getTransform();
   states.transform *= basic_transform_;
   target.draw(rect_, states);
-  target.draw(plot_, states);
+  for (const auto& strip : plot_) {
+    target.draw(strip, states);
+  }
   target.draw(upper_line_, states);
   target.draw(base_line_, states);
 }
 
-Node::Node(float radius, float x, float y, const NodeStyle& style)
+Node::Node(float radius, sf::Vector2f location, const NodeStyle& style)
     : circle_(radius) {
   circle_.setFillColor(style.fill);
   circle_.setOutlineColor(style.outline);
   circle_.setOutlineThickness(style.outline_thickness);
 
-  circle_.setPosition(x - radius, y - radius);
+  circle_.setPosition(location.x - radius, location.y - radius);
 }
 
 }  // namespace sfml

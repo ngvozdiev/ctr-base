@@ -1,19 +1,17 @@
 #ifndef CTR_SFML_H
 #define CTR_SFML_H
 
+#include <stddef.h>
+#include <SFML/Graphics.hpp>
 #include <chrono>
+#include <deque>
 #include <map>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/network.h"
 #include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/htsim/queue.h"
 #include "ncode_common/src/net/net_common.h"
-#include "../common.h"
 
 namespace ctr {
 namespace sfml {
@@ -201,27 +199,28 @@ struct VisualLinkStyle {
   VisualLinkStyle() {
     background_color = sf::Color::White;
     background_color.a = 128;
-    plot_color = sf::Color::Green;
   }
 
   sf::Color background_color;
-  sf::Color plot_color;
+  std::map<nc::htsim::PacketTag, sf::Color> plot_colors;
   LineStyle base_line_style;
   DashedLineStyle top_line_style;
 };
 
 class VisualLink : public sf::Drawable, public sf::Transformable {
  public:
-  VisualLink(sf::Vector2f from, sf::Vector2f to, float height,
+  VisualLink(sf::Vector2f from, sf::Vector2f to, float height, bool flip_v,
              std::chrono::milliseconds time_step,
              const nc::net::GraphLinkBase& link, const VisualLinkStyle& style);
 
-  void AddValue(double value);
+  void AddValues(const std::map<nc::htsim::PacketTag, double>& new_values);
 
   std::chrono::milliseconds time_step() const { return time_step_; }
 
  private:
-  sf::VertexArray GenerateTrianglesStrip();
+  sf::VertexArray GenerateTrianglesStrip(const sf::Color& color,
+                                         const std::deque<float>& values,
+                                         const std::deque<float>* bottom);
 
   float TransformY(double y);
 
@@ -241,13 +240,13 @@ class VisualLink : public sf::Drawable, public sf::Transformable {
   std::chrono::milliseconds time_step_;
 
   // The current values.
-  std::deque<float> values_;
+  std::map<nc::htsim::PacketTag, std::deque<float>> values_;
 
   // Max number of values.
   size_t max_values_count_;
 
   // Plot of the link's traffic level.
-  sf::VertexArray plot_;
+  std::vector<sf::VertexArray> plot_;
 
   // Outline in the background.
   sf::RectangleShape rect_;
@@ -260,6 +259,9 @@ class VisualLink : public sf::Drawable, public sf::Transformable {
 
   // Basic transform that is always applied.
   sf::Transform basic_transform_;
+
+  // Flips the representation vertically.
+  bool flip_v_;
 };
 
 struct NodeStyle {
@@ -271,7 +273,7 @@ struct NodeStyle {
 // A node in the graph.
 class Node : public sf::Drawable, public sf::Transformable {
  public:
-  Node(float radius, float x, float y, const NodeStyle& style);
+  Node(float radius, sf::Vector2f location, const NodeStyle& style);
 
  private:
   void draw(sf::RenderTarget& target, sf::RenderStates states) const {

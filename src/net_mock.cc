@@ -117,10 +117,18 @@ void MockSimDevice::HandlePacket(nc::htsim::PacketPtr pkt) {
 
 std::chrono::microseconds MockSimNetwork::GetBinSize() {
   // Will assume that all bin sizes are the same.
-  CHECK(!devices_.empty() && !devices_[0]->states_.empty());
-  const MockSimDevice::AggregateState& aggregate_state =
-      devices_[0]->states_.begin()->second;
-  return aggregate_state.initial_bin_sequence->bin_size();
+  for (const MockSimDevice* device : devices_) {
+    if (device->states_.empty()) {
+      continue;
+    }
+
+    const MockSimDevice::AggregateState& aggregate_state =
+        device->states_.begin()->second;
+    return aggregate_state.initial_bin_sequence->bin_size();
+  }
+
+  LOG(FATAL) << "No devices with aggregate state";
+  return std::chrono::microseconds(0);
 }
 
 void MockSimNetwork::PrefetchBins(MockSimDevice::PathState* path_state) {

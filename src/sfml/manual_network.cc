@@ -130,14 +130,14 @@ void NetworkContainer::AddElementsFromGraph(
   }
 }
 
-nc::htsim::PacketTag NetworkContainer::TagForPath(const nc::net::Walk* path) {
-  nc::htsim::PacketTag* current_tag = nc::FindOrNull(path_to_tag_, path);
+nc::htsim::PacketTag NetworkContainer::TagForPath(const nc::net::Walk& path) {
+  nc::htsim::PacketTag* current_tag = nc::FindOrNull(path_to_tag_, &path);
   if (current_tag != nullptr) {
     return *current_tag;
   }
 
   nc::htsim::PacketTag new_tag = nc::htsim::PacketTag(path_to_tag_.size() + 1);
-  path_to_tag_.emplace(path, new_tag);
+  path_to_tag_.emplace(&path, new_tag);
   return new_tag;
 }
 
@@ -184,10 +184,8 @@ void NetworkContainer::SendPathMessages(const AggregateId& id,
 
   std::vector<const nc::net::Walk*>& paths_installed =
       id_to_paths_installed_[id];
-
   if (std::find(paths_installed.begin(), paths_installed.end(), path) !=
       paths_installed.end()) {
-    LOG(INFO) << "Path already installed " << path->ToStringNoPorts(*graph_);
     return;
   }
 
@@ -199,7 +197,7 @@ void NetworkContainer::SendPathMessages(const AggregateId& id,
   // of the first update will be the destination port of the first link.
   nc::net::GraphLinkIndex first_link_index = links.front();
   DevicePortNumber input_port = graph_->GetLink(first_link_index)->dst_port();
-  PacketTag tag = TagForPath(path);
+  PacketTag tag = TagForPath(*path);
   for (size_t i = 1; i < links.size(); ++i) {
     nc::net::GraphLinkIndex link_index = links[i];
     const nc::net::GraphLink* link = graph_->GetLink(link_index);
