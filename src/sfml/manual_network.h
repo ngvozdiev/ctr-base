@@ -82,6 +82,14 @@ class NetworkContainer {
   void InstallPaths(const ctr::AggregateId& id,
                     const std::vector<RouteAndFraction>& routes_and_fractions);
 
+  std::pair<const nc::net::GraphLinkBase*, const nc::htsim::Queue*> GetLink(
+      const std::string& from, const std::string& to) const {
+    const nc::net::GraphLinkBase* link = graph_->LinkPtrOrDie(from, to);
+    const nc::htsim::Queue* queue =
+        nc::FindOrDieNoPrint(queues_, std::make_pair(from, to)).get();
+    return {link, queue};
+  }
+
  private:
   nc::htsim::DeviceInterface* AddOrFindDevice(
       const std::string& id, ctr::controller::DeviceFactory* device_factory);
@@ -104,7 +112,8 @@ class NetworkContainer {
   std::vector<std::unique_ptr<nc::htsim::Pipe>> pipes_;
 
   // Stores queues in the network.
-  std::vector<std::unique_ptr<nc::htsim::Queue>> queues_;
+  std::map<std::pair<std::string, std::string>,
+           std::unique_ptr<nc::htsim::Queue>> queues_;
 
   // Boring traffic dies here.
   nc::htsim::DummyPacketHandler dummy_handler_;

@@ -29,8 +29,8 @@ NetworkContainer::NetworkContainer(std::chrono::milliseconds max_queue_depth,
 
 std::vector<const nc::htsim::Queue*> NetworkContainer::queues() const {
   std::vector<const nc::htsim::Queue*> queues_raw;
-  for (const auto& queue_ptr : queues_) {
-    queues_raw.emplace_back(queue_ptr.get());
+  for (const auto& src_dst_and_queue_ptr : queues_) {
+    queues_raw.emplace_back(src_dst_and_queue_ptr.second.get());
   }
 
   return queues_raw;
@@ -124,7 +124,8 @@ void NetworkContainer::AddElementsFromGraph(
     network_.AddLink(new_queue.get(), new_pipe.get(), link_ptr->src_id(),
                      link_ptr->dst_id(), link_ptr->src_port(),
                      link_ptr->dst_port(), true);
-    queues_.emplace_back(std::move(new_queue));
+    queues_.emplace(std::make_pair(link_ptr->src_id(), link_ptr->dst_id()),
+                    std::move(new_queue));
     pipes_.emplace_back(std::move(new_pipe));
   }
 }
