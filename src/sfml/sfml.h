@@ -331,7 +331,7 @@ class CircleGauge : public sf::Drawable,
  private:
   static constexpr size_t kNumPoints = 100;
   static constexpr char kTexture[] = "gauge.png";
-  static constexpr float kGaugeBezel = 60;
+  static constexpr float kGaugeBezel = 44;
 
   void RegenerateWithOpacity(double opacity);
 

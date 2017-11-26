@@ -158,7 +158,7 @@ std::tuple<ctr::sfml::VisualLinkStyle, ctr::sfml::NodeStyle> GetStyle() {
   node_style.outline_thickness = 2;
 
   ctr::sfml::VisualLinkStyle link_style;
-  sf::Color link_background_color = sf::Color(230, 230, 250);
+  sf::Color link_background_color = sf::Color(240, 240, 250);
   link_style.background_color = link_background_color;
 
   ctr::sfml::LineStyle base_line_style;
@@ -190,24 +190,24 @@ static nc::net::GraphBuilder GetGraph() {
   nc::net::GraphBuilder builder;
   builder.AddLink({kBudapest, kVienna,
                    nc::net::Bandwidth::FromGBitsPerSecond(1.8),
-                   std::chrono::milliseconds(500)});
+                   std::chrono::milliseconds(2500)});
   builder.AddLink({kVienna, kBudapest,
                    nc::net::Bandwidth::FromGBitsPerSecond(1.8),
-                   std::chrono::milliseconds(500)});
+                   std::chrono::milliseconds(2500)});
 
   builder.AddLink({kFrankfurt, kBudapest,
                    nc::net::Bandwidth::FromGBitsPerSecond(3.6),
-                   std::chrono::seconds(1)});
+                   std::chrono::seconds(5)});
   builder.AddLink({kBudapest, kFrankfurt,
                    nc::net::Bandwidth::FromGBitsPerSecond(3.6),
-                   std::chrono::seconds(1)});
+                   std::chrono::seconds(5)});
 
   builder.AddLink({kFrankfurt, kVienna,
                    nc::net::Bandwidth::FromGBitsPerSecond(3.6),
-                   std::chrono::seconds(1)});
+                   std::chrono::seconds(5)});
   builder.AddLink({kVienna, kFrankfurt,
                    nc::net::Bandwidth::FromGBitsPerSecond(3.6),
-                   std::chrono::seconds(1)});
+                   std::chrono::seconds(5)});
 
   builder.AddLink({kInternet, kFrankfurt,
                    nc::net::Bandwidth::FromGBitsPerSecond(3.6),
@@ -249,9 +249,9 @@ static std::tuple<PathPtr, PathPtr, PathPtr> SetUpRouting(
   nc::htsim::PacketTag p2tag = container->TagForPathOrDie(*p2);
   nc::htsim::PacketTag p3tag = container->TagForPathOrDie(*p3);
 
-  link_style->plot_colors[p1tag] = sf::Color(85, 10, 47);
-  link_style->plot_colors[p2tag] = sf::Color(85, 107, 47);
-  link_style->plot_colors[p3tag] = sf::Color(205, 92, 92);
+  link_style->plot_colors[p1tag] = sf::Color(255, 151, 0);
+  link_style->plot_colors[p2tag] = sf::Color(255, 151, 0);
+  link_style->plot_colors[p3tag] = sf::Color(67, 68, 68);
 
   return std::make_tuple(std::move(p1), std::move(p2), std::move(p3));
 }
@@ -271,11 +271,8 @@ void RebalanceRoutes(double fraction_via_frankfurt,
 // A combination of time in seconds and a location.
 using TimeAndLocation = std::pair<double, sf::Vector2f>;
 
-// A combination of time in seconds and a zoom value.
-using TimeAndZoom = std::pair<double, float>;
-
-// A combination of time in seconds and an opacity value.
-using TimeAndOpacity = std::pair<double, float>;
+// A combination of time in seconds and a single double.
+using TimeAndDouble = std::pair<double, float>;
 
 static void AnimateViewPosition(
     const std::vector<TimeAndLocation>& frames, sf::View* view,
@@ -308,37 +305,19 @@ static void AnimateViewPosition(
   animation_container->AddAnimator(std::move(view_y_animator));
 }
 
-static void AnimateViewZoom(
-    const std::vector<TimeAndZoom>& frames, sf::View* view,
+static void AnimateFunction(
+    const std::vector<TimeAndDouble>& frames,
+    std::function<void(double)> callback,
     nc::htsim::AnimationContainer* animation_container) {
   std::vector<nc::htsim::KeyFrame> key_frames;
 
-  // Will always start at the current view.
-  key_frames.emplace_back(std::chrono::milliseconds(0), 1.0);
-  for (const auto& frame : frames) {
-    std::chrono::milliseconds at(static_cast<size_t>(frame.first * 1000));
-    key_frames.emplace_back(at, frame.second);
-  }
-
-  auto view_animator = nc::make_unique<nc::htsim::LinearAnimator>(
-      key_frames, false, [view](double value) { view->zoom(value); });
-  animation_container->AddAnimator(std::move(view_animator));
-}
-
-static void AnimateOpacity(const std::vector<TimeAndOpacity>& frames,
-                           ctr::sfml::OpacityVariable* to_change,
-                           nc::htsim::AnimationContainer* animation_container) {
-  std::vector<nc::htsim::KeyFrame> key_frames;
-
-  // Will always start at opacity 1.0.
   for (const auto& frame : frames) {
     std::chrono::milliseconds at(static_cast<size_t>(frame.first * 1000));
     key_frames.emplace_back(at, frame.second);
   }
 
   auto animator = nc::make_unique<nc::htsim::LinearAnimator>(
-      key_frames, false,
-      [to_change](double value) { to_change->SetOpacity(value); });
+      key_frames, false, [callback](double value) { callback(value); });
   animation_container->AddAnimator(std::move(animator));
 }
 
@@ -431,7 +410,7 @@ int main() {
   budapest_frankfurt_queue->set_tags_in_stats(true);
   ctr::sfml::VisualLink vlink_budapest_frankfurt(
       budapest_location, frankfurt_location, 80, true,
-      std::chrono::milliseconds(2), *budapest_frankfurt_link, link_style);
+      std::chrono::milliseconds(16), *budapest_frankfurt_link, link_style);
   QueueBytesSeenMonitor monitor_one(budapest_frankfurt_queue,
                                     &vlink_budapest_frankfurt, &event_queue);
 
@@ -442,7 +421,7 @@ int main() {
   budapest_vienna_queue->set_tags_in_stats(true);
   ctr::sfml::VisualLink vlink_budapest_vienna(
       budapest_location, vienna_location, 40, false,
-      std::chrono::milliseconds(2), *budapest_vienna_link, link_style);
+      std::chrono::milliseconds(16), *budapest_vienna_link, link_style);
   QueueBytesSeenMonitor monitor_two(budapest_vienna_queue,
                                     &vlink_budapest_vienna, &event_queue);
 
@@ -453,7 +432,7 @@ int main() {
   frankfurt_vienna_queue->set_tags_in_stats(true);
   ctr::sfml::VisualLink vlink_frankfurt_vienna(
       frankfurt_location, vienna_location, 80, true,
-      std::chrono::milliseconds(2), *frankfurt_vienna_link, link_style);
+      std::chrono::milliseconds(16), *frankfurt_vienna_link, link_style);
   QueueBytesSeenMonitor monitor_three(frankfurt_vienna_queue,
                                       &vlink_frankfurt_vienna, &event_queue);
 
@@ -464,7 +443,7 @@ int main() {
   // Each node will have a text label.
   sf::Text budapest_label =
       GetNodeLabel(kBudapest, font, budapest_location, 160, 182);
-  sf::Text vienna_label = GetNodeLabel(kVienna, font, vienna_location, 30, 85);
+  sf::Text vienna_label = GetNodeLabel(kVienna, font, vienna_location, 90, 235);
   sf::Text frankfurt_label =
       GetNodeLabel(kFrankfurt, font, frankfurt_location, 130, 210);
 
@@ -497,27 +476,49 @@ int main() {
   // Will have two gauges at the same position, they will swap.
   ctr::sfml::CircleGaugeStyle gauge_style;
   gauge_style.font = font;
-  ctr::sfml::CircleGauge frankfurt_gauge("Queue size at Frankfurt", "ms", 0,
-                                         100, gauge_style);
-  AnimateOpacity({{110.0, 0.0}, {120.0, 1.0}}, &frankfurt_gauge,
-                 &animation_container);
-  frankfurt_gauge.move(80, 600);
-  frankfurt_gauge.SetOpacity(0.0);
+  ctr::sfml::CircleGauge frankfurt_gauge("Queue size at\nFrankfurt->Vienna",
+                                         "ms", 0, 100, gauge_style);
+  frankfurt_gauge.move(130, 500);
+  frankfurt_gauge.SetOpacity(0);
+
   QueueLevelMonitor frankfurt_queue_level_monitor(
-      frankfurt_vienna_queue, std::chrono::milliseconds(10), &frankfurt_gauge,
+      frankfurt_vienna_queue, std::chrono::milliseconds(16), &frankfurt_gauge,
       &event_queue);
 
-  ctr::sfml::CircleGauge vienna_gauge("Queue size at Vienna", "ms", 0, 100,
-                                      gauge_style);
-  AnimateOpacity({{100.0, 1.0}, {110.0, 0.0}}, &vienna_gauge,
-                 &animation_container);
-  vienna_gauge.move(80, 550);
-  QueueLevelMonitor vienna_queue_level_monitor(budapest_vienna_queue,
-                                               std::chrono::milliseconds(10),
-                                               &vienna_gauge, &event_queue);
+  ctr::sfml::CircleGauge budapest_gauge("Queue size at\nBudapest->Vienna", "ms",
+                                        0, 100, gauge_style);
+  budapest_gauge.move(700, 650);
+  budapest_gauge.SetOpacity(0);
 
+  QueueLevelMonitor budapest_queue_level_monitor(budapest_vienna_queue,
+                                                 std::chrono::milliseconds(16),
+                                                 &budapest_gauge, &event_queue);
+
+  // Used to slow down the simulation speed.
   double rt_factor = 1.0;
-  double via_frankfurt = 0.5;
+
+  // Fraction that goes via frankfurt.
+  double via_frankfurt = 0.0;
+  UpdateFractionText(&up_annotation, &down_annotation, via_frankfurt);
+  RebalanceRoutes(via_frankfurt, p1.get(), p2.get(), &network_container);
+
+  // All animations happen here.
+  AnimateFunction({{40.0, 0.0}, {40.5, 1.0}}, [&frankfurt_gauge](double v) {
+    frankfurt_gauge.SetOpacity(v);
+  }, &animation_container);
+  AnimateFunction({{20.0, 0.0}, {20.5, 1.0}}, [&budapest_gauge](double v) {
+    budapest_gauge.SetOpacity(v);
+  }, &animation_container);
+  AnimateFunction(
+      {{40.0, 0.0}, {45.0, 1.0}, {60.0, 1.0}, {65.0, 0.3}},
+      [&via_frankfurt, &up_annotation, &down_annotation, &p1, &p2,
+       &network_container](double v) {
+        via_frankfurt = v;
+        UpdateFractionText(&up_annotation, &down_annotation, via_frankfurt);
+        RebalanceRoutes(via_frankfurt, p1.get(), p2.get(), &network_container);
+      },
+      &animation_container);
+
   double step = 0.1;
   sf::Clock clock;
   while (window.isOpen()) {
@@ -571,7 +572,7 @@ int main() {
     window.draw(vienna_node);
     window.draw(frankfurt_node);
     window.draw(frankfurt_gauge);
-    window.draw(vienna_gauge);
+    window.draw(budapest_gauge);
     window.draw(*up_arrow);
     window.draw(up_annotation);
     window.draw(*down_arrow);

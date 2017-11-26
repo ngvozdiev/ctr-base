@@ -519,7 +519,7 @@ CircleGauge::CircleGauge(const std::string& annotation,
   float max_label_w = max_label_.getLocalBounds().width;
   float max_label_h = max_label_.getLocalBounds().height;
   x_offset =
-      2 * (radius - kGaugeBezel) + kGaugeBezel / 2 + max_label_w / 2 + 20;
+      2 * (radius - kGaugeBezel) + kGaugeBezel / 2 + max_label_w / 2 + 10;
   max_label_.setPosition(x_offset, max_label_h);
   max_label_.setFillColor(sf::Color::Black);
 
@@ -527,9 +527,8 @@ CircleGauge::CircleGauge(const std::string& annotation,
       sf::Text(annotation, style.font, style.annotation_font_size);
   float a_label_w = annotation_label_.getLocalBounds().width;
   float a_label_h = annotation_label_.getLocalBounds().height;
-  annotation_label_.setPosition(
-      radius - a_label_w / 2,
-      1.3 * a_label_h + std::max(max_label_h, min_label_h));
+  annotation_label_.setPosition(radius - a_label_w / 2,
+                                std::max(max_label_h, min_label_h) + 20);
   annotation_label_.setFillColor(sf::Color::Black);
 }
 

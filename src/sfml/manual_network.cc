@@ -152,14 +152,12 @@ void NetworkContainer::InstallPaths(
       nc::FindOrDieNoPrint(id_to_aggregate_state_, id).key();
   auto match_rule = nc::make_unique<nc::htsim::MatchRule>(key);
   CHECK(!routes_and_fractions.empty());
-  LOG(INFO) << "Will rebalance";
   for (const RouteAndFraction& route_and_fraction : routes_and_fractions) {
     double fraction = route_and_fraction.second;
     const nc::net::Walk* path = route_and_fraction.first;
 
     size_t weight = 1000 * fraction;
     nc::htsim::PacketTag tag = nc::FindOrDieNoPrint(path_to_tag_, path);
-    LOG(INFO) << "P " << path->ToStringNoPorts(*graph_) << " " << weight;
 
     const nc::net::GraphLink* first_link =
         graph_->GetLink(path->links().front());

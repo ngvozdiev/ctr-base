@@ -157,6 +157,7 @@ void MockSimNetwork::AdvanceTimeToNextBin() {
       for (auto& tag_and_path_state : aggregate_state.paths) {
         MockSimDevice::PathState& path_state = tag_and_path_state.second;
         if (!path_state.bin_sequence) {
+          ++i;
           continue;
         }
 
