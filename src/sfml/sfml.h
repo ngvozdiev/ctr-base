@@ -286,36 +286,74 @@ class Node : public sf::Drawable, public sf::Transformable {
 
 struct CircleGaugeStyle {
   sf::Font font;
-  size_t label_font_size = 20;
-  size_t limits_font_size = 12;
+  size_t label_font_size = 30;
+  size_t limits_font_size = 20;
+  size_t annotation_font_size = 25;
 };
 
-class CircleGauge : public sf::Drawable, public sf::Transformable {
+// Interface for things that can change opacity.
+class OpacityVariable {
  public:
-  CircleGauge(size_t min, size_t max, const CircleGaugeStyle& style);
+  virtual ~OpacityVariable() {}
+
+  OpacityVariable() : opacity_(1.0) {}
+
+  // Changes the opacity. Value should be in range 0 (transparent) - 1 (opaque).
+  virtual void SetOpacity(double opacity) {
+    if (opacity == opacity_) {
+      return;
+    }
+
+    opacity_ = opacity;
+    ChangeOpacity(opacity);
+  }
+
+  double opacity() const { return opacity_; }
+
+ protected:
+  virtual void ChangeOpacity(double opacity) = 0;
+
+  double opacity_;
+};
+
+class CircleGauge : public sf::Drawable,
+                    public sf::Transformable,
+                    public OpacityVariable {
+ public:
+  CircleGauge(const std::string& annotation, const std::string& units,
+              size_t min, size_t max, const CircleGaugeStyle& style);
 
   void Update(size_t value);
+
+ protected:
+  void ChangeOpacity(double opacity) override;
 
  private:
   static constexpr size_t kNumPoints = 100;
   static constexpr char kTexture[] = "gauge.png";
-  static constexpr float kGaugeBezel = 30;
+  static constexpr float kGaugeBezel = 60;
 
-  void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+  void RegenerateWithOpacity(double opacity);
+
+  void draw(sf::RenderTarget& target, sf::RenderStates states) const override {
     states.transform *= getTransform();
     target.draw(triangle_fan_, states);
     target.draw(sprite_, states);
     target.draw(min_label_, states);
     target.draw(max_label_, states);
     target.draw(label_, states);
+    target.draw(annotation_label_, states);
   }
 
   const size_t min_;
   const size_t max_;
   const CircleGaugeStyle style_;
+  const std::string annotation_;
+  const std::string units_;
   sf::Text min_label_;
   sf::Text max_label_;
   sf::Text label_;
+  sf::Text annotation_label_;
   sf::Texture texture_;
   sf::VertexArray triangle_fan_;
   sf::Sprite sprite_;

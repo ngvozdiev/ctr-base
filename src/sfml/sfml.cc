@@ -490,8 +490,14 @@ Node::Node(float radius, sf::Vector2f location, const NodeStyle& style)
   circle_.setPosition(location.x - radius, location.y - radius);
 }
 
-CircleGauge::CircleGauge(size_t min, size_t max, const CircleGaugeStyle& style)
-    : min_(min), max_(max), style_(style) {
+CircleGauge::CircleGauge(const std::string& annotation,
+                         const std::string& units, size_t min, size_t max,
+                         const CircleGaugeStyle& style)
+    : min_(min),
+      max_(max),
+      style_(style),
+      annotation_(annotation),
+      units_(units) {
   texture_.loadFromFile(kTexture);
   sprite_.setTexture(texture_);
   float radius = sprite_.getLocalBounds().width / 2;
@@ -512,9 +518,26 @@ CircleGauge::CircleGauge(size_t min, size_t max, const CircleGaugeStyle& style)
       sf::Text(std::to_string(max), style.font, style.limits_font_size);
   float max_label_w = max_label_.getLocalBounds().width;
   float max_label_h = max_label_.getLocalBounds().height;
-  x_offset = 2 * (radius - kGaugeBezel) + kGaugeBezel / 2 + max_label_w / 2 + 6;
+  x_offset =
+      2 * (radius - kGaugeBezel) + kGaugeBezel / 2 + max_label_w / 2 + 20;
   max_label_.setPosition(x_offset, max_label_h);
   max_label_.setFillColor(sf::Color::Black);
+
+  annotation_label_ =
+      sf::Text(annotation, style.font, style.annotation_font_size);
+  float a_label_w = annotation_label_.getLocalBounds().width;
+  float a_label_h = annotation_label_.getLocalBounds().height;
+  annotation_label_.setPosition(
+      radius - a_label_w / 2,
+      1.3 * a_label_h + std::max(max_label_h, min_label_h));
+  annotation_label_.setFillColor(sf::Color::Black);
+}
+
+void CircleGauge::ChangeOpacity(double opacity) {
+  sprite_.setColor(sf::Color(255, 255, 255, 255 * opacity));
+  min_label_.setFillColor(sf::Color(0, 0, 0, 255 * opacity));
+  max_label_.setFillColor(sf::Color(0, 0, 0, 255 * opacity));
+  annotation_label_.setFillColor(sf::Color(0, 0, 0, 255 * opacity));
 }
 
 void CircleGauge::Update(size_t value) {
@@ -523,6 +546,7 @@ void CircleGauge::Update(size_t value) {
   double fraction = static_cast<double>(value - min_) / (max_ - min_);
 
   sf::Color color(255 * fraction, 255 * (1 - fraction), 0);
+  color.a = 255 * opacity_;
 
   float radius = sprite_.getLocalBounds().width / 2;
   sf::VertexArray array(sf::PrimitiveType::TriangleFan);
@@ -537,11 +561,12 @@ void CircleGauge::Update(size_t value) {
   }
 
   triangle_fan_ = array;
-  label_ = sf::Text(std::to_string(value), style_.font, style_.label_font_size);
+  label_ = sf::Text(nc::StrCat(std::to_string(value), units_), style_.font,
+                    style_.label_font_size);
   float label_w = label_.getLocalBounds().width;
   float label_h = label_.getLocalBounds().height;
   label_.setPosition(radius - label_w / 2, -2 * label_h);
-  label_.setFillColor(sf::Color::Black);
+  label_.setFillColor(sf::Color(0, 0, 0, 255 * opacity_));
 }
 
 }  // namespace sfml

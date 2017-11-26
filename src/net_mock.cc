@@ -176,6 +176,9 @@ void MockSimNetwork::AdvanceTimeToNextBin() {
         nc::htsim::PacketPtr pkt = GetDummyPacket(bin.bytes);
         const nc::htsim::MatchRuleAction* action =
             aggregate_state.rule->ExplicitChooseOrDie(*pkt, ++i);
+        CHECK(action->weight() > 0) << "Action with zero weight chosen "
+                                    << action->ToString() << " rule "
+                                    << action->parent_rule()->ToString();
 
         nc::htsim::Port* port = device->FindOrCreatePort(default_enter_port_);
         device->HandlePacketWithAction(port, std::move(pkt), action);
