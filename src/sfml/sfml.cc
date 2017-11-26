@@ -11,6 +11,8 @@
 namespace ctr {
 namespace sfml {
 
+constexpr char CircleGauge::kTexture[];
+
 template <typename T>
 T DotProduct(sf::Vector2<T> lhs, sf::Vector2<T> rhs) {
   return lhs.x * rhs.x + lhs.y * rhs.y;
@@ -122,7 +124,7 @@ HAxis::HAxis(float length, const std::string& label,
   float w_offset = label_.getLocalBounds().width / 2;
   float h_offset = label_.getLocalBounds().height / 2;
   label_.setPosition(length / 2 - w_offset, style.label_offset + h_offset);
-  label_.setColor(style.tick_lines_style.color);
+  label_.setFillColor(style.tick_lines_style.color);
 }
 
 void HAxis::DrawTick(float location, const std::string& label,
@@ -136,7 +138,7 @@ void HAxis::DrawTick(float location, const std::string& label,
   float w_offset = tick_text.getLocalBounds().width / 2;
   float h_offset = tick_text.getLocalBounds().height / 2;
   tick_text.setPosition(location - w_offset, style.tick_length + h_offset);
-  tick_text.setColor(style.tick_lines_style.color);
+  tick_text.setFillColor(style.tick_lines_style.color);
   tick_labels_.emplace_back(tick_text);
 }
 
@@ -160,7 +162,7 @@ VAxis::VAxis(float length, const std::string& label,
   label_.rotate(90);
   label_.setPosition(-style.label_offset - h_offset - max_tick_label_width,
                      -length / 2 - w_offset);
-  label_.setColor(style.tick_lines_style.color);
+  label_.setFillColor(style.tick_lines_style.color);
 }
 
 float VAxis::DrawTick(float location, const std::string& label,
@@ -175,7 +177,7 @@ float VAxis::DrawTick(float location, const std::string& label,
   float w_offset = tick_text.getLocalBounds().width;
   float h_offset = tick_text.getLocalBounds().height;
   tick_text.setPosition(-tick_length - w_offset - 10, -location - h_offset);
-  tick_text.setColor(style.tick_lines_style.color);
+  tick_text.setFillColor(style.tick_lines_style.color);
   tick_labels_.emplace_back(tick_text);
   return tick_text.getLocalBounds().width;
 }
@@ -486,6 +488,60 @@ Node::Node(float radius, sf::Vector2f location, const NodeStyle& style)
   circle_.setOutlineThickness(style.outline_thickness);
 
   circle_.setPosition(location.x - radius, location.y - radius);
+}
+
+CircleGauge::CircleGauge(size_t min, size_t max, const CircleGaugeStyle& style)
+    : min_(min), max_(max), style_(style) {
+  texture_.loadFromFile(kTexture);
+  sprite_.setTexture(texture_);
+  float radius = sprite_.getLocalBounds().width / 2;
+  sprite_.setPosition(sf::Vector2f(0, -radius));
+  Update(0);
+
+  min_label_ =
+      sf::Text(std::to_string(min), style.font, style.limits_font_size);
+  float min_label_w = min_label_.getLocalBounds().width;
+  float min_label_h = min_label_.getLocalBounds().height;
+
+  // Will position the min/max labels based on the gauge bezel.
+  float x_offset = kGaugeBezel / 2 - min_label_w / 2;
+  min_label_.setPosition(x_offset, min_label_h);
+  min_label_.setFillColor(sf::Color::Black);
+
+  max_label_ =
+      sf::Text(std::to_string(max), style.font, style.limits_font_size);
+  float max_label_w = max_label_.getLocalBounds().width;
+  float max_label_h = max_label_.getLocalBounds().height;
+  x_offset = 2 * (radius - kGaugeBezel) + kGaugeBezel / 2 + max_label_w / 2 + 6;
+  max_label_.setPosition(x_offset, max_label_h);
+  max_label_.setFillColor(sf::Color::Black);
+}
+
+void CircleGauge::Update(size_t value) {
+  value = std::min(value, max_);
+  value = std::max(value, min_);
+  double fraction = static_cast<double>(value - min_) / (max_ - min_);
+
+  sf::Color color(255 * fraction, 255 * (1 - fraction), 0);
+
+  float radius = sprite_.getLocalBounds().width / 2;
+  sf::VertexArray array(sf::PrimitiveType::TriangleFan);
+  sf::Vector2f center(radius, 0);
+
+  array.append(sf::Vertex(center, color));
+  float increment = PI / kNumPoints;
+  for (size_t i = kNumPoints * (1 - fraction); i <= kNumPoints; ++i) {
+    float x = center.x + radius * std::cos(i * increment);
+    float y = center.y + radius * std::sin(i * increment);
+    array.append(sf::Vertex(sf::Vector2f(x, -y), color));
+  }
+
+  triangle_fan_ = array;
+  label_ = sf::Text(std::to_string(value), style_.font, style_.label_font_size);
+  float label_w = label_.getLocalBounds().width;
+  float label_h = label_.getLocalBounds().height;
+  label_.setPosition(radius - label_w / 2, -2 * label_h);
+  label_.setFillColor(sf::Color::Black);
 }
 
 }  // namespace sfml

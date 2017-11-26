@@ -284,6 +284,43 @@ class Node : public sf::Drawable, public sf::Transformable {
   sf::CircleShape circle_;
 };
 
+struct CircleGaugeStyle {
+  sf::Font font;
+  size_t label_font_size = 20;
+  size_t limits_font_size = 12;
+};
+
+class CircleGauge : public sf::Drawable, public sf::Transformable {
+ public:
+  CircleGauge(size_t min, size_t max, const CircleGaugeStyle& style);
+
+  void Update(size_t value);
+
+ private:
+  static constexpr size_t kNumPoints = 100;
+  static constexpr char kTexture[] = "gauge.png";
+  static constexpr float kGaugeBezel = 30;
+
+  void draw(sf::RenderTarget& target, sf::RenderStates states) const {
+    states.transform *= getTransform();
+    target.draw(triangle_fan_, states);
+    target.draw(sprite_, states);
+    target.draw(min_label_, states);
+    target.draw(max_label_, states);
+    target.draw(label_, states);
+  }
+
+  const size_t min_;
+  const size_t max_;
+  const CircleGaugeStyle style_;
+  sf::Text min_label_;
+  sf::Text max_label_;
+  sf::Text label_;
+  sf::Texture texture_;
+  sf::VertexArray triangle_fan_;
+  sf::Sprite sprite_;
+};
+
 }  // namespace sfml
 }  // namespace ctr
 #endif

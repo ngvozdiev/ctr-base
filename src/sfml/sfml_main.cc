@@ -39,13 +39,19 @@ static void BootstrapNetwork(const ctr::PcapTraceStore& trace_store,
                              ctr::MockSimDeviceFactory* device_factory) {
   const nc::net::GraphStorage* graph = network_container->graph();
 
-  // Bin sequences will be allocated at random.
+  // Bin sequences will be allocated sequentially.
   std::map<ctr::AggregateId, std::unique_ptr<ctr::BinSequence>> sequences;
   std::vector<const ctr::PcapDataTrace*> all_traces = trace_store.AllTraces();
-  CHECK(all_traces.size() >= aggregates.size());
-  for (size_t i = 0; i < aggregates.size(); ++i) {
-    const ctr::AggregateId& id = aggregates[i];
-    const ctr::PcapDataTrace* trace = all_traces[i];
+  auto it = all_traces.begin();
+
+  CHECK(!all_traces.empty());
+  for (const ctr::AggregateId& id : aggregates) {
+    const ctr::PcapDataTrace* trace = *it;
+    ++it;
+    if (it == all_traces.end()) {
+      it = all_traces.begin();
+    }
+
     std::vector<ctr::BinSequence::TraceAndSlice> slices =
         trace->TracesAndSlices(trace->AllSlices());
 
@@ -63,11 +69,13 @@ static void BootstrapNetwork(const ctr::PcapTraceStore& trace_store,
   device_factory->Init();
 }
 
-class QueueMonitor : public nc::EventConsumer {
+class QueueBytesSeenMonitor : public nc::EventConsumer {
  public:
-  QueueMonitor(const nc::htsim::Queue* queue, ctr::sfml::VisualLink* visual,
-               nc::EventQueue* event_queue)
-      : nc::EventConsumer(nc::StrCat("QueueMonitor", queue->id()), event_queue),
+  QueueBytesSeenMonitor(const nc::htsim::Queue* queue,
+                        ctr::sfml::VisualLink* visual,
+                        nc::EventQueue* event_queue)
+      : nc::EventConsumer(nc::StrCat("QueueMonitor_", queue->id()),
+                          event_queue),
         period_(visual->time_step()),
         queue_(queue),
         visual_(visual) {
@@ -107,6 +115,39 @@ class QueueMonitor : public nc::EventConsumer {
   std::map<nc::htsim::PacketTag, uint64_t> prev_bytes_seen_;
   const nc::htsim::Queue* queue_;
   ctr::sfml::VisualLink* visual_;
+};
+
+class QueueLevelMonitor : public nc::EventConsumer {
+ public:
+  QueueLevelMonitor(const nc::htsim::Queue* queue,
+                    std::chrono::milliseconds update_rate,
+                    ctr::sfml::CircleGauge* visual, nc::EventQueue* event_queue)
+      : nc::EventConsumer(nc::StrCat("QueueLevelMonitor_", queue->id()),
+                          event_queue),
+        period_(update_rate),
+        queue_(queue),
+        visual_(visual) {
+    EnqueueIn(event_queue->ToTime(period_));
+  }
+
+  void HandleEvent() override {
+    Record();
+    EnqueueIn(event_queue()->ToTime(period_));
+  }
+
+ private:
+  void Record() {
+    const nc::htsim::QueueStats& stats = queue_->GetStats();
+    nc::net::Bandwidth rate = queue_->GetRate();
+
+    double bytes_per_sec = rate.bps() / 8;
+    double size_sec = stats.queue_size_bytes / bytes_per_sec;
+    visual_->Update(size_sec * 1000.0);
+  }
+
+  std::chrono::milliseconds period_;
+  const nc::htsim::Queue* queue_;
+  ctr::sfml::CircleGauge* visual_;
 };
 
 std::tuple<ctr::sfml::VisualLinkStyle, ctr::sfml::NodeStyle> GetStyle() {
@@ -169,9 +210,9 @@ static nc::net::GraphBuilder GetGraph() {
                    std::chrono::seconds(1)});
 
   builder.AddLink({kInternet, kFrankfurt,
-                   nc::net::Bandwidth::FromGBitsPerSecond(10),
+                   nc::net::Bandwidth::FromGBitsPerSecond(3.6),
                    std::chrono::seconds(1)});
-  builder.AddLink({kB2V, kBudapest, nc::net::Bandwidth::FromGBitsPerSecond(10),
+  builder.AddLink({kB2V, kBudapest, nc::net::Bandwidth::FromGBitsPerSecond(3.6),
                    std::chrono::seconds(1)});
 
   return builder;
@@ -320,8 +361,8 @@ int main() {
   ctr::sfml::VisualLink vlink_budapest_frankfurt(
       budapest_location, frankfurt_location, 50, true,
       std::chrono::milliseconds(2), *budapest_frankfurt_link, link_style);
-  QueueMonitor monitor_one(budapest_frankfurt_queue, &vlink_budapest_frankfurt,
-                           &event_queue);
+  QueueBytesSeenMonitor monitor_one(budapest_frankfurt_queue,
+                                    &vlink_budapest_frankfurt, &event_queue);
 
   const nc::net::GraphLinkBase* budapest_vienna_link;
   nc::htsim::Queue* budapest_vienna_queue;
@@ -331,8 +372,8 @@ int main() {
   ctr::sfml::VisualLink vlink_budapest_vienna(
       budapest_location, vienna_location, 25, false,
       std::chrono::milliseconds(2), *budapest_vienna_link, link_style);
-  QueueMonitor monitor_two(budapest_vienna_queue, &vlink_budapest_vienna,
-                           &event_queue);
+  QueueBytesSeenMonitor monitor_two(budapest_vienna_queue,
+                                    &vlink_budapest_vienna, &event_queue);
 
   const nc::net::GraphLinkBase* frankfurt_vienna_link;
   nc::htsim::Queue* frankfurt_vienna_queue;
@@ -342,8 +383,25 @@ int main() {
   ctr::sfml::VisualLink vlink_frankfurt_vienna(
       frankfurt_location, vienna_location, 50, true,
       std::chrono::milliseconds(2), *frankfurt_vienna_link, link_style);
-  QueueMonitor monitor_three(frankfurt_vienna_queue, &vlink_frankfurt_vienna,
-                             &event_queue);
+  QueueBytesSeenMonitor monitor_three(frankfurt_vienna_queue,
+                                      &vlink_frankfurt_vienna, &event_queue);
+
+  // Will add VisualLink instances with invisible background and lines.
+  ctr::sfml::VisualLinkStyle empty_link_style = link_style;
+  empty_link_style.base_line_style.color.a = 0;
+  empty_link_style.top_line_style.line_style.color.a = 0;
+  empty_link_style.background_color.a = 0;
+  sf::Vector2f b2v_location = budapest_location;
+  b2v_location.x += 300;
+
+  const nc::net::GraphLinkBase* b2v_link;
+  nc::htsim::Queue* b2v_queue;
+  std::tie(b2v_link, b2v_queue) = network_container.GetLink(kB2V, kBudapest);
+  b2v_queue->set_tags_in_stats(true);
+  ctr::sfml::VisualLink vlink_b2v(b2v_location, budapest_location, 50, true,
+                                  std::chrono::milliseconds(2), *b2v_link,
+                                  empty_link_style);
+  QueueBytesSeenMonitor monitor_four(b2v_queue, &vlink_b2v, &event_queue);
 
   ctr::sfml::Node budapest_node(20, budapest_location, node_style);
   ctr::sfml::Node vienna_node(20, vienna_location, node_style);
@@ -355,8 +413,20 @@ int main() {
   nc::SimTimeEventQueue view_event_queue;
   nc::htsim::AnimationContainer animation_container(
       "AnimationContainer", std::chrono::milliseconds(10), &view_event_queue);
-  AnimateViewPosition({{10.0, sf::Vector2f(300, 300)}}, &view,
-                      &animation_container);
+  //  AnimateViewPosition({{10.0, sf::Vector2f(300, 300)}}, &view,
+  //                      &animation_container);
+
+  sf::Font font;
+  CHECK(font.loadFromFile(kDefaultFontFile));
+
+  ctr::sfml::CircleGaugeStyle gauge_style;
+  gauge_style.font = font;
+  ctr::sfml::CircleGauge gauge(0, 100, gauge_style);
+  gauge.move(100, 350);
+
+  QueueLevelMonitor queue_level_monitor(frankfurt_vienna_queue,
+                                        std::chrono::milliseconds(10), &gauge,
+                                        &event_queue);
 
   double rt_factor = 1.0;
   double via_frankfurt = 0.5;
@@ -403,9 +473,11 @@ int main() {
     window.draw(vlink_budapest_frankfurt);
     window.draw(vlink_budapest_vienna);
     window.draw(vlink_frankfurt_vienna);
+    window.draw(vlink_b2v);
     window.draw(budapest_node);
     window.draw(vienna_node);
     window.draw(frankfurt_node);
+    window.draw(gauge);
     window.display();
   }
 
