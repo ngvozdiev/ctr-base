@@ -324,8 +324,8 @@ static void AnimateFunction(
 static sf::Vector2f FromPolar(sf::Vector2f location, float offset,
                               float angle) {
   float angle_rad = angle * M_PI / 180.0;
-  float x = location.x + offset * std::cosf(angle_rad);
-  float y = location.y + offset * std::sinf(angle_rad);
+  float x = location.x + offset * std::cos(angle_rad);
+  float y = location.y + offset * std::sin(angle_rad);
   return {x, y};
 }
 
@@ -333,7 +333,7 @@ static sf::Vector2f FromPolar(sf::Vector2f location, float offset,
 static sf::Text GetNodeLabel(const std::string& name, const sf::Font& font,
                              sf::Vector2f location, float offset, float angle) {
   sf::Text text(name, font, 25);
-  text.setFillColor(sf::Color::Black);
+  text.setColor(sf::Color::Black);
   text.setPosition(FromPolar(location, offset, angle));
   return text;
 }
@@ -409,7 +409,7 @@ int main() {
       network_container.GetLink(kBudapest, kFrankfurt);
   budapest_frankfurt_queue->set_tags_in_stats(true);
   ctr::sfml::VisualLink vlink_budapest_frankfurt(
-      budapest_location, frankfurt_location, 80, true,
+      budapest_location, frankfurt_location, 80, true, false,
       std::chrono::milliseconds(16), *budapest_frankfurt_link, link_style);
   QueueBytesSeenMonitor monitor_one(budapest_frankfurt_queue,
                                     &vlink_budapest_frankfurt, &event_queue);
@@ -420,7 +420,7 @@ int main() {
       network_container.GetLink(kBudapest, kVienna);
   budapest_vienna_queue->set_tags_in_stats(true);
   ctr::sfml::VisualLink vlink_budapest_vienna(
-      budapest_location, vienna_location, 40, false,
+      budapest_location, vienna_location, 40, true, true,
       std::chrono::milliseconds(16), *budapest_vienna_link, link_style);
   QueueBytesSeenMonitor monitor_two(budapest_vienna_queue,
                                     &vlink_budapest_vienna, &event_queue);
@@ -431,7 +431,7 @@ int main() {
       network_container.GetLink(kFrankfurt, kVienna);
   frankfurt_vienna_queue->set_tags_in_stats(true);
   ctr::sfml::VisualLink vlink_frankfurt_vienna(
-      frankfurt_location, vienna_location, 80, true,
+      frankfurt_location, vienna_location, 80, false, true,
       std::chrono::milliseconds(16), *frankfurt_vienna_link, link_style);
   QueueBytesSeenMonitor monitor_three(frankfurt_vienna_queue,
                                       &vlink_frankfurt_vienna, &event_queue);
@@ -463,8 +463,8 @@ int main() {
   std::unique_ptr<ctr::sfml::Arrow> f_arrow;
   sf::Text f_annotation;
   std::tie(f_arrow, f_annotation) =
-      AnnotateNode("100%\nInternet\nto Vienna", font, frankfurt_location, 115,
-                   120, 140, 85, 170, 130, 70);
+      AnnotateNode("Total\nVienna-bound\ntraffic", font, frankfurt_location,
+                   115, 120, 140, 85, 170, 130, 70);
 
   sf::View view = window.getDefaultView();
 
@@ -503,14 +503,14 @@ int main() {
   RebalanceRoutes(via_frankfurt, p1.get(), p2.get(), &network_container);
 
   // All animations happen here.
-  AnimateFunction({{40.0, 0.0}, {40.5, 1.0}}, [&frankfurt_gauge](double v) {
+  AnimateFunction({{45.0, 0.0}, {45.5, 1.0}}, [&frankfurt_gauge](double v) {
     frankfurt_gauge.SetOpacity(v);
   }, &animation_container);
-  AnimateFunction({{20.0, 0.0}, {20.5, 1.0}}, [&budapest_gauge](double v) {
+  AnimateFunction({{25.0, 0.0}, {25.5, 1.0}}, [&budapest_gauge](double v) {
     budapest_gauge.SetOpacity(v);
   }, &animation_container);
   AnimateFunction(
-      {{40.0, 0.0}, {45.0, 1.0}, {60.0, 1.0}, {65.0, 0.3}},
+      {{45.0, 0.0}, {50.0, 1.0}, {65.0, 1.0}, {70.0, 0.25}},
       [&via_frankfurt, &up_annotation, &down_annotation, &p1, &p2,
        &network_container](double v) {
         via_frankfurt = v;

@@ -348,7 +348,8 @@ void DashedLine::draw(sf::RenderTarget& target, sf::RenderStates states) const {
 }
 
 VisualLink::VisualLink(sf::Vector2f from, sf::Vector2f to, float height,
-                       bool flip_v, std::chrono::milliseconds time_step,
+                       bool flip_v, bool offset_y,
+                       std::chrono::milliseconds time_step,
                        const nc::net::GraphLinkBase& link,
                        const VisualLinkStyle& style)
     : width_(LinearDistance(from, to)),
@@ -359,6 +360,7 @@ VisualLink::VisualLink(sf::Vector2f from, sf::Vector2f to, float height,
       base_line_(Line(sf::Vector2f(width_, 0), style.base_line_style)),
       upper_line_(width_, style.top_line_style),
       flip_v_(flip_v) {
+  y_offset_ = offset_y ? -height : 0;
   using namespace std::chrono;
 
   // Will create as many deques as there are tags.
@@ -367,11 +369,13 @@ VisualLink::VisualLink(sf::Vector2f from, sf::Vector2f to, float height,
   }
 
   if (flip_v) {
-    upper_line_.setPosition(0, height_);
-    rect_.setSize(sf::Vector2f(width_, height_));
+    base_line_.setPosition(0, y_offset_);
+    upper_line_.setPosition(0, height_ + y_offset_);
+    rect_.setSize(sf::Vector2f(width_, height_ + y_offset_));
   } else {
-    upper_line_.setPosition(0, -height_);
-    rect_.setSize(sf::Vector2f(width_, -height_));
+    base_line_.setPosition(0, -y_offset_);
+    upper_line_.setPosition(0, -(height_ + y_offset_));
+    rect_.setSize(sf::Vector2f(width_, -(height_ + y_offset_)));
   }
 
   max_values_count_ =
@@ -436,14 +440,16 @@ sf::VertexArray VisualLink::GenerateTrianglesStrip(
     return array;
   }
 
+  float y_offset = flip_v_ ? y_offset_ : -y_offset_;
+
   // The first add the initial vertex.
   float first_bottom = bottom == nullptr ? 0 : (*bottom)[0];
-  array.append(Vertex(Vector2f(0, first_bottom), color));
+  array.append(Vertex(Vector2f(0, first_bottom + y_offset), color));
 
   float offset = 0;
   for (size_t i = 0; i < values.size(); ++i) {
     float value = values[i];
-    array.append(Vertex(Vector2f(offset, value), color));
+    array.append(Vertex(Vector2f(offset, value + y_offset), color));
 
     float point_y;
     if (i != values.size() - 1) {
@@ -453,7 +459,7 @@ sf::VertexArray VisualLink::GenerateTrianglesStrip(
       point_y = bottom == nullptr ? 0 : (*bottom)[i];
     }
 
-    array.append(Vertex(Vector2f(offset, point_y), color));
+    array.append(Vertex(Vector2f(offset, point_y + y_offset), color));
   }
 
   return array;

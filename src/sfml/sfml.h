@@ -210,7 +210,7 @@ struct VisualLinkStyle {
 class VisualLink : public sf::Drawable, public sf::Transformable {
  public:
   VisualLink(sf::Vector2f from, sf::Vector2f to, float height, bool flip_v,
-             std::chrono::milliseconds time_step,
+             bool offset_y, std::chrono::milliseconds time_step,
              const nc::net::GraphLinkBase& link, const VisualLinkStyle& style);
 
   void AddValues(const std::map<nc::htsim::PacketTag, double>& new_values);
@@ -262,6 +262,9 @@ class VisualLink : public sf::Drawable, public sf::Transformable {
 
   // Flips the representation vertically.
   bool flip_v_;
+
+  // Offset along Y.
+  float y_offset_;
 };
 
 struct NodeStyle {
