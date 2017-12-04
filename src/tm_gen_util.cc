@@ -58,8 +58,7 @@ class DemandGenerator {
   }
 
   // Produces a demand matrix. The matrix is not guaranteed to the satisfiable.
-  std::unique_ptr<nc::lp::DemandMatrix> SinglePass(double locality,
-                                                   nc::net::Bandwidth mean,
+  std::unique_ptr<nc::lp::DemandMatrix> SinglePass(nc::net::Bandwidth mean,
                                                    std::mt19937* rnd) const {
     // Will start by getting the total incoming/outgoing traffic at each node.
     // These will come from an exponential distribution with the given mean.
@@ -85,20 +84,16 @@ class DemandGenerator {
     std::vector<nc::lp::DemandMatrixElement> elements;
     for (nc::net::GraphNodeIndex src : graph_->AllNodes()) {
       for (nc::net::GraphNodeIndex dst : graph_->AllNodes()) {
-        double gravity_p =
-            (1 - locality) * incoming_traffic_Mbps.GetValueOrDie(src) *
-            outgoing_traffic_Mbps.GetValueOrDie(dst) / sum_product;
+        double gravity_p = incoming_traffic_Mbps.GetValueOrDie(src) *
+                           outgoing_traffic_Mbps.GetValueOrDie(dst) /
+                           sum_product;
         if (src == dst) {
           total_p += gravity_p;
           continue;
         }
 
-        double distance = sp_.GetDistance(src, dst).count();
-        double locality_p =
-            locality / (distance * distance * sum_inverse_delays_squared_);
-
-        double value_Mbps = (locality_p + gravity_p) * total_Mbps;
-        total_p += locality_p + gravity_p;
+        double value_Mbps = gravity_p * total_Mbps;
+        total_p += gravity_p;
         auto bw = nc::net::Bandwidth::FromMBitsPerSecond(value_Mbps);
         if (bw > nc::net::Bandwidth::Zero()) {
           elements.push_back({src, dst, bw});
@@ -108,6 +103,73 @@ class DemandGenerator {
     CHECK(std::abs(total_p - 1.0) < 0.0001) << "Not a distribution " << total_p;
 
     return nc::make_unique<nc::lp::DemandMatrix>(elements, graph_);
+  }
+
+  // Like above, but for a single source.
+  static std::unique_ptr<nc::lp::DemandMatrix> LocalizeSource(
+      nc::net::GraphNodeIndex src_node, const nc::lp::DemandMatrix& matrix,
+      double locality) {
+    // Need to first get the current distribution.
+    nc::net::Bandwidth total_demand = nc::net::Bandwidth::Zero();
+    nc::net::GraphNodeMap<nc::net::Bandwidth> demands;
+    for (const auto& element : matrix.elements()) {
+      if (element.src != src_node) {
+        continue;
+      }
+
+      demands[element.dst] += element.demand;
+      total_demand += element.demand;
+    }
+
+    // Now figure out what the distribution entirely based on locality would be.
+    const nc::net::GraphStorage* graph = matrix.graph();
+    nc::net::GraphNodeSet to = graph->AllNodes();
+    to.Remove(src_node);
+
+    nc::net::ShortestPath sp_tree(src_node, to, {}, graph->AdjacencyList(),
+                                  nullptr, nullptr);
+    double sum_delays_inverse = 0;
+    for (nc::net::GraphNodeIndex dst : to) {
+      nc::net::Delay delay = sp_tree.GetPathDistance(dst);
+      sum_delays_inverse += 1.0 / delay.count();
+    }
+
+    nc::net::GraphNodeMap<double> local_probabilities;
+    for (nc::net::GraphNodeIndex dst : to) {
+      nc::net::Delay delay = sp_tree.GetPathDistance(dst);
+      local_probabilities[dst] = 1.0 / (delay.count() * sum_delays_inverse);
+    }
+
+    // Now to get the mixture distribution.
+    std::vector<nc::lp::DemandMatrixElement> new_demands;
+    double total_p = 0;
+    for (nc::net::GraphNodeIndex dst : to) {
+      double current_p = demands[dst] / total_demand;
+      double local_p = local_probabilities.GetValueOrDie(dst);
+      double new_p = current_p * (1 - locality) + locality * local_p;
+      total_p += new_p;
+      new_demands.emplace_back(src_node, dst, total_demand * new_p);
+    }
+    CHECK(std::abs(total_p - 1.0) < 0.0001) << "Not a distribution " << total_p;
+
+    return nc::make_unique<nc::lp::DemandMatrix>(new_demands, graph);
+  }
+
+  // Makes a demand matrix more local. If locality is 0 demands are not changed
+  // if locality is 1. All traffic coming out of a node will be distributed
+  // inversely proportional to SP delay from node to other nodes.
+  static std::unique_ptr<nc::lp::DemandMatrix> Localize(
+      const nc::lp::DemandMatrix& matrix, double locality) {
+    std::unique_ptr<nc::lp::DemandMatrix> out;
+    for (const auto& element : matrix.elements()) {
+      if (out) {
+        out = LocalizeSource(element.src, *out, locality);
+      } else {
+        out = LocalizeSource(element.src, matrix, locality);
+      }
+    }
+
+    return out;
   }
 
   // Returns a random matrix with the given commodity scale factor. Will
@@ -121,7 +183,8 @@ class DemandGenerator {
     CHECK(locality <= 1);
 
     auto demand_matrix =
-        SinglePass(locality, nc::net::Bandwidth::FromMBitsPerSecond(1), rnd);
+        SinglePass(nc::net::Bandwidth::FromMBitsPerSecond(1), rnd);
+    demand_matrix = Localize(*demand_matrix, locality);
     double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
     CHECK(csf != 0);
     demand_matrix = demand_matrix->Scale(csf);
