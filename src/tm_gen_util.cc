@@ -110,15 +110,23 @@ class DemandGenerator {
       nc::net::GraphNodeIndex src_node, const nc::lp::DemandMatrix& matrix,
       double locality) {
     // Need to first get the current distribution.
+    std::vector<nc::lp::DemandMatrixElement> new_demands;
     nc::net::Bandwidth total_demand = nc::net::Bandwidth::Zero();
     nc::net::GraphNodeMap<nc::net::Bandwidth> demands;
     for (const auto& element : matrix.elements()) {
       if (element.src != src_node) {
+        // All other demands are copied over to the output.
+        new_demands.emplace_back(element);
         continue;
       }
 
       demands[element.dst] += element.demand;
       total_demand += element.demand;
+    }
+
+    if (total_demand == nc::net::Bandwidth::Zero()) {
+      // No demand coming out of the source.
+      return nc::make_unique<nc::lp::DemandMatrix>(new_demands, matrix.graph());
     }
 
     // Now figure out what the distribution entirely based on locality would be.
@@ -141,7 +149,6 @@ class DemandGenerator {
     }
 
     // Now to get the mixture distribution.
-    std::vector<nc::lp::DemandMatrixElement> new_demands;
     double total_p = 0;
     for (nc::net::GraphNodeIndex dst : to) {
       double current_p = demands[dst] / total_demand;
@@ -183,10 +190,11 @@ class DemandGenerator {
     CHECK(locality <= 1);
 
     auto demand_matrix =
-        SinglePass(nc::net::Bandwidth::FromMBitsPerSecond(1), rnd);
+        SinglePass(nc::net::Bandwidth::FromGBitsPerSecond(1), rnd);
     demand_matrix = Localize(*demand_matrix, locality);
     double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
     CHECK(csf != 0);
+    CHECK(csf == csf);
     demand_matrix = demand_matrix->Scale(csf);
     demand_matrix = demand_matrix->Scale(1.0 / commodity_scale_factor);
     LOG(INFO) << "M " << csf;
