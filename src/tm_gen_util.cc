@@ -37,6 +37,60 @@ DEFINE_uint64(seed, 1ul, "Seed for the generated TM.");
 DEFINE_uint64(tm_count, 1, "Number of TMs to generate.");
 DEFINE_uint64(threads, 2, "Number of threads to use.");
 
+static void AddSumConstraints(
+    const nc::net::GraphNodeMap<nc::net::Bandwidth>& demands,
+    const nc::net::GraphNodeMap<std::vector<nc::lp::VariableIndex>>& vars,
+    std::vector<nc::lp::ProblemMatrixElement>* problem_matrix,
+    nc::lp::Problem* lp_problem) {
+  for (const auto& node_and_demand : demands) {
+    nc::net::GraphNodeIndex node = node_and_demand.first;
+    double demand_Mbps = *node_and_demand.second->Mbps();
+
+    nc::lp::ConstraintIndex constraint = lp_problem->AddConstraint();
+    lp_problem->SetConstraintRange(constraint, demand_Mbps, demand_Mbps);
+    for (nc::lp::VariableIndex var : vars.GetValueOrDie(node)) {
+      problem_matrix->emplace_back(constraint, var, 1.0);
+    }
+  }
+}
+
+// Generates a demand distribution based on either incoming traffic or incoming
+// traffic and outgoing traffic levels. The distribution will be as local as
+// possible (will have cost per byte minimized).
+std::unique_ptr<nc::lp::DemandMatrix> LPDemandGenerate(
+    const nc::lp::DemandMatrix& seed_matrix, double fraction_allowance) {
+  nc::net::GraphNodeMap<nc::net::Bandwidth> demand_out;
+  nc::net::GraphNodeMap<nc::net::Bandwidth> demand_in;
+  nc::net::GraphNodeMap<std::vector<nc::lp::VariableIndex>> vars_in;
+  nc::net::GraphNodeMap<std::vector<nc::lp::VariableIndex>> vars_out;
+
+  const nc::net::GraphStorage* graph = seed_matrix.graph();
+  nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr, nullptr);
+
+  nc::lp::Problem lp_problem(nc::lp::MINIMIZE);
+  for (const auto& element : seed_matrix.elements()) {
+    demand_out[element.src] += element.demand;
+    demand_in[element.dst] += element.demand;
+
+    nc::lp::VariableIndex var = lp_problem.AddVariable();
+    vars_out[element.src].emplace_back(var);
+    vars_in[element.dst].emplace_back(var);
+
+    double element_demand = element.demand.Mbps();
+    double min = element_demand * (1 - fraction_allowance);
+    double max = element_demand * (1 + fraction_allowance);
+    min = std::max(0.0, min);
+    lp_problem.SetVariableRange(var, min, max);
+
+    double obj_c = sp.GetDistance(element.src, element.dst).count();
+    lp_problem.SetObjectiveCoefficient(var, obj_c * element_demand);
+  }
+
+  std::vector<nc::lp::ProblemMatrixElement> problem_matrix;
+  AddSumConstraints(demand_in, vars_in, &problem_matrix, &lp_problem);
+  AddSumConstraints(demand_out, vars_out, &problem_matrix, &lp_problem);
+}
+
 // Generates a DemandMatrix using a scheme based on Roughan's '93 CCR paper. The
 // method there is extended to support geographic locality.
 class DemandGenerator {
@@ -178,6 +232,11 @@ class DemandGenerator {
 
     return out;
   }
+
+  // Makes a demand matrix more local. Unlike Localize() this one preserves both
+  // traffic going into a node and traffic leaving a node.
+  static std::unique_ptr<nc::lp::DemandMatrix> LocalizeBoth(
+      const nc::lp::DemandMatrix& matrix, double locality) {}
 
   // Returns a random matrix with the given commodity scale factor. Will
   // repeatedly call SinglePass to generate a series of matrices with the
