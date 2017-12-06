@@ -100,8 +100,9 @@ static void PlotCDF(
     }
   }
 
-  viz::PythonGrapher python_grapher(FLAGS_output);
-  python_grapher.PlotCDF({}, all_data_to_plot);
+  viz::CDFPlot plot;
+  plot.AddData(all_data_to_plot);
+  plot.PlotToDir(FLAGS_output);
   LOG(INFO) << "Saved script to plot data at " << FLAGS_output;
 }
 
@@ -130,11 +131,12 @@ static void PlotTimeSeries(
     all_data_to_plot.emplace_back(std::move(to_plot));
   }
 
-  viz::PythonGrapher python_grapher(FLAGS_output);
   viz::PlotParameters2D plot_params;
   plot_params.x_bin_size = FLAGS_line_plot_bin_size;
+  viz::LinePlot plot(plot_params);
+  plot.AddData(all_data_to_plot);
+  plot.PlotToDir(FLAGS_output);
 
-  python_grapher.PlotLine(plot_params, all_data_to_plot);
   LOG(INFO) << "Saved script to plot data at " << FLAGS_output;
 }
 

@@ -16,6 +16,160 @@
 namespace ctr {
 namespace sfml {
 
+// Keeps track of the state of the mouse.
+class MouseState {
+ public:
+  MouseState() : x_(0), y_(0), left_pressed_(false), right_pressed_(false) {}
+
+  void Update(const sf::Window& relative_to) {
+    sf::Vector2i location = sf::Mouse::getPosition(relative_to);
+    x_ = location.x;
+    y_ = location.y;
+    left_pressed_ = sf::Mouse::isButtonPressed(sf::Mouse::Left);
+    right_pressed_ = sf::Mouse::isButtonPressed(sf::Mouse::Right);
+  }
+
+  bool left_pressed() const { return left_pressed_; }
+  bool right_pressed() const { return right_pressed_; }
+  int x() const { return x_; }
+  int y() const { return y_; }
+
+ private:
+  int x_;
+  int y_;
+  bool left_pressed_;
+  bool right_pressed_;
+};
+
+// Interface for things that can respond to hover events and/or mouse clicks.
+class MouseAware {
+ public:
+  MouseAware()
+      : currently_hovered_(false), primed_left_(false), primed_right_(false) {}
+  virtual ~MouseAware() {}
+  virtual void OnLeftClick() {}
+  virtual void OnRightClick() {}
+  virtual void OnMouseEnter() {}
+  virtual void OnMouseExit() {}
+
+  // Should be implemented and return true if the given location (in window
+  // coordinates) is over the object.
+  virtual bool IsMouseOver(const sf::Transform& parent_transform,
+                           sf::Vector2f location) = 0;
+
+  // Should be called every time the mouse does something (e.g. changes position
+  // or a button is pressed).
+  virtual void UpdateMouse(const sf::Transform& parent_transform,
+                           const MouseState& current_state) {
+    bool over = IsMouseOver(parent_transform,
+                            sf::Vector2f(current_state.x(), current_state.y()));
+    if (currently_hovered_ && !over) {
+      currently_hovered_ = false;
+      OnMouseExit();
+    } else if (!currently_hovered_ && over) {
+      currently_hovered_ = true;
+      OnMouseEnter();
+    }
+
+    if (!over) {
+      return;
+    }
+
+    if (primed_left_ && !current_state.left_pressed()) {
+      primed_left_ = false;
+      OnLeftClick();
+    } else if (!primed_left_ && current_state.left_pressed()) {
+      primed_left_ = true;
+    }
+
+    if (primed_right_ && !current_state.right_pressed()) {
+      primed_right_ = false;
+      OnRightClick();
+    } else if (!primed_right_ && current_state.right_pressed()) {
+      primed_right_ = true;
+    }
+  }
+
+ private:
+  // Set to true if the mouse cursor is currently over this shape.
+  bool currently_hovered_;
+
+  // Set to true if a mouse button was pressed over his shape.
+  bool primed_left_;
+  bool primed_right_;
+};
+
+// A node in the scene.
+class SceneGraphNode : public MouseAware {
+ public:
+  virtual ~SceneGraphNode() {}
+
+  void MoveTo(const sf::Vector2f& location) { transform_.translate(location); }
+
+  void Draw(const sf::Transform& parent_transform,
+            sf::RenderTarget* target) const {
+    sf::Transform combined_transform = parent_transform * transform_;
+    PrivateDraw(combined_transform, target);
+    for (const auto& child : children_) {
+      child->Draw(combined_transform, target);
+    }
+  }
+
+  void AddChild(std::unique_ptr<SceneGraphNode> child) {
+    children_.emplace_back(std::move(child));
+  }
+
+  void UpdateMouse(const sf::Transform& parent_transform,
+                   const MouseState& current_state) override {
+    sf::Transform combined_transform = parent_transform * transform_;
+    for (const auto& child : children_) {
+      child->UpdateMouse(combined_transform, current_state);
+    }
+    MouseAware::UpdateMouse(combined_transform, current_state);
+  }
+
+  const sf::Transform& transform() const { return transform_; }
+
+ private:
+  bool IsMouseOver(const sf::Transform& parent_transform,
+                   sf::Vector2f location) override {
+    sf::Transform combined_transform = parent_transform * transform_;
+    for (const auto& child : children_) {
+      if (child->IsMouseOver(combined_transform, location)) {
+        return true;
+      }
+    }
+
+    return PrivateIsMouseOver(combined_transform, location);
+  }
+
+  virtual bool PrivateIsMouseOver(const sf::Transform& parent_transform,
+                                  sf::Vector2f location) const {
+    nc::Unused(parent_transform);
+    nc::Unused(location);
+    return false;
+  }
+
+  virtual void PrivateDraw(const sf::Transform& transform,
+                           sf::RenderTarget* target) const {
+    nc::Unused(transform);
+    nc::Unused(target);
+  }
+
+  sf::Transform transform_;
+  std::vector<std::unique_ptr<SceneGraphNode>> children_;
+};
+
+// A special node that does not have a visual representation.
+class SceneGraphRoot : public SceneGraphNode {
+ public:
+  void DrawAll(sf::RenderTarget* target) { Draw(sf::Transform(), target); }
+
+  void UpdateMouseAll(const MouseState& mouse_state) {
+    UpdateMouse(sf::Transform(), mouse_state);
+  }
+};
+
 // Styles a line.
 struct LineStyle {
   sf::Color color = sf::Color::White;
@@ -274,15 +428,26 @@ struct NodeStyle {
 };
 
 // A node in the graph.
-class Node : public sf::Drawable, public sf::Transformable {
+class Node : public SceneGraphNode {
  public:
-  Node(float radius, sf::Vector2f location, const NodeStyle& style);
+  Node(float radius, const NodeStyle& style);
+
+  void OnMouseEnter() override { LOG(INFO) << "Enter"; }
+
+  void OnMouseExit() override { LOG(INFO) << "Exit"; }
+
+  void OnLeftClick() override { LOG(INFO) << "LC"; }
+
+  void OnRightClick() override { LOG(INFO) << "RC"; }
 
  private:
-  void draw(sf::RenderTarget& target, sf::RenderStates states) const {
-    states.transform *= getTransform();
-    target.draw(circle_, states);
+  void PrivateDraw(const sf::Transform& transform,
+                   sf::RenderTarget* target) const override {
+    target->draw(circle_, transform);
   }
+
+  bool PrivateIsMouseOver(const sf::Transform& parent_transform,
+                          sf::Vector2f location) const override;
 
   sf::CircleShape circle_;
 };

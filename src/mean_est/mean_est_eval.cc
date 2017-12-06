@@ -74,13 +74,8 @@ SimulationStats SimulateProcess(const std::string& out,
   SimulationStats stats;
 
   bool plot = !out.empty();
-  nc::viz::DataSeries2D demand_to_plot;
-
-  nc::viz::DataSeries2D leftover_demand_to_plot;
-  if (plot) {
-    demand_to_plot.label = "Demand";
-    leftover_demand_to_plot.label = "Short";
-  }
+  std::vector<std::pair<double, double>> demand_to_plot;
+  std::vector<std::pair<double, double>> leftover_demand_to_plot;
 
   // Ranges for which the process fits.
   std::vector<nc::viz::ColoredRange> fit_ranges;
@@ -103,8 +98,8 @@ SimulationStats SimulateProcess(const std::string& out,
     stats.total_demand += timestep_demand;
 
     if (plot) {
-      demand_to_plot.data.emplace_back(i, timestep_demand);
-      leftover_demand_to_plot.data.emplace_back(i, leftover_demand);
+      demand_to_plot.emplace_back(i, timestep_demand);
+      leftover_demand_to_plot.emplace_back(i, leftover_demand);
     }
 
     leftover_demand += timestep_demand;
@@ -146,20 +141,21 @@ SimulationStats SimulateProcess(const std::string& out,
           {no_fit_range_start, static_cast<double>(timestep_count)});
     }
 
-    nc::viz::DataSeries2D estimate_to_plot;
-    nc::viz::DataSeries2D signal_to_plot;
-    estimate_to_plot.label = "Estimate";
-    signal_to_plot.label = "Signal";
+    std::vector<std::pair<double, double>> estimate_to_plot;
+    std::vector<std::pair<double, double>> signal_to_plot;
     for (size_t i = 0; i < so_far.size(); ++i) {
-      signal_to_plot.data.push_back({i + 1, so_far[i]});
-      estimate_to_plot.data.push_back({i, estimates[i]});
+      signal_to_plot.push_back({i + 1, so_far[i]});
+      estimate_to_plot.push_back({i, estimates[i]});
     }
 
     nc::viz::PlotParameters2D params;
     params.ranges = {fit_ranges};
-    nc::viz::PythonGrapher grapher(out);
-    grapher.PlotLine(params, {demand_to_plot, estimate_to_plot,
-                              leftover_demand_to_plot, signal_to_plot});
+    nc::viz::LinePlot plot(params);
+    plot.AddData("Demand", demand_to_plot);
+    plot.AddData("Short", leftover_demand_to_plot);
+    plot.AddData("Estimate", estimate_to_plot);
+    plot.AddData("Signal", signal_to_plot);
+    plot.PlotToDir(out);
   }
 
   return stats;

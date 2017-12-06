@@ -42,8 +42,9 @@ static void PlotDistribution(const std::string& metric,
     data_series.data.emplace_back(values[i], i);
   }
 
-  nc::viz::PythonGrapher grapher(out);
-  grapher.PlotLine({}, {data_series});
+  nc::viz::LinePlot plot;
+  plot.AddData(data_series);
+  plot.PlotToDir(out);
 }
 
 int main(int argc, char** argv) {

@@ -65,14 +65,11 @@ int main(int argc, char** argv) {
     }
   }
 
-  nc::viz::DataSeries1D data;
-  data.data = std::move(fractions);
-  nc::viz::PythonGrapher python_grapher(
-      nc::StrCat(FLAGS_output, "_rtt_fractions"));
-  python_grapher.PlotCDF({}, {data});
+  nc::viz::CDFPlot fractions_plot;
+  fractions_plot.AddData("", &fractions);
+  fractions_plot.PlotToDir(nc::StrCat(FLAGS_output, "_rtt_fractions"));
 
-  data.data = std::move(cluster_sizes);
-  python_grapher =
-      nc::viz::PythonGrapher(nc::StrCat(FLAGS_output, "_cluster_sizes"));
-  python_grapher.PlotCDF({}, {data});
+  nc::viz::CDFPlot cluster_sizes_plot;
+  cluster_sizes_plot.AddData("", &cluster_sizes);
+  cluster_sizes_plot.PlotToDir(nc::StrCat(FLAGS_output, "_cluster_sizes"));
 }

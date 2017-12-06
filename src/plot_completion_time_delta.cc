@@ -133,8 +133,9 @@ static void HandleAbsolute(const std::vector<std::string>& input_files,
     to_plot.emplace_back(data_series);
   }
 
-  nc::viz::PythonGrapher grapher("ct_plot_out");
-  grapher.PlotCDF({}, to_plot);
+  nc::viz::CDFPlot plot;
+  plot.AddData(to_plot);
+  plot.PlotToDir("ct_plot_out");
 }
 
 int main(int argc, char** argv) {
@@ -161,8 +162,8 @@ int main(int argc, char** argv) {
     to_plot.emplace_back(data_series);
   }
 
-  nc::viz::PythonGrapher grapher("ct_plot_out");
-  grapher.PlotCDF({}, to_plot);
-
+  nc::viz::CDFPlot plot;
+  plot.AddData(to_plot);
+  plot.PlotToDir("ct_plot_out");
   return 0;
 }

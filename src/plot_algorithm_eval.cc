@@ -481,8 +481,9 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
     for (size_t i = 0; i < optimizers.size(); ++i) {               \
       to_plot[i] = std::move(v);                                   \
     }                                                              \
-    nc::viz::PythonGrapher grapher(out);                           \
-    grapher.PlotLine({}, to_plot);                                 \
+    nc::viz::LinePlot plot;                                        \
+    plot.AddData(to_plot);                                         \
+    plot.PlotToDir(out);                                           \
   }
 
 #define PLOT1D(out, v)                                             \
@@ -491,8 +492,9 @@ static std::unique_ptr<Result> HandleSingleOptimizer(
     for (size_t i = 0; i < optimizers.size(); ++i) {               \
       to_plot[i] = std::move(v);                                   \
     }                                                              \
-    nc::viz::PythonGrapher grapher(out);                           \
-    grapher.PlotCDF({}, to_plot);                                  \
+    nc::viz::CDFPlot plot;                                         \
+    plot.AddData(to_plot);                                         \
+    plot.PlotToDir(out);                                           \
   }
 
 static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
@@ -510,8 +512,9 @@ static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
     to_plot.push_back({opt, xy});
   }
 
-  nc::viz::PythonGrapher grapher("total_delays");
-  grapher.PlotLine({}, to_plot);
+  nc::viz::LinePlot plot;
+  plot.AddData(to_plot);
+  plot.PlotToDir("total_delays");
 }
 
 // Returns a list of topology/tm pairs ordered by number of aggregates.
@@ -560,11 +563,10 @@ static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
     y_cached.emplace_back(runtime_data_cached_vector.front());
   }
 
-  std::vector<nc::viz::DataSeries1D> to_plot;
-  to_plot.push_back({"Regular", y_cached});
-  to_plot.push_back({"Cold run", y});
-  nc::viz::PythonGrapher grapher("runtime");
-  grapher.PlotCDF({}, to_plot);
+  nc::viz::CDFPlot plot;
+  plot.AddData("Regular", y_cached);
+  plot.AddData("Cold run", y);
+  plot.PlotToDir("runtime");
 }
 
 static void PlotLocality(const TMState& tm_state) {
@@ -586,14 +588,13 @@ static void PlotLocality(const TMState& tm_state) {
     delay_and_rate.second = total;
   }
 
-  nc::viz::PythonGrapher grapher(
-      nc::StrCat(FLAGS_output_prefix, "locality_plot"));
-
   nc::viz::PlotParameters2D params;
   params.title = "SP delay vs cumulative rate";
   params.x_label = "SP delay (ms)";
   params.y_label = "Total cumulative rate (Mbps)";
-  grapher.PlotLine(params, {{"", values}});
+  nc::viz::LinePlot plot(params);
+  plot.AddData("", values);
+  plot.PlotToDir(nc::StrCat(FLAGS_output_prefix, "locality_plot"));
 }
 
 int main(int argc, char** argv) {

@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
               << treeness_and_graph.second;
   }
 
-  nc::viz::PythonGrapher python_grapher("meshy_out");
-  python_grapher.PlotCDF({}, {{"treeness", treeness_fractions}});
+  nc::viz::CDFPlot plot;
+  plot.AddData("treeness", treeness_fractions);
+  plot.PlotToDir("meshy_out");
 }

@@ -1,8 +1,10 @@
 #include <gflags/gflags.h>
 #include <stddef.h>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
+#include <iostream>
+#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -13,13 +15,14 @@
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
 #include "ncode_common/src/lp/demand_matrix.h"
+#include "ncode_common/src/lp/lp.h"
 #include "ncode_common/src/net/algorithm.h"
 #include "ncode_common/src/net/net_common.h"
 #include "ncode_common/src/perfect_hash.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/substitute.h"
 #include "ncode_common/src/thread_runner.h"
-#include "opt/opt.h"
+#include "ncode_common/src/viz/grapher.h"
 #include "topology_input.h"
 
 DEFINE_string(output_pattern,
@@ -28,6 +31,9 @@ DEFINE_string(output_pattern,
               "pattern, with $0 replaced by the topology name, $1 replaced by "
               "locality, $2 replaced by scale factor and $3 replaced by a "
               "unique integer identifier.");
+DEFINE_string(stats_pattern,
+              "demand_matrices/scale_factor_$2/locality_$1/$0_$3_stats",
+              "Like above, but will store stats there");
 DEFINE_double(min_scale_factor, 1.3,
               "The generated matrix should be scaleable by at least this much "
               "without becoming unfeasible.");
@@ -37,6 +43,85 @@ DEFINE_uint64(seed, 1ul, "Seed for the generated TM.");
 DEFINE_uint64(tm_count, 1, "Number of TMs to generate.");
 DEFINE_uint64(threads, 2, "Number of threads to use.");
 
+using namespace std::chrono;
+
+static void PlotCDF(const std::string& output, const std::string& x_label,
+                    const std::string& title, const std::vector<double>& data) {
+  nc::viz::DataSeries1D series;
+  series.data = data;
+  nc::viz::PythonGrapher grapher(output);
+
+  nc::viz::PlotParameters1D params;
+  params.data_label = x_label;
+  params.title = title;
+  grapher.PlotCDF(params, {series});
+}
+
+static void PlotLine(const std::string& output, const std::string& x_label,
+                     const std::string& y_label, const std::string& title,
+                     const std::vector<std::pair<double, double>>& data) {
+  nc::viz::DataSeries2D series;
+  series.data = data;
+  nc::viz::PythonGrapher grapher(output);
+
+  nc::viz::PlotParameters2D params;
+  params.title = title;
+  params.x_label = x_label;
+  params.y_label = y_label;
+  grapher.PlotLine(params, {series});
+}
+
+static void PlotDemandStats(const nc::lp::DemandMatrix& demand_matrix,
+                            const std::string& topology_filename,
+                            const std::string& id) {
+  std::vector<double> demand_distances_ms;
+  std::vector<double> demand_sizes_Mbps;
+  std::vector<double> sp_utilizations;
+  std::vector<std::pair<double, double>> cumulative_distances;
+
+  const nc::net::GraphStorage* graph = demand_matrix.graph();
+  nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr, nullptr);
+  for (const auto& element : demand_matrix.elements()) {
+    double distance_ms =
+        duration_cast<milliseconds>(sp.GetDistance(element.src, element.dst))
+            .count();
+    double demand_Mbps = element.demand.Mbps();
+
+    demand_distances_ms.emplace_back(distance_ms);
+    demand_sizes_Mbps.emplace_back(demand_Mbps);
+    cumulative_distances.emplace_back(distance_ms, demand_Mbps);
+  }
+
+  std::sort(cumulative_distances.begin(), cumulative_distances.end());
+  double total = 0;
+  for (auto& distance_and_demand : cumulative_distances) {
+    double& demand = distance_and_demand.second;
+    total += demand;
+    demand = total;
+  }
+
+  nc::net::GraphLinkMap<double> utilizations = demand_matrix.SPUtilization();
+  for (const auto& link_and_utilization : utilizations) {
+    sp_utilizations.emplace_back(*link_and_utilization.second);
+  }
+
+  std::string output_location =
+      nc::Substitute(FLAGS_stats_pattern.c_str(), topology_filename,
+                     FLAGS_locality, FLAGS_min_scale_factor, id);
+  nc::File::RecursivelyCreateDir(output_location, 0777);
+  PlotCDF(nc::StrCat(output_location, "/demand_distances"), "distance (ms)",
+          "CDF of distances of demands\\' shortest paths", demand_distances_ms);
+  PlotCDF(nc::StrCat(output_location, "/sp_utilizations"), "link utilization",
+          "CDF of link utilizations when all aggregates are routed on the "
+          "shortest path",
+          sp_utilizations);
+  PlotCDF(nc::StrCat(output_location, "/demand_sizes"), "size (Mbps)",
+          "CDF of demands\\' volumes", demand_sizes_Mbps);
+  PlotLine(nc::StrCat(output_location, "/cumulative_demands"),
+           "SP distance (ms)", "Cumulative size (Mbps)",
+           "Cumulative distance vs aggregate size", cumulative_distances);
+}
+
 static void AddSumConstraints(
     const nc::net::GraphNodeMap<nc::net::Bandwidth>& demands,
     const nc::net::GraphNodeMap<std::vector<nc::lp::VariableIndex>>& vars,
@@ -44,7 +129,7 @@ static void AddSumConstraints(
     nc::lp::Problem* lp_problem) {
   for (const auto& node_and_demand : demands) {
     nc::net::GraphNodeIndex node = node_and_demand.first;
-    double demand_Mbps = *node_and_demand.second->Mbps();
+    double demand_Mbps = node_and_demand.second->Mbps();
 
     nc::lp::ConstraintIndex constraint = lp_problem->AddConstraint();
     lp_problem->SetConstraintRange(constraint, demand_Mbps, demand_Mbps);
@@ -63,18 +148,23 @@ std::unique_ptr<nc::lp::DemandMatrix> LPDemandGenerate(
   nc::net::GraphNodeMap<nc::net::Bandwidth> demand_in;
   nc::net::GraphNodeMap<std::vector<nc::lp::VariableIndex>> vars_in;
   nc::net::GraphNodeMap<std::vector<nc::lp::VariableIndex>> vars_out;
+  std::map<std::pair<nc::net::GraphNodeIndex, nc::net::GraphNodeIndex>,
+           nc::lp::VariableIndex> all_vars;
 
   const nc::net::GraphStorage* graph = seed_matrix.graph();
   nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr, nullptr);
 
   nc::lp::Problem lp_problem(nc::lp::MINIMIZE);
   for (const auto& element : seed_matrix.elements()) {
-    demand_out[element.src] += element.demand;
-    demand_in[element.dst] += element.demand;
+    nc::net::GraphNodeIndex src = element.src;
+    nc::net::GraphNodeIndex dst = element.dst;
+
+    demand_out[src] += element.demand;
+    demand_in[dst] += element.demand;
 
     nc::lp::VariableIndex var = lp_problem.AddVariable();
-    vars_out[element.src].emplace_back(var);
-    vars_in[element.dst].emplace_back(var);
+    vars_out[src].emplace_back(var);
+    vars_in[dst].emplace_back(var);
 
     double element_demand = element.demand.Mbps();
     double min = element_demand * (1 - fraction_allowance);
@@ -84,11 +174,28 @@ std::unique_ptr<nc::lp::DemandMatrix> LPDemandGenerate(
 
     double obj_c = sp.GetDistance(element.src, element.dst).count();
     lp_problem.SetObjectiveCoefficient(var, obj_c * element_demand);
+    all_vars[std::make_pair(src, dst)] = var;
   }
 
   std::vector<nc::lp::ProblemMatrixElement> problem_matrix;
   AddSumConstraints(demand_in, vars_in, &problem_matrix, &lp_problem);
   AddSumConstraints(demand_out, vars_out, &problem_matrix, &lp_problem);
+  lp_problem.SetMatrix(problem_matrix);
+
+  std::unique_ptr<nc::lp::Solution> solution = lp_problem.Solve();
+  CHECK(solution->type() == nc::lp::OPTIMAL ||
+        solution->type() == nc::lp::FEASIBLE);
+
+  std::vector<nc::lp::DemandMatrixElement> new_elements;
+  for (const auto& src_and_dst_and_var : all_vars) {
+    nc::net::GraphNodeIndex src = src_and_dst_and_var.first.first;
+    nc::net::GraphNodeIndex dst = src_and_dst_and_var.first.second;
+    double demand_Mbps = solution->VariableValue(src_and_dst_and_var.second);
+    new_elements.emplace_back(
+        src, dst, nc::net::Bandwidth::FromMBitsPerSecond(demand_Mbps));
+  }
+
+  return nc::make_unique<nc::lp::DemandMatrix>(new_elements, graph);
 }
 
 // Generates a DemandMatrix using a scheme based on Roughan's '93 CCR paper. The
@@ -112,8 +219,8 @@ class DemandGenerator {
   }
 
   // Produces a demand matrix. The matrix is not guaranteed to the satisfiable.
-  std::unique_ptr<nc::lp::DemandMatrix> SinglePass(nc::net::Bandwidth mean,
-                                                   std::mt19937* rnd) const {
+  std::unique_ptr<nc::lp::DemandMatrix> Generate(nc::net::Bandwidth mean,
+                                                 std::mt19937* rnd) const {
     // Will start by getting the total incoming/outgoing traffic at each node.
     // These will come from an exponential distribution with the given mean.
     std::exponential_distribution<double> dist(1.0 / mean.Mbps());
@@ -159,107 +266,6 @@ class DemandGenerator {
     return nc::make_unique<nc::lp::DemandMatrix>(elements, graph_);
   }
 
-  // Like above, but for a single source.
-  static std::unique_ptr<nc::lp::DemandMatrix> LocalizeSource(
-      nc::net::GraphNodeIndex src_node, const nc::lp::DemandMatrix& matrix,
-      double locality) {
-    // Need to first get the current distribution.
-    std::vector<nc::lp::DemandMatrixElement> new_demands;
-    nc::net::Bandwidth total_demand = nc::net::Bandwidth::Zero();
-    nc::net::GraphNodeMap<nc::net::Bandwidth> demands;
-    for (const auto& element : matrix.elements()) {
-      if (element.src != src_node) {
-        // All other demands are copied over to the output.
-        new_demands.emplace_back(element);
-        continue;
-      }
-
-      demands[element.dst] += element.demand;
-      total_demand += element.demand;
-    }
-
-    if (total_demand == nc::net::Bandwidth::Zero()) {
-      // No demand coming out of the source.
-      return nc::make_unique<nc::lp::DemandMatrix>(new_demands, matrix.graph());
-    }
-
-    // Now figure out what the distribution entirely based on locality would be.
-    const nc::net::GraphStorage* graph = matrix.graph();
-    nc::net::GraphNodeSet to = graph->AllNodes();
-    to.Remove(src_node);
-
-    nc::net::ShortestPath sp_tree(src_node, to, {}, graph->AdjacencyList(),
-                                  nullptr, nullptr);
-    double sum_delays_inverse = 0;
-    for (nc::net::GraphNodeIndex dst : to) {
-      nc::net::Delay delay = sp_tree.GetPathDistance(dst);
-      sum_delays_inverse += 1.0 / delay.count();
-    }
-
-    nc::net::GraphNodeMap<double> local_probabilities;
-    for (nc::net::GraphNodeIndex dst : to) {
-      nc::net::Delay delay = sp_tree.GetPathDistance(dst);
-      local_probabilities[dst] = 1.0 / (delay.count() * sum_delays_inverse);
-    }
-
-    // Now to get the mixture distribution.
-    double total_p = 0;
-    for (nc::net::GraphNodeIndex dst : to) {
-      double current_p = demands[dst] / total_demand;
-      double local_p = local_probabilities.GetValueOrDie(dst);
-      double new_p = current_p * (1 - locality) + locality * local_p;
-      total_p += new_p;
-      new_demands.emplace_back(src_node, dst, total_demand * new_p);
-    }
-    CHECK(std::abs(total_p - 1.0) < 0.0001) << "Not a distribution " << total_p;
-
-    return nc::make_unique<nc::lp::DemandMatrix>(new_demands, graph);
-  }
-
-  // Makes a demand matrix more local. If locality is 0 demands are not changed
-  // if locality is 1. All traffic coming out of a node will be distributed
-  // inversely proportional to SP delay from node to other nodes.
-  static std::unique_ptr<nc::lp::DemandMatrix> Localize(
-      const nc::lp::DemandMatrix& matrix, double locality) {
-    std::unique_ptr<nc::lp::DemandMatrix> out;
-    for (const auto& element : matrix.elements()) {
-      if (out) {
-        out = LocalizeSource(element.src, *out, locality);
-      } else {
-        out = LocalizeSource(element.src, matrix, locality);
-      }
-    }
-
-    return out;
-  }
-
-  // Makes a demand matrix more local. Unlike Localize() this one preserves both
-  // traffic going into a node and traffic leaving a node.
-  static std::unique_ptr<nc::lp::DemandMatrix> LocalizeBoth(
-      const nc::lp::DemandMatrix& matrix, double locality) {}
-
-  // Returns a random matrix with the given commodity scale factor. Will
-  // repeatedly call SinglePass to generate a series of matrices with the
-  // highest mean rate that the commodity scale factor allows.
-  std::unique_ptr<nc::lp::DemandMatrix> Generate(double commodity_scale_factor,
-                                                 double locality,
-                                                 std::mt19937* rnd) const {
-    CHECK(commodity_scale_factor >= 1.0);
-    CHECK(locality >= 0);
-    CHECK(locality <= 1);
-
-    auto demand_matrix =
-        SinglePass(nc::net::Bandwidth::FromGBitsPerSecond(1), rnd);
-    demand_matrix = Localize(*demand_matrix, locality);
-    double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
-    CHECK(csf != 0);
-    CHECK(csf == csf);
-    demand_matrix = demand_matrix->Scale(csf);
-    demand_matrix = demand_matrix->Scale(1.0 / commodity_scale_factor);
-    LOG(INFO) << "M " << csf;
-    return demand_matrix;
-  }
-
  private:
   // For the locality constraints will also need the delays of the N*(N-1)
   // shortest paths in the graph.
@@ -290,13 +296,14 @@ void ProcessMatrix(const Input& input) {
   DemandGenerator generator(input.first->graph.get());
   std::mt19937 gen(FLAGS_seed + id);
   auto demand_matrix =
-      generator.Generate(FLAGS_min_scale_factor, FLAGS_locality, &gen);
-
-  // Will ignore all aggregates less than 1Mbps.
-  //  demand_matrix =
-  //      demand_matrix->Filter([](const nc::lp::DemandMatrixElement& element) {
-  //        return element.demand < nc::net::Bandwidth::FromMBitsPerSecond(1);
-  //      });
+      generator.Generate(nc::net::Bandwidth::FromGBitsPerSecond(1), &gen);
+  demand_matrix = LPDemandGenerate(*demand_matrix, FLAGS_locality);
+  double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
+  CHECK(csf != 0);
+  CHECK(csf == csf);
+  demand_matrix = demand_matrix->Scale(csf);
+  demand_matrix = demand_matrix->Scale(1.0 / FLAGS_min_scale_factor);
+  PlotDemandStats(*demand_matrix, topology_filename, std::to_string(id));
 
   std::string output_location =
       nc::Substitute(FLAGS_output_pattern.c_str(), topology_filename,

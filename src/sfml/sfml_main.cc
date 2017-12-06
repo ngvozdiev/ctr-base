@@ -436,9 +436,12 @@ int main() {
   QueueBytesSeenMonitor monitor_three(frankfurt_vienna_queue,
                                       &vlink_frankfurt_vienna, &event_queue);
 
-  ctr::sfml::Node budapest_node(30, budapest_location, node_style);
-  ctr::sfml::Node vienna_node(30, vienna_location, node_style);
-  ctr::sfml::Node frankfurt_node(30, frankfurt_location, node_style);
+  auto budapest_node = nc::make_unique<ctr::sfml::Node>(30, node_style);
+  budapest_node->MoveTo(budapest_location);
+  auto vienna_node = nc::make_unique<ctr::sfml::Node>(30, node_style);
+  vienna_node->MoveTo(vienna_location);
+  auto frankfurt_node = nc::make_unique<ctr::sfml::Node>(30, node_style);
+  frankfurt_node->MoveTo(frankfurt_location);
 
   // Each node will have a text label.
   sf::Text budapest_label =
@@ -519,10 +522,20 @@ int main() {
       },
       &animation_container);
 
+  ctr::sfml::MouseState mouse_state;
+  ctr::sfml::SceneGraphRoot scene_graph_root;
+  scene_graph_root.AddChild(std::move(vienna_node));
+  scene_graph_root.AddChild(std::move(frankfurt_node));
+  scene_graph_root.AddChild(std::move(budapest_node));
+  scene_graph_root.MoveTo(sf::Vector2f(100, 0));
+
   double step = 0.1;
   sf::Clock clock;
   while (window.isOpen()) {
     sf::Event event;
+    mouse_state.Update(window);
+    scene_graph_root.UpdateMouseAll(mouse_state);
+
     while (window.pollEvent(event)) {
       if (event.type == sf::Event::Closed) {
         window.close();
@@ -562,15 +575,13 @@ int main() {
 
     window.setView(view);
     window.clear(sf::Color::White);
+    scene_graph_root.DrawAll(&window);
     window.draw(vlink_budapest_frankfurt);
     window.draw(vlink_budapest_vienna);
     window.draw(vlink_frankfurt_vienna);
     window.draw(budapest_label);
     window.draw(vienna_label);
     window.draw(frankfurt_label);
-    window.draw(budapest_node);
-    window.draw(vienna_node);
-    window.draw(frankfurt_node);
     window.draw(frankfurt_gauge);
     window.draw(budapest_gauge);
     window.draw(*up_arrow);

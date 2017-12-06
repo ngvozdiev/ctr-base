@@ -130,8 +130,9 @@ class SingleMetricProcessor : public MetricProcessor {
 
 static void PlotCDF(const std::vector<nc::viz::DataSeries1D>& to_plot,
                     const std::string& output) {
-  nc::viz::PythonGrapher volume_plotter(output);
-  volume_plotter.PlotCDF({}, to_plot);
+  nc::viz::CDFPlot plot;
+  plot.AddData(to_plot);
+  plot.PlotToDir(output);
 }
 
 int main(int argc, char** argv) {

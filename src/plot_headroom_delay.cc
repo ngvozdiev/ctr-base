@@ -125,14 +125,17 @@ static void PlotValues() {
     y_max.emplace_back(i, std::get<2>(values[i]));
   }
 
-  nc::viz::PythonGrapher grapher(
-      nc::Substitute(FLAGS_output_pattern.c_str(), FLAGS_at_link_multiplier));
   nc::viz::PlotParameters2D params;
   params.title = nc::StrCat("Total delay multiplier at link multiplier ",
                             FLAGS_at_link_multiplier);
   params.x_label = "topology (ranked by median delay multiplier)";
   params.y_label = "total delay multiplier";
-  grapher.PlotLine(params, {{"median", y_median}, {"max", y_max}});
+
+  nc::viz::LinePlot plot(params);
+  plot.AddData("median", y_median);
+  plot.AddData("max", y_max);
+  plot.PlotToDir(
+      nc::Substitute(FLAGS_output_pattern.c_str(), FLAGS_at_link_multiplier));
 }
 
 int main(int argc, char** argv) {

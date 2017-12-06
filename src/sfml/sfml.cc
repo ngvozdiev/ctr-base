@@ -487,13 +487,11 @@ void VisualLink::draw(sf::RenderTarget& target, sf::RenderStates states) const {
   target.draw(base_line_, states);
 }
 
-Node::Node(float radius, sf::Vector2f location, const NodeStyle& style)
-    : circle_(radius) {
+Node::Node(float radius, const NodeStyle& style) : circle_(radius) {
   circle_.setFillColor(style.fill);
   circle_.setOutlineColor(style.outline);
   circle_.setOutlineThickness(style.outline_thickness);
-
-  circle_.setPosition(location.x - radius, location.y - radius);
+  circle_.setPosition(-radius, -radius);
 }
 
 CircleGauge::CircleGauge(const std::string& annotation,
@@ -572,6 +570,19 @@ void CircleGauge::Update(size_t value) {
   float label_h = label_.getLocalBounds().height;
   label_.setPosition(radius - label_w / 2, -2 * label_h);
   label_.setFillColor(sf::Color(0, 0, 0, 255 * opacity_));
+}
+
+bool Node::PrivateIsMouseOver(const sf::Transform& parent_transform,
+                              sf::Vector2f location) const {
+  sf::Vector2f new_center = parent_transform.transformPoint(location);
+
+  // Need to offset by the radius.
+  new_center.x -= circle_.getRadius();
+  new_center.y -= circle_.getRadius();
+
+  float r = circle_.getRadius();
+  float distance = LinearDistance(new_center, location);
+  return distance <= r;
 }
 
 }  // namespace sfml

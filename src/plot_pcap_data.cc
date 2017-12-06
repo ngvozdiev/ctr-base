@@ -16,7 +16,7 @@ DEFINE_string(traces, "", "Traces to plot, if empty will plot all traces");
 
 using namespace std::chrono;
 
-//static std::vector<double> Bin(const std::vector<double>& data,
+// static std::vector<double> Bin(const std::vector<double>& data,
 //                               size_t bin_size) {
 //  size_t max_count = (data.size() / bin_size) * bin_size;
 //
@@ -34,7 +34,7 @@ using namespace std::chrono;
 //  return out;
 //}
 //
-//static std::vector<std::pair<double, double>> AllanVariance(
+// static std::vector<std::pair<double, double>> AllanVariance(
 //    const std::vector<double>& data) {
 //  std::vector<std::pair<double, double>> out;
 //  for (size_t bin_size = 1; bin_size < data.size() / 2; ++bin_size) {
@@ -79,15 +79,16 @@ static void PlotTrace(const std::string& trace_id,
   }
   to_plot.label = trace_id;
 
-  nc::viz::PythonGrapher grapher(nc::StrCat("binned_trace_", trace_id));
-  grapher.PlotLine({}, {to_plot});
+  nc::viz::LinePlot plot;
+  plot.AddData(to_plot);
+  plot.PlotToDir(nc::StrCat("binned_trace_", trace_id));
 
-//  std::vector<double> per_ms_bins =
-//      BinTrace(bin_sequence, milliseconds(10), cache);
-//  to_plot.data = AllanVariance(per_ms_bins);
-//
-//  nc::viz::PythonGrapher av_grapher(nc::StrCat("av_trace_", trace_id));
-//  av_grapher.PlotLine({}, {to_plot});
+  //  std::vector<double> per_ms_bins =
+  //      BinTrace(bin_sequence, milliseconds(10), cache);
+  //  to_plot.data = AllanVariance(per_ms_bins);
+  //
+  //  nc::viz::PythonGrapher av_grapher(nc::StrCat("av_trace_", trace_id));
+  //  av_grapher.PlotLine({}, {to_plot});
 }
 
 static std::vector<nc::SummaryStats> ProcessTrace(
@@ -151,10 +152,13 @@ int main(int argc, char** argv) {
     vars_to_plot.emplace_back(var_data_series);
   }
 
-  nc::viz::PythonGrapher delta_grapher("pcap_data_plot_deltas");
-  delta_grapher.PlotCDF({}, deltas_to_plot);
+  nc::viz::CDFPlot deltas_plot;
+  deltas_plot.AddData(deltas_to_plot);
+  deltas_plot.PlotToDir("pcap_data_plot_deltas");
 
-  nc::viz::PythonGrapher var_grapher("pcap_data_plot_vars");
-  var_grapher.PlotLine({}, vars_to_plot);
+  nc::viz::LinePlot vars_plot;
+  vars_plot.AddData(vars_to_plot);
+  vars_plot.PlotToDir("pcap_data_plot_vars");
+
   return 0;
 }
