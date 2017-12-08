@@ -70,8 +70,9 @@ class StabilityEvalHarness {
     params.x_label = "timestep";
     params.y_label = "fraction";
 
-    nc::viz::PythonGrapher grapher(out);
-    grapher.PlotLine(params, series);
+    nc::viz::LinePlot plot(params);
+    plot.AddData(series);
+    plot.PlotToDir(out);
   }
 
   void DumpLinkFractions() const {

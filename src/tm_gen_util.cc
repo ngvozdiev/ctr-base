@@ -49,12 +49,13 @@ static void PlotCDF(const std::string& output, const std::string& x_label,
                     const std::string& title, const std::vector<double>& data) {
   nc::viz::DataSeries1D series;
   series.data = data;
-  nc::viz::PythonGrapher grapher(output);
 
   nc::viz::PlotParameters1D params;
   params.data_label = x_label;
   params.title = title;
-  grapher.PlotCDF(params, {series});
+  nc::viz::CDFPlot plot(params);
+  plot.AddData(series);
+  plot.PlotToDir(output);
 }
 
 static void PlotLine(const std::string& output, const std::string& x_label,
@@ -62,13 +63,14 @@ static void PlotLine(const std::string& output, const std::string& x_label,
                      const std::vector<std::pair<double, double>>& data) {
   nc::viz::DataSeries2D series;
   series.data = data;
-  nc::viz::PythonGrapher grapher(output);
 
   nc::viz::PlotParameters2D params;
   params.title = title;
   params.x_label = x_label;
   params.y_label = y_label;
-  grapher.PlotLine(params, {series});
+  nc::viz::LinePlot plot(params);
+  plot.AddData(series);
+  plot.PlotToDir(output);
 }
 
 static void PlotDemandStats(const nc::lp::DemandMatrix& demand_matrix,

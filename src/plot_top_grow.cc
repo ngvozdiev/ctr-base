@@ -94,13 +94,14 @@ static void PlotMetric(const std::string& metric, const std::string& title,
     to_plot.emplace_back(data_series);
   }
 
-  nc::viz::PythonGrapher grapher(nc::StrCat("top_grow_", metric, "_new_links_",
-                                            new_links, "_thres_",
-                                            FLAGS_change_threshold));
+  std::string out = nc::StrCat("top_grow_", metric, "_new_links_", new_links,
+                               "_thres_", FLAGS_change_threshold);
   nc::viz::PlotParameters1D params;
   params.title =
       nc::StrCat(title, " delay change at least ", FLAGS_change_threshold);
-  grapher.PlotCDF(params, to_plot);
+  nc::viz::CDFPlot plot(params);
+  plot.AddData(to_plot);
+  plot.PlotToDir(out);
 }
 
 static void PlotStretch(const std::string& metric, double multiplier,
@@ -120,11 +121,11 @@ static void PlotStretch(const std::string& metric, double multiplier,
     to_plot.emplace_back(data_series);
   }
 
-  nc::viz::PythonGrapher grapher(
-      nc::StrCat("top_grow_", metric, "_new_links_", new_links));
   nc::viz::PlotParameters2D params;
   params.title = title;
-  grapher.PlotLine(params, to_plot);
+  nc::viz::LinePlot plot(params);
+  plot.AddData(to_plot);
+  plot.PlotToDir(nc::StrCat("top_grow_", metric, "_new_links_", new_links));
 }
 
 static std::tuple<nc::viz::DataSeries2D, nc::viz::DataSeries2D,
@@ -252,25 +253,30 @@ static void PlotLinks(const std::string& field, bool new_links) {
     total_delay_series.emplace_back(total_delay_data);
   }
 
-  nc::viz::PythonGrapher increase_grapher(
+  nc::viz::LinePlot increase_plot;
+  increase_plot.AddData(increase_series);
+  increase_plot.PlotToDir(
       nc::StrCat("top_grow_links_ranked_increase_new_links_", new_links));
-  increase_grapher.PlotLine({}, increase_series);
 
-  nc::viz::PythonGrapher decrease_grapher(
+  nc::viz::LinePlot decrease_plot;
+  decrease_plot.AddData(decrease_series);
+  decrease_plot.PlotToDir(
       nc::StrCat("top_grow_links_ranked_decrease_new_links_", new_links));
-  decrease_grapher.PlotLine({}, decrease_series);
 
-  nc::viz::PythonGrapher total_grapher(
+  nc::viz::LinePlot total_plot;
+  total_plot.AddData(total_series);
+  total_plot.PlotToDir(
       nc::StrCat("top_grow_links_ranked_total_new_links_", new_links));
-  total_grapher.PlotLine({}, total_series);
 
-  nc::viz::PythonGrapher ld_grapher(
+  nc::viz::LinePlot ld_plot;
+  ld_plot.AddData(link_delay_series);
+  ld_plot.PlotToDir(
       nc::StrCat("top_grow_links_ranked_link_delay_new_links_", new_links));
-  ld_grapher.PlotLine({}, link_delay_series);
 
-  nc::viz::PythonGrapher td_grapher(
+  nc::viz::LinePlot td_plot;
+  td_plot.AddData(total_delay_series);
+  td_plot.PlotToDir(
       nc::StrCat("top_grow_links_ranked_total_abs_new_links_", new_links));
-  td_grapher.PlotLine({}, total_delay_series);
 }
 
 int main(int argc, char** argv) {
