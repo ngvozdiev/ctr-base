@@ -21,7 +21,9 @@ DEFINE_string(
 DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_uint64(tm_per_topology, std::numeric_limits<uint64_t>::max(),
               "How many TMs to choose for each topology");
-DEFINE_uint64(seed, 1, "Seed used when choosing TMs for each topology");
+DEFINE_uint64(seed, 1,
+              "Seed used when choosing TMs for each topology. Set to 0 to "
+              "disable random choice of TMs.");
 
 using namespace std::chrono;
 
@@ -84,7 +86,10 @@ GetDemandMatrixInputs() {
                                        std::move(demand_matrix));
     }
 
-    std::shuffle(inputs_for_topology.begin(), inputs_for_topology.end(), rnd);
+    if (FLAGS_seed != 0) {
+      std::shuffle(inputs_for_topology.begin(), inputs_for_topology.end(), rnd);
+    }
+
     inputs_for_topology.resize(
         std::min(inputs_for_topology.size(),
                  static_cast<size_t>(FLAGS_tm_per_topology)));
