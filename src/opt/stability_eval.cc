@@ -286,8 +286,8 @@ int main(int argc, char** argv) {
 
     for (const std::string& matrix_file : matrix_files) {
       LOG(INFO) << "Processing " << topology_file << " : " << matrix_file;
-      auto demand_matrix = nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(matrix_file), nodes_in_order, &graph);
+      auto demand_matrix = nc::lp::DemandMatrix::LoadRepetitaFileOrDie(
+          matrix_file, nodes_in_order, &graph);
       ctr::TrafficMatrix traffic_matrix(*demand_matrix,
                                         GetFlowCountMap(*demand_matrix));
 

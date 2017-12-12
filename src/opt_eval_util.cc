@@ -81,6 +81,19 @@ static auto* ctr_runtime_cached_ms =
             "ctr_runtime_cached_ms", "How long it took CTR to run (cached)",
             "Topology", "Traffic matrix");
 
+static auto* ctr_spa_runtime_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string>(
+            "ctr_spa_runtime_ms", "How long it took CTR to run (SPA)",
+            "Topology", "Traffic matrix");
+
+static auto* ctr_spa_runtime_cached_ms =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<uint64_t, std::string, std::string>(
+            "ctr_spa_runtime_cached_ms",
+            "How long it took CTR to run (cached, SPA)", "Topology",
+            "Traffic matrix");
+
 static auto* tm_scale_factor =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string>(
@@ -290,6 +303,9 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   PathProvider path_provider(graph);
   CTROptimizer ctr_optimizer(&path_provider, 1.0, false, false);
   CTROptimizer ctr_optimizer_no_flow_counts(&path_provider, 1.0, false, true);
+  CTROptimizer ctr_optimizer_spa(&path_provider, 1.0, false, false);
+  ctr_optimizer_spa.ForceSinglePathAggregates();
+
   MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
   MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
   MinMaxPathBasedOptimizer minmax_ksp_optimizer(&path_provider, 1.0, true, 10);
@@ -298,12 +314,20 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   auto ctr_start = high_resolution_clock::now();
   routing = ctr_optimizer.Optimize(*tm);
   auto ctr_duration = high_resolution_clock::now() - ctr_start;
-
   RecordRoutingConfig(top_file, tm_file, "CTR", *routing);
 
   ctr_start = high_resolution_clock::now();
   ctr_optimizer.Optimize(*tm);
   auto ctr_cached_duration = high_resolution_clock::now() - ctr_start;
+
+  ctr_start = high_resolution_clock::now();
+  routing = ctr_optimizer_spa.Optimize(*tm);
+  auto ctr_spa_duration = high_resolution_clock::now() - ctr_start;
+  RecordRoutingConfig(top_file, tm_file, "CTRSPA", *routing);
+
+  ctr_start = high_resolution_clock::now();
+  ctr_optimizer_spa.Optimize(*tm);
+  auto ctr_spa_cached_duration = high_resolution_clock::now() - ctr_start;
 
   routing = ctr_optimizer_no_flow_counts.Optimize(*tm);
   RecordRoutingConfig(top_file, tm_file, "CTRNFC", *routing);
@@ -324,6 +348,12 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   handle->AddValue(duration_cast<milliseconds>(ctr_duration).count());
   handle = ctr_runtime_cached_ms->GetHandle(top_file, tm_file);
   handle->AddValue(duration_cast<milliseconds>(ctr_cached_duration).count());
+
+  handle = ctr_spa_runtime_ms->GetHandle(top_file, tm_file);
+  handle->AddValue(duration_cast<milliseconds>(ctr_spa_duration).count());
+  handle = ctr_spa_runtime_cached_ms->GetHandle(top_file, tm_file);
+  handle->AddValue(
+      duration_cast<milliseconds>(ctr_spa_cached_duration).count());
 }
 
 }  // namespace ctr

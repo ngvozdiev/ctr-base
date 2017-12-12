@@ -119,9 +119,8 @@ int main(int argc, char** argv) {
       trace_store.AllTracesExcept(filter), {milliseconds(0)});
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
-          &graph);
+      nc::lp::DemandMatrix::LoadRepetitaFileOrDie(FLAGS_traffic_matrix,
+                                                  node_order, &graph);
   demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
   // The bin cache.

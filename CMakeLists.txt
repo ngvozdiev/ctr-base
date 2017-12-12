@@ -74,7 +74,10 @@ add_library(topology_input src/topology_input.cc)
 target_link_libraries(topology_input ncode gflags)
 
 add_library(demand_matrix_input src/demand_matrix_input.cc)
-target_link_libraries(demand_matrix_input topology_input gflags)
+target_link_libraries(demand_matrix_input ncode gflags)
+
+add_library(plot_algorithm_eval_tools src/plot_algorithm_eval_tools.cc)
+target_link_libraries(plot_algorithm_eval_tools metrics_parser)
 
 PROTOBUF_GENERATE_CPP(PCAP_DATA_PROTO_SRCS PCAP_DATA_PROTO_HDRS src/pcap_data.proto)
 set(CTR_BASE_HEADER_FILES src/opt/opt.h src/opt/path_provider.h src/common.h src/opt/ctr.h src/opt/oversubscription_model.h src/pcap_data.h ${PCAP_DATA_PROTO_HDRS} src/prob_model/dist_model.h src/prob_model/multi_rate_queue.h src/mean_est/mean_est.h src/routing_system.h src/net_mock.h src/tldr.h src/controller.h src/net_instrument.h)
@@ -135,6 +138,9 @@ target_link_libraries(tm_gen_util topology_input ctr_base gflags)
 add_executable(tm_stat src/tm_stat.cc)
 target_link_libraries(tm_stat demand_matrix_input ncode gflags)
 
+add_executable(algorithm_stat src/algorithm_stat.cc)
+target_link_libraries(algorithm_stat demand_matrix_input plot_algorithm_eval_tools gflags)
+
 add_executable(meshy_util src/meshy_util.cc)
 target_link_libraries(meshy_util ctr_base gflags)
 
@@ -148,7 +154,7 @@ add_executable(plot_queue_size_dist src/plot_queue_size_dist.cc)
 target_link_libraries(plot_queue_size_dist metrics_parser ctr_base gflags)
 
 add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
-target_link_libraries(plot_algorithm_eval metrics_parser gflags)
+target_link_libraries(plot_algorithm_eval plot_algorithm_eval_tools gflags)
 
 add_executable(plot_stability_eval src/plot_stability_eval.cc)
 target_link_libraries(plot_stability_eval metrics_parser gflags)

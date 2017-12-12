@@ -82,6 +82,7 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ProportionalFromDemandMatrix(
   // Will assign flow counts so that the max bandwidth aggregate has
   // kTopAggregateFlowCount, and all other aggregates proportionally less.
   std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
+  std::vector<double> counts;
   for (const auto& element : demand_matrix.elements()) {
     size_t flow_count =
         top_aggregate_flow_count * (element.demand / max_demand);
@@ -89,6 +90,7 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ProportionalFromDemandMatrix(
 
     AggregateId id(element.src, element.dst);
     demands_and_counts[id] = {element.demand, flow_count};
+    counts.emplace_back(flow_count);
   }
 
   return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),

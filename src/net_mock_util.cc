@@ -165,9 +165,8 @@ int main(int argc, char** argv) {
   nc::net::GraphStorage graph(builder);
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
-          &graph);
+      nc::lp::DemandMatrix::LoadRepetitaFileOrDie(FLAGS_traffic_matrix,
+                                                  node_order, &graph);
   demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
   nc::net::Delay diameter = graph.Stats().sp_delay_percentiles.back();

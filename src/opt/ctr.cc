@@ -271,8 +271,9 @@ double CTROptimizer::OptimizePrivate(
     }
 
     CTROptimizerPass pass(
-        link_capacity_multiplier_, ignore_flow_counts_, &input, &path_map_,
-        graph_, use_previous && previous_ ? previous_.get() : nullptr);
+        link_capacity_multiplier_, ignore_flow_counts_,
+        force_single_path_aggregates_, &input, &path_map_, graph_,
+        use_previous && previous_ ? previous_.get() : nullptr);
     RunOutput& run_output = pass.run_output();
     double obj_value = run_output.obj_value;
     CHECK(obj_value != std::numeric_limits<double>::max());
@@ -464,8 +465,19 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
       total_cap += path_cap;
 
       // Each path in each aggregate will have a variable associated with it.
-      VariableIndex variable = problem.AddVariable();
-      problem.SetVariableRange(variable, 0, path_cap);
+      VariableIndex variable;
+      if (force_single_path_aggregates_) {
+        if (path_cap == 1.0) {
+          variable = problem.AddVariable(true);
+        } else {
+          variable = problem.AddVariable();
+          problem.SetVariableRange(variable, 0, 0);
+        }
+
+      } else {
+        variable = problem.AddVariable();
+        problem.SetVariableRange(variable, 0, path_cap);
+      }
 
       // The cost is path delay.
       double cost = PathCostUnrounded(path);
@@ -572,6 +584,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
         problem_matrix.size(), total_paths, total_single_aggregate_paths,
         frozen_aggregates_.size());
     problem.DumpToFile("out.lp");
+    LOG(INFO) << "Problem stored in out.lp";
   }
 
   std::unique_ptr<Solution> solution = problem.Solve();
@@ -743,6 +756,7 @@ double CTROptimizerPass::OptimizeMinLinkOversubscription() {
 
 CTROptimizerPass::CTROptimizerPass(double link_capacity_multiplier,
                                    bool ignore_flow_counts,
+                                   bool force_single_path_aggregates,
                                    const TrafficMatrix* input,
                                    const CTRPathMap* paths,
                                    const nc::net::GraphStorage* graph,
@@ -753,7 +767,8 @@ CTROptimizerPass::CTROptimizerPass(double link_capacity_multiplier,
       latest_run_max_oversubscription_(0),
       base_solution_(base_solution),
       link_capacity_multiplier_(link_capacity_multiplier),
-      ignore_flow_counts_(ignore_flow_counts) {
+      ignore_flow_counts_(ignore_flow_counts),
+      force_single_path_aggregates_(force_single_path_aggregates) {
   initial_obj_ = 0;
   initial_oversubscription_ = 0;
   CHECK(paths_->size() == input_->demands().size()) << "Inconsistent path map "

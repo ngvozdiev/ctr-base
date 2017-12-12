@@ -11,7 +11,7 @@
 #include "ncode_common/src/perfect_hash.h"
 #include "ncode_common/src/strutil.h"
 
-DEFINE_string(topology_files, "", "Topology files");
+DEFINE_string(topology_root, "", "Root for topologies. Required.");
 DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
 DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_uint64(topology_size_limit, 100000,
@@ -21,15 +21,12 @@ DEFINE_uint64(topology_delay_limit_ms, 10,
 
 namespace ctr {
 
-static std::vector<std::string> GetTopologyFiles() {
-  std::vector<std::string> out;
-  std::vector<std::string> split = nc::Split(FLAGS_topology_files, ",");
-  for (const std::string& piece : split) {
-    std::vector<std::string> files = nc::Glob(piece);
-    out.insert(out.end(), files.begin(), files.end());
-  }
+static constexpr char kTopologyExtension[] = ".graph";
 
-  return out;
+static std::vector<std::string> GetTopologyFiles() {
+  std::string top_root = FLAGS_topology_root;
+  CHECK(top_root != "");
+  return nc::File::GetFilesWithExtension(top_root, kTopologyExtension);
 }
 
 std::vector<TopologyAndFilename> GetTopologyInputs() {

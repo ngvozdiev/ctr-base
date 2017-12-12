@@ -33,6 +33,7 @@ struct RunOutput {
 class CTROptimizerPass {
  public:
   CTROptimizerPass(double link_capacity_multiplier, bool ignore_flow_counts,
+                   bool force_single_path_aggregates,
                    const TrafficMatrix* input, const CTRPathMap* paths,
                    const nc::net::GraphStorage* graph,
                    const RoutingConfiguration* base_solution);
@@ -105,6 +106,9 @@ class CTROptimizerPass {
   // If true will treat all aggregates the same, irrespective of their flow
   // count.
   bool ignore_flow_counts_;
+
+  // If true all aggregates' variables will be binary.
+  bool force_single_path_aggregates_;
 };
 
 class CTROptimizer : public Optimizer {
@@ -114,7 +118,8 @@ class CTROptimizer : public Optimizer {
       : Optimizer(path_provider),
         add_limits_(add_limits),
         ignore_flow_counts_(ignore_flow_counts),
-        link_capacity_multiplier_(link_capacity_multiplier) {}
+        link_capacity_multiplier_(link_capacity_multiplier),
+        force_single_path_aggregates_(false) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
@@ -124,6 +129,9 @@ class CTROptimizer : public Optimizer {
   std::pair<std::unique_ptr<RoutingConfiguration>,
             std::unique_ptr<RoutingConfiguration>>
   OptimizeAndReturnUnlimitedRun(const TrafficMatrix& tm);
+
+  // Forces all aggregates to only take one path.
+  void ForceSinglePathAggregates() { force_single_path_aggregates_ = true; }
 
  private:
   std::unique_ptr<RoutingConfiguration> LimitedUnlimitedDispatch(
@@ -183,6 +191,9 @@ class CTROptimizer : public Optimizer {
 
   // All links' capacities will be multiplied by this number.
   double link_capacity_multiplier_;
+
+  // If true will force all aggregates to only take one path.
+  bool force_single_path_aggregates_;
 };
 
 }  // namespace ctr

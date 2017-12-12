@@ -233,8 +233,9 @@ void ProcessMatrix(const Input& input) {
 
   LOG(INFO) << "Will write " << demand_matrix->ToString() << " to "
             << output_location;
-  nc::File::WriteStringToFileOrDie(demand_matrix->ToRepetita(node_order),
-                                   output_location);
+  demand_matrix->UpdateProperty("locality",
+                                nc::ToStringMaxDecimals(FLAGS_locality, 2));
+  demand_matrix->ToRepetitaFileOrDie(node_order, output_location);
 }
 
 int main(int argc, char** argv) {

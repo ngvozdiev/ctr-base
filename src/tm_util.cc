@@ -120,9 +120,8 @@ int main(int argc, char** argv) {
 
   nc::net::GraphStorage graph(builder);
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
-      nc::lp::DemandMatrix::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(FLAGS_traffic_matrix), node_order,
-          &graph);
+      nc::lp::DemandMatrix::LoadRepetitaFileOrDie(FLAGS_traffic_matrix,
+                                                  node_order, &graph);
 
   std::mt19937 rnd(FLAGS_seed);
   std::unique_ptr<nc::lp::DemandMatrix> candidate;
@@ -147,7 +146,6 @@ int main(int argc, char** argv) {
   }
 
   if (!FLAGS_output.empty() && candidate) {
-    std::string serialized_matrix = candidate->ToRepetita(node_order);
-    nc::File::WriteStringToFile(serialized_matrix, FLAGS_output);
+    candidate->ToRepetitaFileOrDie(node_order, FLAGS_output);
   }
 }

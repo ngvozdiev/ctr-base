@@ -24,10 +24,11 @@
 DEFINE_string(output_template, "tm_stat_template.rst",
               "RST template for the output");
 DEFINE_string(output, "tm_stat.rst", "The output");
-DEFINE_string(labels, "",
-              "Labels for each of the curves on the graphs. Needs to be same "
-              "count as traffic matrices.");
+DEFINE_string(opt_eval_metrics, "", "Location of metrics from opt_eval_util");
+DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
+              "Optimizers to plot.");
 
+using namespace ctr::alg_eval;
 using namespace std::chrono;
 
 static nc::viz::CDFPlot GetCDFPlot(const std::string& x_label,
@@ -62,9 +63,7 @@ static nc::viz::HeatmapPlot GetHeatmapPlot(const std::string& x_label,
 }
 
 static void PlotDemandStats(
-    const std::vector<ctr::DemandMatrixAndFilename>& inputs,
-    const std::vector<std::string>& labels) {
-  CHECK(labels.size() == inputs.size());
+    const std::vector<ctr::DemandMatrixAndFilename>& inputs) {
   nc::viz::CDFPlot demand_sizes_plot = GetCDFPlot(
       "size (Mbps)", "Demand sizes (all possible demands considered)");
   nc::viz::CDFPlot demand_distances_plot =
@@ -119,7 +118,10 @@ static void PlotDemandStats(
     double possible_count = node_count * (node_count - 1);
     CHECK(demand_sizes_Mbps.size() < possible_count);
 
-    std::string id = labels[i];
+    std::string locality =
+        nc::FindOrDie(demand_matrix.properties(), "locality");
+    std::string id = nc::StrCat("locality ", locality);
+
     demand_sizes_plot.AddData(id, demand_sizes_Mbps);
     demand_distances_plot.AddData(id, demand_distances_ms);
     sp_utilizations_plot.AddData(id, sp_utilizations);
@@ -202,12 +204,33 @@ static void PlotDemandStats(
   nc::File::WriteStringToFileOrDie(output, FLAGS_output);
 }
 
+static void PlotSingleTMStats(const ctr::DemandMatrixAndFilename& input,
+                              const DataStorage& data_storage) {
+  const std::map<std::string, TMStateMap>& data = data_storage.data();
+  nc::viz::LinePlot path_stretch_plot =
+      GetLinePlot("milliseconds", "CDF", "Path stretch (absolute)");
+
+  std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
+  for (const std::string& opt : optimizers) {
+    const TMStateMap& state_map = nc::FindOrDie(data, opt);
+    TopologyAndTM key(input.topology_file, input.file);
+
+    const OptimizerTMState& tm_state = *(nc::FindOrDieNoPrint(state_map, key));
+    std::vector<double> percentiles = GetStretchDistribution(tm_state);
+    std::vector<std::pair<double, double>> values;
+    for (size_t i = 0; i < percentiles.size(); ++i) {
+      double p = percentiles[i];
+      values.emplace_back(p, i);
+    }
+    path_stretch_plot.AddData(opt, values);
+  }
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> demands;
   std::tie(topologies, demands) = ctr::GetDemandMatrixInputs();
 
-  std::vector<std::string> labels = nc::Split(FLAGS_labels, ",");
-  PlotDemandStats(demands, labels);
+  PlotDemandStats(demands);
 }
