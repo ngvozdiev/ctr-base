@@ -138,9 +138,6 @@ target_link_libraries(tm_gen_util topology_input ctr_base gflags)
 add_executable(tm_stat src/tm_stat.cc)
 target_link_libraries(tm_stat demand_matrix_input ncode gflags)
 
-add_executable(algorithm_stat src/algorithm_stat.cc)
-target_link_libraries(algorithm_stat demand_matrix_input plot_algorithm_eval_tools gflags)
-
 add_executable(meshy_util src/meshy_util.cc)
 target_link_libraries(meshy_util ctr_base gflags)
 

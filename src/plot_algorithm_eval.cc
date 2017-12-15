@@ -27,9 +27,6 @@ DEFINE_bool(ignore_trivial, true,
             "shortest path.");
 DEFINE_string(output_prefix, "",
               "Prefix that will be added to all output directories.");
-DEFINE_string(
-    locality_plot, "",
-    "If non-empty will plot locality for the given topology/tm combination.");
 
 static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr char kRuntimeMetric[] = "ctr_runtime_ms";
