@@ -76,8 +76,8 @@ std::pair<std::vector<double>, std::vector<double>> GetStretchDistribution(
     const TMStateMap& tm_state_map);
 
 // Same as above, but only for a single run.
-std::vector<double> GetStretchDistribution(
-    const OptimizerTMState& tm_state_map);
+std::vector<double> GetStretchDistribution(const OptimizerTMState& tm_state_map,
+                                           bool absolute);
 
 std::unique_ptr<DataStorage> ParseTMGenUtilMetrics(
     const std::string& location, const std::set<TopologyAndTM>& to_ignore = {});

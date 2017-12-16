@@ -15,7 +15,7 @@ static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr char kPathDelayMetric[] = "opt_path_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
-static constexpr size_t kDiscreteMultiplier = 1000;
+static constexpr size_t kDiscreteMultiplier = 10000;
 static constexpr size_t kPercentilesCount = 10000;
 
 namespace ctr {
@@ -268,7 +268,8 @@ std::pair<std::vector<double>, std::vector<double>> GetStretchDistribution(
   return {out, maxs};
 }
 
-std::vector<double> GetStretchDistribution(const OptimizerTMState& tm_state) {
+std::vector<double> GetStretchDistribution(const OptimizerTMState& tm_state,
+                                           bool absolute) {
   nc::DiscreteDistribution<uint64_t> dist;
   std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
   for (const auto& aggregate : aggregates) {
@@ -277,11 +278,16 @@ std::vector<double> GetStretchDistribution(const OptimizerTMState& tm_state) {
       double path_delay_ms = delay_and_count.first;
       uint32_t flow_count = delay_and_count.second;
       CHECK(path_delay_ms >= sp_delay_ms);
-      double abs_stretch = path_delay_ms - sp_delay_ms;
+      double stretch;
+      if (absolute) {
+        stretch = path_delay_ms - sp_delay_ms;
+      } else {
+        stretch = (path_delay_ms - sp_delay_ms) / sp_delay_ms;
+      }
 
       // Have to discretize the value.
       uint64_t value_discrete =
-          static_cast<uint64_t>(kDiscreteMultiplier * abs_stretch);
+          static_cast<uint64_t>(kDiscreteMultiplier * stretch);
       dist.Add(value_discrete, flow_count);
     }
   }

@@ -1,6 +1,6 @@
 #include <gflags/gflags.h>
-#include <stddef.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -12,8 +12,13 @@
 #include <vector>
 
 #include "ncode_common/src/common.h"
+#include "ncode_common/src/file.h"
 #include "ncode_common/src/logging.h"
+#include "ncode_common/src/lp/demand_matrix.h"
 #include "ncode_common/src/map_util.h"
+#include "ncode_common/src/net/algorithm.h"
+#include "ncode_common/src/net/net_common.h"
+#include "ncode_common/src/net/net_gen.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/viz/grapher.h"
 #include "metrics/metrics_parser.h"
@@ -287,33 +292,246 @@ static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
   plot.PlotToDir("runtime");
 }
 
-static void PlotLocality(const TMState& tm_state) {
-  std::vector<std::pair<double, double>> values;
-  CHECK(tm_state.aggregate_rate_Mbps.size() ==
-        tm_state.aggregate_sp_delay_ms.size())
-      << tm_state.aggregate_rate_Mbps.size() << " vs "
-      << tm_state.aggregate_sp_delay_ms.size();
-  for (size_t i = 0; i < tm_state.aggregate_rate_Mbps.size(); ++i) {
-    values.emplace_back(tm_state.aggregate_sp_delay_ms[i],
-                        tm_state.aggregate_rate_Mbps[i]);
+class DataPlotter {
+ public:
+  void AddData(const std::string& opt, const TopologyAndTM& topology_and_tm,
+               const OptimizerTMState* optimizer_state) {
+    const std::string& topology_file = topology_and_tm.first;
+    const std::string& tm_file = topology_and_tm.second;
+    std::unique_ptr<GraphAndNodeOrder>& graph_and_node_order =
+        graphs_[topology_file];
+
+    // In case the same graph was already used by a different TM.
+    if (!graph_and_node_order) {
+      std::vector<std::string> new_node_order;
+      nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
+          nc::File::ReadFileToStringOrDie(topology_file), &new_node_order);
+      builder.RemoveMultipleLinks();
+      graph_and_node_order =
+          nc::make_unique<GraphAndNodeOrder>(builder, new_node_order);
+
+      std::string name = nc::File::ExtractFileName(topology_file);
+      graph_to_name_[&graph_and_node_order->graph] = name;
+    }
+
+    // Same as above, but for TMs.
+    const nc::net::GraphStorage* graph = &graph_and_node_order->graph;
+    std::unique_ptr<nc::lp::DemandMatrix>& demand_matrix =
+        demands_by_topology_[topology_and_tm];
+    if (!demand_matrix) {
+      const std::vector<std::string>& node_order =
+          graph_and_node_order->node_order;
+      demand_matrix = nc::lp::DemandMatrix::LoadRepetitaFileOrDie(
+          tm_file, node_order, graph);
+    }
+
+    double locality;
+    std::string locality_str =
+        nc::FindOrDie(demand_matrix->properties(), "locality");
+    CHECK(nc::safe_strtod(locality_str, &locality));
+
+    double seed;
+    std::string seed_str = nc::FindOrDie(demand_matrix->properties(), "seed");
+    CHECK(nc::safe_strtod(seed_str, &seed));
+
+    TMKey key = std::make_tuple(graph, seed, locality);
+    demands_by_key_[key] = demand_matrix.get();
+    top_level_map_[graph][seed][locality][opt] = optimizer_state;
   }
 
-  std::sort(values.begin(), values.end());
-  double total = 0;
-  for (size_t i = 0; i < values.size(); ++i) {
-    std::pair<double, double>& delay_and_rate = values[i];
-    total += delay_and_rate.second;
-    delay_and_rate.second = total;
+  void PlotRoot(const std::string& root) {
+    for (const auto& graph_and_seed_map : top_level_map_) {
+      const nc::net::GraphStorage* graph = graph_and_seed_map.first;
+      const SeedMap& seed_map = graph_and_seed_map.second;
+      const std::string& name = nc::FindOrDie(graph_to_name_, graph);
+
+      std::string subdir = nc::StrCat(root, "/", name);
+      PlotSeedMap(graph, seed_map, subdir);
+    }
   }
 
-  nc::viz::PlotParameters2D params;
-  params.title = "SP delay vs cumulative rate";
-  params.x_label = "SP delay (ms)";
-  params.y_label = "Total cumulative rate (Mbps)";
-  nc::viz::LinePlot plot(params);
-  plot.AddData("", values);
-  plot.PlotToDir(nc::StrCat(FLAGS_output_prefix, "locality_plot"));
-}
+ private:
+  // Graph, seed and locality.
+  using TMKey = std::tuple<const nc::net::GraphStorage*, double, double>;
+
+  struct GraphAndNodeOrder {
+    GraphAndNodeOrder(const nc::net::GraphBuilder& builder,
+                      const std::vector<std::string>& node_order)
+        : graph(builder), node_order(node_order) {}
+
+    nc::net::GraphStorage graph;
+    std::vector<std::string> node_order;
+  };
+
+  // Maps an optimizer to its state.
+  using OptMap = std::map<std::string, const OptimizerTMState*>;
+
+  // Maps locality to all traffic matrices with the same locality.
+  using LocalityMap = std::map<double, OptMap>;
+
+  // Groups TMs with the same seed value.
+  using SeedMap = std::map<double, LocalityMap>;
+
+  // Maps a topology to all traffic matrices on the same topology.
+  using TopologyMap = std::map<const nc::net::GraphStorage*, SeedMap>;
+
+  // Plots different optimizers for the same TM.
+  void PlotOptMap(const OptMap& opt_map, const std::string& root) {
+    nc::viz::LinePlot abs_path_stretch_plot(
+        {"Absolute path stretch", "milliseconds longer than SP", "CDF"});
+    nc::viz::LinePlot rel_path_stretch_plot(
+        {"Relative path stretch", "fraction change over SP", "CDF"});
+    nc::viz::CDFPlot path_count_plot(
+        {"Number of paths per aggregate", "path count"});
+    nc::viz::CDFPlot link_utilization_plot({"Link utilization", "utilization"});
+
+    for (const auto& optimizer_and_state : opt_map) {
+      const std::string& opt = optimizer_and_state.first;
+      const OptimizerTMState* state = optimizer_and_state.second;
+      CHECK(state != nullptr);
+
+      std::vector<double> abs_percentiles =
+          GetStretchDistribution(*state, true);
+      std::vector<std::pair<double, double>> abs_to_plot;
+      for (size_t i = 0; i < abs_percentiles.size(); ++i) {
+        abs_to_plot.emplace_back(abs_percentiles[i], i);
+      }
+
+      std::vector<double> rel_percentiles =
+          GetStretchDistribution(*state, false);
+      std::vector<std::pair<double, double>> rel_to_plot;
+      for (size_t i = 0; i < rel_percentiles.size(); ++i) {
+        rel_to_plot.emplace_back(rel_percentiles[i], i);
+      }
+
+      abs_path_stretch_plot.AddData(opt, abs_to_plot);
+      rel_path_stretch_plot.AddData(opt, rel_to_plot);
+      path_count_plot.AddData(opt, state->aggregate_path_count);
+      link_utilization_plot.AddData(opt, state->link_utilization);
+    }
+
+    abs_path_stretch_plot.PlotToDir(nc::StrCat(root, "/abs_path_stretch"));
+    rel_path_stretch_plot.PlotToDir(nc::StrCat(root, "/rel_path_stretch"));
+    path_count_plot.PlotToDir(nc::StrCat(root, "/path_count"));
+    link_utilization_plot.PlotToDir(nc::StrCat(root, "/link_utilization"));
+  }
+
+  void PlotLocalityMap(const nc::net::GraphStorage* graph, double seed,
+                       const LocalityMap& tm_map, const std::string& root) {
+    using namespace std::chrono;
+
+    nc::viz::CDFPlot demand_sizes_plot(
+        {"Demand sizes (all possible demands considered)", "size (Mbps)"});
+    nc::viz::CDFPlot sp_utilizations_plot(
+        {"Shortest path link utilization", "link utilization"});
+    nc::viz::LinePlot cumulative_demands_plot(
+        {"Cumulative distance vs aggregate size", "SP distance (ms)",
+         "Cumulative size (Mbps)"});
+
+    for (const auto& locality_and_opt_map : tm_map) {
+      double locality = locality_and_opt_map.first;
+      const OptMap& opt_map = locality_and_opt_map.second;
+      const nc::lp::DemandMatrix* demand_matrix = nc::FindOrDieNoPrint(
+          demands_by_key_, std::make_tuple(graph, seed, locality));
+
+      std::vector<double> demand_sizes_Mbps;
+      std::vector<double> sp_utilizations;
+      std::vector<std::pair<double, double>> cumulative_distances;
+
+      nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr,
+                                      nullptr);
+      for (const auto& element : demand_matrix->elements()) {
+        double demand_Mbps = element.demand.Mbps();
+        if (demand_Mbps == 0) {
+          continue;
+        }
+
+        double distance_ms = duration_cast<milliseconds>(
+                                 sp.GetDistance(element.src, element.dst))
+                                 .count();
+        demand_sizes_Mbps.emplace_back(demand_Mbps);
+        cumulative_distances.emplace_back(distance_ms, demand_Mbps);
+      }
+
+      std::sort(cumulative_distances.begin(), cumulative_distances.end());
+      double total = 0;
+      for (auto& distance_and_demand : cumulative_distances) {
+        double& demand = distance_and_demand.second;
+        total += demand;
+        demand = total;
+      }
+
+      nc::net::GraphLinkMap<double> utilizations =
+          demand_matrix->SPUtilization();
+      for (const auto& link_and_utilization : utilizations) {
+        sp_utilizations.emplace_back(*link_and_utilization.second);
+      }
+
+      size_t node_count = graph->NodeCount();
+      double possible_count = node_count * (node_count - 1);
+      CHECK(demand_sizes_Mbps.size() < possible_count);
+      std::string id = nc::StrCat("locality ", locality);
+
+      demand_sizes_plot.AddData(id, demand_sizes_Mbps);
+      sp_utilizations_plot.AddData(id, sp_utilizations);
+      cumulative_demands_plot.AddData(id, cumulative_distances);
+
+      // Need to plot the per-optimizer data as well. Will do so in a separate
+      // subdir for each TM.
+      std::string subdir = nc::StrCat(root, "/tm_locality_", locality);
+      PlotOptMap(opt_map, subdir);
+    }
+
+    demand_sizes_plot.PlotToDir(nc::StrCat(root, "/demand_sizes"));
+    sp_utilizations_plot.PlotToDir(nc::StrCat(root, "/sp_utilization"));
+    cumulative_demands_plot.PlotToDir(nc::StrCat(root, "/cumulative_demands"));
+  }
+
+  void PlotSeedMap(const nc::net::GraphStorage* graph, const SeedMap& seed_map,
+                   const std::string& root) {
+    using namespace std::chrono;
+    nc::viz::CDFPlot node_distances_plot(
+        {"Length of each of all N*(N - 1) pair\\'s shortest path",
+         "SP length (ms)"});
+
+    nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr,
+                                    nullptr);
+    std::vector<double> node_distances_ms;
+    for (nc::net::GraphNodeIndex src : graph->AllNodes()) {
+      for (nc::net::GraphNodeIndex dst : graph->AllNodes()) {
+        if (src == dst) {
+          continue;
+        }
+
+        double distance_ms =
+            duration_cast<milliseconds>(sp.GetDistance(src, dst)).count();
+        node_distances_ms.emplace_back(distance_ms);
+      }
+    }
+    node_distances_plot.AddData("", node_distances_ms);
+    node_distances_plot.PlotToDir(nc::StrCat(root, "/node_distances"));
+
+    for (const auto& seed_and_locality : seed_map) {
+      double seed = seed_and_locality.first;
+      const LocalityMap& locality_map = seed_and_locality.second;
+
+      std::string subdir = nc::StrCat(root, "/tm_seed_", seed);
+      PlotLocalityMap(graph, seed, locality_map, subdir);
+    }
+  }
+
+  // Stores graphs.
+  std::map<std::string, std::unique_ptr<GraphAndNodeOrder>> graphs_;
+  std::map<const nc::net::GraphStorage*, std::string> graph_to_name_;
+
+  // Stores demands.
+  std::map<TopologyAndTM, std::unique_ptr<nc::lp::DemandMatrix>>
+      demands_by_topology_;
+  std::map<TMKey, const nc::lp::DemandMatrix*> demands_by_key_;
+
+  // Stores all data.
+  TopologyMap top_level_map_;
+};
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -331,17 +549,6 @@ int main(int argc, char** argv) {
 
   std::unique_ptr<DataStorage> data_storage =
       ParseTMGenUtilMetrics(FLAGS_metrics_dir);
-
-  if (!FLAGS_locality_plot.empty()) {
-    std::vector<std::string> split = nc::Split(FLAGS_locality_plot, ":");
-    CHECK(split.size() == 2);
-
-    const auto& tm_state_data = data_storage->tm_state_data();
-    const TMState& tm_state =
-        *(nc::FindOrDieNoPrint(tm_state_data, {split[0], split[1]}));
-    PlotLocality(tm_state);
-    return 0;
-  }
 
   // The data is grouped by optimizer.
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
@@ -375,4 +582,17 @@ int main(int argc, char** argv) {
 
   PlotTotalDelay(data, optimizers);
   PlotCTRRuntime(data);
+
+  // A tree of plots.
+  DataPlotter data_plotter;
+  for (const std::string& opt : optimizers) {
+    const TMStateMap& state_map = nc::FindOrDie(data, opt);
+    for (const auto& topology_and_tm_and_rest : state_map) {
+      const TopologyAndTM& topology_and_tm = topology_and_tm_and_rest.first;
+      const OptimizerTMState* state = topology_and_tm_and_rest.second.get();
+      data_plotter.AddData(opt, topology_and_tm, state);
+    }
+  }
+
+  data_plotter.PlotRoot("plot_tree");
 }

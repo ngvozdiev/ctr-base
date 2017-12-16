@@ -235,6 +235,8 @@ void ProcessMatrix(const Input& input) {
             << output_location;
   demand_matrix->UpdateProperty("locality",
                                 nc::ToStringMaxDecimals(FLAGS_locality, 2));
+  demand_matrix->UpdateProperty("seed",
+                                nc::ToStringMaxDecimals(FLAGS_seed + id, 2));
   demand_matrix->ToRepetitaFileOrDie(node_order, output_location);
 }
 
