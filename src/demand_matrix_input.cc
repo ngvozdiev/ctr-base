@@ -21,14 +21,11 @@ DEFINE_string(tm_root, "", "Root for traffic matrix file(s). Required.");
 DEFINE_string(
     topology_root, "",
     "Root for topologies. If empty will be set to the same as tm_root.");
-DEFINE_double(tm_scale, 1.0, "By how much to scale the traffic matrix");
 DEFINE_uint64(tm_per_topology, std::numeric_limits<uint64_t>::max(),
               "How many TMs to choose for each topology");
 DEFINE_uint64(seed, 1,
               "Seed used when choosing TMs for each topology. Set to 0 to "
               "disable random choice of TMs.");
-DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
-DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_uint64(topology_size_limit, 100000,
               "Topologies with size more than this will be skipped");
 DEFINE_uint64(topology_delay_limit_ms, 10,
@@ -107,8 +104,6 @@ GetDemandMatrixInputs() {
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file), &node_order);
     builder.RemoveMultipleLinks();
-    builder.ScaleCapacity(FLAGS_link_capacity_scale);
-    builder.ScaleDelay(FLAGS_delay_scale);
 
     auto graph = nc::make_unique<nc::net::GraphStorage>(builder);
     nc::net::GraphStats stats = graph->Stats();
@@ -157,7 +152,6 @@ GetDemandMatrixInputs() {
         continue;
       }
 
-      demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
       demands_out.emplace_back(topology_file, demand_file,
                                std::move(demand_matrix));
     }

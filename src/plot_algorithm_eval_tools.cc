@@ -15,6 +15,12 @@ static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
 static constexpr char kPathDelayMetric[] = "opt_path_delay_ms";
 static constexpr char kPathCountMetric[] = "opt_path_flow_count";
 static constexpr char kLinkUtilizationMetric[] = "opt_link_utilization";
+
+static constexpr char kLinkScaleStrideMetric[] =
+    "total_delay_link_scale_stride";
+static constexpr char kTotalDelayAtLinkScaleMetric[] =
+    "total_delay_at_link_scale";
+
 static constexpr size_t kDiscreteMultiplier = 10000;
 static constexpr size_t kPercentilesCount = 10000;
 
@@ -229,13 +235,12 @@ bool SingleTMMetricProcessor::InterestedInFields(
 }
 
 std::pair<std::vector<double>, std::vector<double>> GetStretchDistribution(
-    const TMStateMap& tm_state_map) {
+    const std::vector<const OptimizerTMState*>& tm_states) {
   nc::DiscreteDistribution<uint64_t> dist;
   std::vector<double> maxs;
 
-  for (const auto& key_and_data : tm_state_map) {
-    const OptimizerTMState& tm_state = *(key_and_data.second);
-    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
+  for (const OptimizerTMState* tm_state : tm_states) {
+    std::vector<AggregateTMState> aggregates = tm_state->GetAggregates();
     double max = 0;
     for (const auto& aggregate : aggregates) {
       double sp_delay_ms = aggregate.sp_delay_ms;
@@ -319,6 +324,21 @@ std::unique_ptr<DataStorage> ParseTMGenUtilMetrics(
         tm_state->aggregate_rate_Mbps.emplace_back(entry.double_value());
       });
 
+  auto total_delay_at_link_scale_processor =
+      nc::make_unique<SingleTMMetricProcessor>(
+          kTotalDelayAtLinkScaleMetric, data_storage.get(), &to_ignore,
+          [](const nc::metrics::PBMetricEntry& entry, TMState* tm_state) {
+            tm_state->total_delay_at_link_scale.emplace_back(
+                entry.double_value());
+          });
+
+  auto link_scale_stride_processor = nc::make_unique<SingleTMMetricProcessor>(
+      kLinkScaleStrideMetric, data_storage.get(), &to_ignore,
+      [](const nc::metrics::PBMetricEntry& entry, TMState* tm_state) {
+        CHECK(tm_state->link_scale_stride == 0);
+        tm_state->link_scale_stride = entry.double_value();
+      });
+
   auto path_delay_processor = nc::make_unique<SingleMetricProcessor>(
       kPathDelayMetric, data_storage.get(), &to_ignore,
       [](const nc::metrics::PBMetricEntry& entry, OptimizerTMState* tm_state) {
@@ -350,6 +370,8 @@ std::unique_ptr<DataStorage> ParseTMGenUtilMetrics(
   parser.AddProcessor(std::move(path_flow_count_processor));
   parser.AddProcessor(std::move(link_utilization_processor));
   parser.AddProcessor(std::move(aggregate_path_count_processor));
+  parser.AddProcessor(std::move(link_scale_stride_processor));
+  parser.AddProcessor(std::move(total_delay_at_link_scale_processor));
   parser.Parse();
 
   return data_storage;

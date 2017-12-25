@@ -67,6 +67,11 @@ class TrafficMatrix {
       const nc::lp::DemandMatrix& demand_matrix,
       size_t top_aggregate_flow_count = 1000);
 
+  // Distributes a total number of flows based on traffic volume.
+  static std::unique_ptr<TrafficMatrix> DistributeFromDemandMatrix(
+      const nc::lp::DemandMatrix& demand_matrix,
+      size_t total_flow_count = 10000);
+
   // Constructs an empty traffic matrix, or optionally let the caller
   // pre-populate it with demands and flow counts.
   explicit TrafficMatrix(
@@ -96,6 +101,10 @@ class TrafficMatrix {
   std::unique_ptr<TrafficMatrix> ScaleDemands(
       double factor, const std::set<AggregateId>& to_scale) const;
 
+  // Adds the same value to all demands.
+  std::unique_ptr<TrafficMatrix> AddToDemands(
+      nc::net::Bandwidth value, const std::set<AggregateId>& to_extend) const;
+
   // A DemandMatrix is similar to TrafficMatrix, but has no flow counts.
   std::unique_ptr<nc::lp::DemandMatrix> ToDemandMatrix() const;
 
@@ -117,6 +126,8 @@ class TrafficMatrix {
 
   // Prints a summary of the TM.
   std::string SummaryToString() const;
+
+  std::pair<nc::net::Bandwidth, nc::net::Bandwidth> MinMaxAggregates() const;
 
  protected:
   // The graph.

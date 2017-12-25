@@ -82,7 +82,6 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ProportionalFromDemandMatrix(
   // Will assign flow counts so that the max bandwidth aggregate has
   // kTopAggregateFlowCount, and all other aggregates proportionally less.
   std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
-  std::vector<double> counts;
   for (const auto& element : demand_matrix.elements()) {
     size_t flow_count =
         top_aggregate_flow_count * (element.demand / max_demand);
@@ -90,7 +89,27 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ProportionalFromDemandMatrix(
 
     AggregateId id(element.src, element.dst);
     demands_and_counts[id] = {element.demand, flow_count};
-    counts.emplace_back(flow_count);
+  }
+
+  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
+                                        demands_and_counts);
+}
+
+std::unique_ptr<TrafficMatrix> TrafficMatrix::DistributeFromDemandMatrix(
+    const nc::lp::DemandMatrix& demand_matrix, size_t total_flow_count) {
+  nc::net::Bandwidth total_demand = nc::net::Bandwidth::Zero();
+  for (const auto& element : demand_matrix.elements()) {
+    total_demand += element.demand;
+  }
+
+  std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
+  for (const auto& element : demand_matrix.elements()) {
+    double f = element.demand / total_demand;
+    size_t flow_count = total_flow_count * f;
+    flow_count = std::max(1ul, flow_count);
+
+    AggregateId id(element.src, element.dst);
+    demands_and_counts[id] = {element.demand, flow_count};
   }
 
   return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
@@ -109,6 +128,21 @@ std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
   return nc::make_unique<nc::lp::DemandMatrix>(std::move(elements), graph_);
 }
 
+std::pair<nc::net::Bandwidth, nc::net::Bandwidth>
+TrafficMatrix::MinMaxAggregates() const {
+  nc::net::Bandwidth min_bw = nc::net::Bandwidth::Max();
+  nc::net::Bandwidth max_bw = nc::net::Bandwidth::Zero();
+
+  for (const auto& aggregate_and_demand : demands_) {
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_and_demand.second;
+    min_bw = std::min(min_bw, demand_and_flow_count.first);
+    max_bw = std::max(max_bw, demand_and_flow_count.first);
+  }
+
+  return {min_bw, max_bw};
+}
+
 std::unique_ptr<TrafficMatrix> TrafficMatrix::ScaleDemands(
     double factor, const std::set<AggregateId>& to_scale) const {
   std::map<AggregateId, DemandAndFlowCount> new_demands;
@@ -122,6 +156,25 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ScaleDemands(
     }
 
     new_demands[aggregate] = {demand_and_flow_count.first * factor,
+                              demand_and_flow_count.second};
+  }
+
+  return nc::make_unique<TrafficMatrix>(graph_, new_demands);
+}
+
+std::unique_ptr<TrafficMatrix> TrafficMatrix::AddToDemands(
+    nc::net::Bandwidth value, const std::set<AggregateId>& to_extend) const {
+  std::map<AggregateId, DemandAndFlowCount> new_demands;
+  for (const auto& aggregate_and_demand : demands_) {
+    const AggregateId& aggregate = aggregate_and_demand.first;
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_and_demand.second;
+    if (!to_extend.empty() && !nc::ContainsKey(to_extend, aggregate)) {
+      new_demands[aggregate] = demand_and_flow_count;
+      continue;
+    }
+
+    new_demands[aggregate] = {demand_and_flow_count.first + value,
                               demand_and_flow_count.second};
   }
 

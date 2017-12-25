@@ -12,8 +12,6 @@
 #include "ncode_common/src/strutil.h"
 
 DEFINE_string(topology_root, "", "Root for topologies. Required.");
-DEFINE_double(link_capacity_scale, 1.0, "By how much to scale all links");
-DEFINE_double(delay_scale, 1.0, "By how much to scale the delays of all links");
 DEFINE_uint64(topology_size_limit, 100000,
               "Topologies with size more than this will be skipped");
 DEFINE_uint64(topology_delay_limit_ms, 10,
@@ -39,8 +37,6 @@ std::vector<TopologyAndFilename> GetTopologyInputs() {
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file), &node_order);
     builder.RemoveMultipleLinks();
-    builder.ScaleCapacity(FLAGS_link_capacity_scale);
-    builder.ScaleDelay(FLAGS_delay_scale);
     auto graph = nc::make_unique<nc::net::GraphStorage>(builder);
 
     nc::net::GraphStats stats = graph->Stats();

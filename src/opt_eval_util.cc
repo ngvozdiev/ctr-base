@@ -81,19 +81,6 @@ static auto* ctr_runtime_cached_ms =
             "ctr_runtime_cached_ms", "How long it took CTR to run (cached)",
             "Topology", "Traffic matrix");
 
-static auto* ctr_spa_runtime_ms =
-    nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint64_t, std::string, std::string>(
-            "ctr_spa_runtime_ms", "How long it took CTR to run (SPA)",
-            "Topology", "Traffic matrix");
-
-static auto* ctr_spa_runtime_cached_ms =
-    nc::metrics::DefaultMetricManager()
-        -> GetThreadSafeMetric<uint64_t, std::string, std::string>(
-            "ctr_spa_runtime_cached_ms",
-            "How long it took CTR to run (cached, SPA)", "Topology",
-            "Traffic matrix");
-
 static auto* tm_scale_factor =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string>(
@@ -101,11 +88,19 @@ static auto* tm_scale_factor =
             "By how much the TM had to be scaled to make B4 fit", "Topology",
             "Traffic matrix");
 
-static auto* total_delay_fraction =
+static auto* total_delay_at_link_scale =
     nc::metrics::DefaultMetricManager()
         -> GetThreadSafeMetric<double, std::string, std::string>(
-            "total_delay_fraction", "Fraction of total delay at no headroom",
-            "Topology", "Traffic matrix");
+            "total_delay_at_link_scale",
+            "Total delay at different aggregate levels", "Topology",
+            "Traffic matrix");
+
+static auto* total_delay_link_scale_stride =
+    nc::metrics::DefaultMetricManager()
+        -> GetThreadSafeMetric<double, std::string, std::string>(
+            "total_delay_link_scale_stride",
+            "Stride for total_delay_at_rel_stride, only one value", "Topology",
+            "Traffic matrix");
 
 static auto* link_utilization =
     nc::metrics::DefaultMetricManager()
@@ -115,7 +110,7 @@ static auto* link_utilization =
 
 namespace ctr {
 
-static constexpr double kHeadroomStrideSize = 0.02;
+static constexpr double kLinkScaleStride = 0.02;
 
 static void RecordHeadroomVsDelay(const std::string& top_file,
                                   const std::string& tm_file,
@@ -125,32 +120,25 @@ static void RecordHeadroomVsDelay(const std::string& top_file,
   const nc::net::GraphStorage* graph = tm.graph();
   PathProvider path_provider(graph);
 
-  std::vector<double> values;
-  for (double link_multiplier = 1.0; link_multiplier > 0.0;
-       link_multiplier -= kHeadroomStrideSize) {
-    if (!tm.ToDemandMatrix()->IsFeasible({}, link_multiplier)) {
+  auto* link_scale_handle =
+      total_delay_link_scale_stride->GetHandle(top_file, tm_file);
+  link_scale_handle->AddValue(kLinkScaleStride);
+  auto* total_delay_at_link_scale_handle =
+      total_delay_at_link_scale->GetHandle(top_file, tm_file);
+
+  for (double link_capacity_multiplier = 1.0; link_capacity_multiplier > 0;
+       link_capacity_multiplier -= kLinkScaleStride) {
+    if (!tm.ToDemandMatrix()->IsFeasible({}, link_capacity_multiplier)) {
       break;
     }
 
-    CTROptimizer ctr_optimizer(&path_provider, link_multiplier, false, false);
+    CTROptimizer ctr_optimizer(&path_provider, link_capacity_multiplier, false,
+                               false);
     std::unique_ptr<RoutingConfiguration> routing = ctr_optimizer.Optimize(tm);
-
-    double max_utilization = routing->MaxLinkUtilization();
-    if (max_utilization > link_multiplier + 0.001) {
-      break;
-    }
-
-    double value = duration_cast<seconds>(routing->TotalPerFlowDelay()).count();
-    values.emplace_back(value);
-  }
-
-  // The lowest delay is achieved at link_multiplier=1.0. Will normalize
-  // everything by that.
-  CHECK(!values.empty());
-  double lowest_delay = values.front();
-  auto* metric_handle = total_delay_fraction->GetHandle(top_file, tm_file);
-  for (auto value : values) {
-    metric_handle->AddValue(value / lowest_delay);
+    double value =
+        duration_cast<milliseconds>(routing->TotalPerFlowDelay()).count() /
+        1000.0;
+    total_delay_at_link_scale_handle->AddValue(value);
   }
 }
 
@@ -292,7 +280,7 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   PathProvider b4_path_provider(graph);
 
   std::unique_ptr<TrafficMatrix> tm =
-      TrafficMatrix::ProportionalFromDemandMatrix(*input.demand_matrix);
+      TrafficMatrix::DistributeFromDemandMatrix(*input.demand_matrix);
   std::unique_ptr<RoutingConfiguration> routing;
   routing = RunB4(*tm, top_file, tm_file, &b4_path_provider);
 
@@ -303,9 +291,6 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   PathProvider path_provider(graph);
   CTROptimizer ctr_optimizer(&path_provider, 1.0, false, false);
   CTROptimizer ctr_optimizer_no_flow_counts(&path_provider, 1.0, false, true);
-  CTROptimizer ctr_optimizer_spa(&path_provider, 1.0, false, false);
-  ctr_optimizer_spa.ForceSinglePathAggregates();
-
   MinMaxOptimizer minmax_optimizer(&path_provider, 1.0, false);
   MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
   MinMaxPathBasedOptimizer minmax_ksp_optimizer(&path_provider, 1.0, true, 10);
@@ -319,15 +304,6 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   ctr_start = high_resolution_clock::now();
   ctr_optimizer.Optimize(*tm);
   auto ctr_cached_duration = high_resolution_clock::now() - ctr_start;
-
-  ctr_start = high_resolution_clock::now();
-  routing = ctr_optimizer_spa.Optimize(*tm);
-  auto ctr_spa_duration = high_resolution_clock::now() - ctr_start;
-  RecordRoutingConfig(top_file, tm_file, "CTRSPA", *routing);
-
-  ctr_start = high_resolution_clock::now();
-  ctr_optimizer_spa.Optimize(*tm);
-  auto ctr_spa_cached_duration = high_resolution_clock::now() - ctr_start;
 
   routing = ctr_optimizer_no_flow_counts.Optimize(*tm);
   RecordRoutingConfig(top_file, tm_file, "CTRNFC", *routing);
@@ -348,12 +324,6 @@ static void RunOptimizers(const DemandMatrixAndFilename& input) {
   handle->AddValue(duration_cast<milliseconds>(ctr_duration).count());
   handle = ctr_runtime_cached_ms->GetHandle(top_file, tm_file);
   handle->AddValue(duration_cast<milliseconds>(ctr_cached_duration).count());
-
-  handle = ctr_spa_runtime_ms->GetHandle(top_file, tm_file);
-  handle->AddValue(duration_cast<milliseconds>(ctr_spa_duration).count());
-  handle = ctr_spa_runtime_cached_ms->GetHandle(top_file, tm_file);
-  handle->AddValue(
-      duration_cast<milliseconds>(ctr_spa_cached_duration).count());
 }
 
 }  // namespace ctr

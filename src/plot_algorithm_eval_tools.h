@@ -26,6 +26,13 @@ struct AggregateTMState {
 struct TMState {
   std::vector<uint32_t> aggregate_sp_delay_ms;
   std::vector<double> aggregate_rate_Mbps;
+
+  // The i-th value corresponds to the total delay in the network when all
+  // link capacities are equal to C - i * stride (look below).
+  std::vector<double> total_delay_at_link_scale;
+
+  // Strides for the vector above.
+  double link_scale_stride = 0;
 };
 
 struct OptimizerTMState {
@@ -73,7 +80,7 @@ class DataStorage {
 
 // Returns the percentiles of the distribution of a per-path value and the max.
 std::pair<std::vector<double>, std::vector<double>> GetStretchDistribution(
-    const TMStateMap& tm_state_map);
+    const std::vector<const OptimizerTMState*>& tm_states);
 
 // Same as above, but only for a single run.
 std::vector<double> GetStretchDistribution(const OptimizerTMState& tm_state_map,
