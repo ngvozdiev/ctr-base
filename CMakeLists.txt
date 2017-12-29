@@ -1,11 +1,5 @@
 cmake_minimum_required(VERSION 2.8.7)
 
-# If there is already a target called ncode_base someone has already
-# added this project. Will ignore.
-if(TARGET ctr_base)
-  return()
-endif(TARGET ctr_base)
-
 project(CTR)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_extensions)
 option(CTR_BASE_DISABLE_TESTS "If tests should be compiled or not" ON)
@@ -47,11 +41,6 @@ SET(OLD_BUILD_TESTING ${BUILD_TESTING})
 SET(BUILD_TESTING False)
 add_subdirectory(external/gflags)
 SET(BUILD_TESTING ${OLD_BUILD_TESTING})
-
-if (NOT TARGET ncode_common)
-   EXECUTE_PROCESS(COMMAND "git" "clone" "https://github.com/ngvozdiev/ncode-common.git" "${CMAKE_BINARY_DIR}/external/ncode_common")
-   add_subdirectory(${CMAKE_BINARY_DIR}/external/ncode_common)
-endif()
 
 find_package(Protobuf REQUIRED)
 find_package(FFTW REQUIRED)

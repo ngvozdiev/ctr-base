@@ -12,6 +12,8 @@
 namespace ctr {
 namespace alg_eval {
 
+using TopologyAndTM = std::pair<std::string, std::string>;
+
 struct AggregateTMState {
   // Delay of the shortest path.
   uint32_t sp_delay_ms;
@@ -45,7 +47,6 @@ struct OptimizerTMState {
   std::vector<AggregateTMState> GetAggregates() const;
 };
 
-using TopologyAndTM = std::pair<std::string, std::string>;
 using TMStateMap = std::map<TopologyAndTM, std::unique_ptr<OptimizerTMState>>;
 
 using DataVector = std::vector<double>;

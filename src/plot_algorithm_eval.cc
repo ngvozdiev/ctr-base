@@ -78,9 +78,10 @@ static std::set<TopologyAndTM> FieldsWithSinglePath(
   return out;
 }
 
-static std::vector<double> GetPathRatios(
-    const std::vector<const OptimizerTMState*>& tm_states) {
-  std::vector<double> out;
+static std::tuple<std::vector<double>, const OptimizerTMState*,
+                  const OptimizerTMState*, double, double>
+GetPathRatios(const std::vector<const OptimizerTMState*>& tm_states) {
+  std::vector<std::pair<double, const OptimizerTMState*>> decorated;
   for (const OptimizerTMState* tm_state : tm_states) {
     std::vector<AggregateTMState> aggregates = tm_state->GetAggregates();
     double total_sp_delay = 0;
@@ -97,10 +98,19 @@ static std::vector<double> GetPathRatios(
     }
 
     double change = (total_delay - total_sp_delay) / total_sp_delay;
-    out.emplace_back(change);
+    decorated.emplace_back(change, tm_state);
   }
 
-  return out;
+  std::sort(decorated.begin(), decorated.end());
+  const OptimizerTMState* max = decorated.back().second;
+  const OptimizerTMState* med = decorated[decorated.size() / 2].second;
+
+  std::vector<double> out;
+  for (const auto& change_and_state : decorated) {
+    out.emplace_back(change_and_state.first);
+  }
+
+  return std::make_tuple(out, med, max, out[out.size() / 2], out.back());
 }
 
 static std::pair<double, std::string> MedianPathRatio(
@@ -156,11 +166,25 @@ struct PlotPack {
   nc::viz::CDFPlot aggregate_path_count;
 };
 
-static void HandleSingleOptimizer(
+struct HandleSingleOptimizerResult {
+  const OptimizerTMState* med;
+  const OptimizerTMState* max;
+  double med_value;
+  double max_value;
+};
+
+static HandleSingleOptimizerResult HandleSingleOptimizer(
     const std::string& optimizer,
     const std::vector<const OptimizerTMState*>& tm_states, PlotPack* plots) {
-  std::vector<double> ratios = GetPathRatios(tm_states);
+  std::vector<double> ratios;
+  const OptimizerTMState* med;
+  const OptimizerTMState* max;
+  double med_value;
+  double max_value;
+  std::tie(ratios, med, max, med_value, max_value) = GetPathRatios(tm_states);
   plots->ratios.AddData(optimizer, ratios);
+  CHECK(med != nullptr);
+  CHECK(max != nullptr);
 
   // Will plot the percentiles to get a CDF.
   std::vector<double> percentiles;
@@ -189,6 +213,8 @@ static void HandleSingleOptimizer(
     }
   }
   plots->link_utilization.AddData(optimizer, link_utilizations);
+
+  return {med, max, med_value, max_value};
 }
 
 // Returns the link scale at which total delay will be 'fraction' of the one at
@@ -196,21 +222,28 @@ static void HandleSingleOptimizer(
 static double LinkScaleAtDelayFraction(double fraction,
                                        const TMState& tm_state) {
   double abs_stride = tm_state.link_scale_stride;
+  const std::vector<double>& delay_at_scale =
+      tm_state.total_delay_at_link_scale;
 
   std::vector<double> xs;
   std::vector<double> ys;
-  for (size_t i = 0; i < tm_state.total_delay_at_link_scale.size(); ++i) {
+  for (size_t i = 0; i < delay_at_scale.size(); ++i) {
     double multiplier = 1.0 - i * abs_stride;
     xs.emplace_back(multiplier);
-    ys.emplace_back(tm_state.total_delay_at_link_scale[i]);
+    ys.emplace_back(delay_at_scale[i]);
   }
 
   nc::Empirical2DFunction f(xs, ys, nc::Empirical2DFunction::LINEAR);
-  double min_delay = tm_state.total_delay_at_link_scale.front();
-  for (double link_scale = 1.0; link_scale != 0.0; link_scale -= 0.01) {
+  double min_delay = delay_at_scale.front();
+  double max_delay = delay_at_scale.back();
+  if (max_delay / min_delay <= fraction) {
+    return 1.0 - delay_at_scale.size() * abs_stride;
+  }
+
+  for (double link_scale = 1.0; link_scale > 0.0; link_scale -= 0.01) {
     double delay = f.Eval(link_scale);
     double delay_fraction = delay / min_delay;
-    if (delay_fraction <= fraction) {
+    if (delay_fraction >= fraction) {
       return link_scale;
     }
   }
@@ -350,42 +383,16 @@ class DataPlotter {
 
     TMKey key = std::make_tuple(graph, seed, load, locality);
     demands_by_key_[key] = demand_matrix.get();
-    top_level_map_[graph][seed][load][locality][opt] = optimizer_state;
-    data_by_load_and_localiy_[std::make_pair(load, locality)][opt].emplace_back(
-        optimizer_state);
+    key_by_state_[optimizer_state] = key;
+
+    auto ll = std::make_pair(load, locality);
+    top_level_map_[graph][seed][ll] = optimizer_state->parent_state;
+    data_by_load_and_localiy_[ll][opt].emplace_back(optimizer_state);
   }
 
   void PlotRoot(const std::string& root) {
     using namespace std::chrono;
     ctemplate::TemplateDictionary dict("plot");
-
-    for (const auto& graph_and_seed_map : top_level_map_) {
-      const nc::net::GraphStorage* graph = graph_and_seed_map.first;
-      const SeedMap& seed_map = graph_and_seed_map.second;
-      const std::string& name = nc::FindOrDie(graph_to_name_, graph);
-
-      std::string subdir = nc::StrCat(root, "/", name);
-      PlotSeedMap(name, graph, seed_map, subdir);
-
-      nc::net::GraphStats stats = graph->Stats();
-      double diameter_ms =
-          duration_cast<milliseconds>(stats.sp_delay_percentiles.back())
-              .count();
-      double min_linkspeed = stats.link_capacity_percentiles.front().Mbps();
-      double max_linkspeed = stats.link_capacity_percentiles.back().Mbps();
-
-      ctemplate::TemplateDictionary* subdict =
-          dict.AddSectionDictionary("summary_table_rows");
-      subdict->SetValue("name", name);
-      subdict->SetValue("node_count", std::to_string(stats.nodes_count));
-      subdict->SetValue("link_count", std::to_string(stats.links_count));
-      subdict->SetValue("diameter", nc::StrCat(diameter_ms, " ms"));
-      subdict->SetValue("linkspeed", nc::StrCat(min_linkspeed, " Mbps / ",
-                                                max_linkspeed, " Mbps"));
-
-      subdict = dict.AddSectionDictionary("subdirs");
-      subdict->SetValue("name", name);
-    }
 
     for (const auto& load_and_locality_and_data : data_by_load_and_localiy_) {
       double load;
@@ -399,6 +406,52 @@ class DataPlotter {
       ctemplate::TemplateDictionary* subdict =
           dict.AddSectionDictionary("subdirs");
       subdict->SetValue("name", nc::StrCat("data_load_", load, "_", locality));
+    }
+
+    //    for (const auto& graph_and_seed_map : top_level_map_) {
+    //      const nc::net::GraphStorage* graph = graph_and_seed_map.first;
+    //      const SeedMap& seed_map = graph_and_seed_map.second;
+    //      const std::string& name = nc::FindOrDie(graph_to_name_, graph);
+    //
+    //      std::string subdir = nc::StrCat(root, "/", name);
+    //      PlotSeedMap(name, graph, seed_map, subdir);
+    //
+    //      nc::net::GraphStats stats = graph->Stats();
+    //      double diameter_ms =
+    //          duration_cast<milliseconds>(stats.sp_delay_percentiles.back())
+    //              .count();
+    //      double min_linkspeed =
+    //      stats.link_capacity_percentiles.front().Mbps();
+    //      double max_linkspeed =
+    //      stats.link_capacity_percentiles.back().Mbps();
+    //
+    //      ctemplate::TemplateDictionary* subdict =
+    //          dict.AddSectionDictionary("summary_table_rows");
+    //      subdict->SetValue("name", name);
+    //      subdict->SetValue("node_count", std::to_string(stats.nodes_count));
+    //      subdict->SetValue("link_count", std::to_string(stats.links_count));
+    //      subdict->SetValue("diameter", nc::StrCat(diameter_ms, " ms"));
+    //      subdict->SetValue("linkspeed", nc::StrCat(min_linkspeed, " Mbps / ",
+    //                                                max_linkspeed, " Mbps"));
+    //
+    //      subdict = dict.AddSectionDictionary("subdirs");
+    //      subdict->SetValue("name", name);
+    //    }
+
+    for (uint32_t i = 0; i < interesting_states.size(); ++i) {
+      const TMKey& key = interesting_states[i];
+
+      const nc::net::GraphStorage* graph;
+      double seed;
+      double load;
+      double locality;
+      std::tie(graph, seed, load, locality) = key;
+
+      const std::string& name = nc::FindOrDie(graph_to_name_, graph);
+      const LLMap& ll_map =
+          nc::FindOrDie(nc::FindOrDie(top_level_map_, graph), seed);
+      std::string subdir = nc::StrCat(root, "/interesting_", i);
+      PlotLLMap(name, graph, seed, ll_map, subdir);
     }
 
     std::string output;
@@ -422,82 +475,18 @@ class DataPlotter {
     std::vector<std::string> node_order;
   };
 
-  // Maps an optimizer to its state.
-  using OptMap = std::map<std::string, const OptimizerTMState*>;
-
-  // Maps locality to all traffic matrices with the same locality.
-  using LocalityMap = std::map<double, OptMap>;
-
-  // Maps load to TMs with the same load value.
-  using LoadMap = std::map<double, LocalityMap>;
+  // Maps a combination of load and locality to a traffic matrix.
+  using LLMap = std::map<LoadAndLocality, const TMState*>;
 
   // Groups TMs with the same seed value.
-  using SeedMap = std::map<double, LoadMap>;
+  using SeedMap = std::map<double, LLMap>;
 
   // Maps a topology to all traffic matrices on the same topology.
   using TopologyMap = std::map<const nc::net::GraphStorage*, SeedMap>;
 
-  // Plots different optimizers for the same TM.
-  void PlotOptMap(const std::string& topology_name, double seed, double load,
-                  double locality, const OptMap& opt_map,
-                  const std::string& root) {
-    nc::viz::LinePlot abs_path_stretch_plot(
-        {"Absolute path stretch", "milliseconds longer than SP", "CDF"});
-    nc::viz::LinePlot rel_path_stretch_plot(
-        {"Relative path stretch", "fraction change over SP", "CDF"});
-    nc::viz::CDFPlot path_count_plot(
-        {"Number of paths per aggregate", "path count"});
-    nc::viz::CDFPlot link_utilization_plot({"Link utilization", "utilization"});
-
-    for (const auto& optimizer_and_state : opt_map) {
-      const std::string& opt = optimizer_and_state.first;
-      const OptimizerTMState* state = optimizer_and_state.second;
-      CHECK(state != nullptr);
-
-      std::vector<double> abs_percentiles =
-          GetStretchDistribution(*state, true);
-      std::vector<std::pair<double, double>> abs_to_plot;
-      for (size_t i = 0; i < abs_percentiles.size(); ++i) {
-        abs_to_plot.emplace_back(abs_percentiles[i], i);
-      }
-
-      std::vector<double> rel_percentiles =
-          GetStretchDistribution(*state, false);
-      std::vector<std::pair<double, double>> rel_to_plot;
-      for (size_t i = 0; i < rel_percentiles.size(); ++i) {
-        rel_to_plot.emplace_back(rel_percentiles[i], i);
-      }
-
-      abs_path_stretch_plot.AddData(opt, abs_to_plot);
-      rel_path_stretch_plot.AddData(opt, rel_to_plot);
-      path_count_plot.AddData(opt, state->aggregate_path_count);
-      link_utilization_plot.AddData(opt, state->link_utilization);
-    }
-
-    ctemplate::TemplateDictionary dict("plot");
-    PlotAndAddToTemplate(root, "abs_path_stretch", abs_path_stretch_plot,
-                         &dict);
-    PlotAndAddToTemplate(root, "rel_path_stretch", rel_path_stretch_plot,
-                         &dict);
-    PlotAndAddToTemplate(root, "path_count", rel_path_stretch_plot, &dict);
-    PlotAndAddToTemplate(root, "link_utilization", rel_path_stretch_plot,
-                         &dict);
-
-    dict.SetValue("topology_name", topology_name);
-    dict.SetValue("tm_seed", nc::StrCat(seed));
-    dict.SetValue("locality", nc::StrCat(locality));
-    dict.SetValue("load", nc::StrCat(load));
-
-    std::string output;
-    ctemplate::ExpandTemplate(kSingleTmTemplate, ctemplate::DO_NOT_STRIP, &dict,
-                              &output);
-    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/main.rst"));
-  }
-
-  void PlotLocalityMap(const std::string& topology_name,
-                       const nc::net::GraphStorage* graph, double seed,
-                       double load, const LocalityMap& tm_map,
-                       const std::string& root) {
+  void PlotLLMap(const std::string& topology_name,
+                 const nc::net::GraphStorage* graph, double seed,
+                 const LLMap& ll_map, const std::string& root) {
     using namespace std::chrono;
 
     nc::viz::CDFPlot demand_sizes_plot(
@@ -511,9 +500,11 @@ class DataPlotter {
         {"Total delay vs link scale", "Link scale", "Total delay"});
 
     ctemplate::TemplateDictionary dict("plot");
-    for (const auto& locality_and_opt_map : tm_map) {
-      double locality = locality_and_opt_map.first;
-      const OptMap& opt_map = locality_and_opt_map.second;
+    for (const auto& load_locality_and_tm : ll_map) {
+      double load;
+      double locality;
+      std::tie(load, locality) = load_locality_and_tm.first;
+      const TMState* tm_state = load_locality_and_tm.second;
       const nc::lp::DemandMatrix* demand_matrix = nc::FindOrDieNoPrint(
           demands_by_key_, std::make_tuple(graph, seed, load, locality));
 
@@ -553,27 +544,11 @@ class DataPlotter {
       size_t node_count = graph->NodeCount();
       double possible_count = node_count * (node_count - 1);
       CHECK(demand_sizes_Mbps.size() <= possible_count);
-      std::string id = nc::StrCat("locality ", locality);
+      std::string id = nc::StrCat("load ", load, ", locality ", locality);
 
       demand_sizes_plot.AddData(id, demand_sizes_Mbps);
       sp_utilizations_plot.AddData(id, sp_utilizations);
       cumulative_demands_plot.AddData(id, cumulative_distances);
-
-      // Need to plot the per-optimizer data as well. Will do so in a separate
-      // subdir for each TM.
-      std::string subdir = nc::StrCat(root, "/tm_locality_", locality);
-      PlotOptMap(topology_name, seed, load, locality, opt_map, subdir);
-
-      // All OptimizerTMState should have the same parent.
-      const TMState* tm_state = nullptr;
-      for (const auto& opt_and_state : opt_map) {
-        const TMState* parent = opt_and_state.second->parent_state;
-        if (tm_state != nullptr) {
-          CHECK(tm_state == parent);
-        } else {
-          tm_state = parent;
-        }
-      }
 
       std::vector<std::pair<double, double>> total_delay_values;
       double abs_stride = tm_state->link_scale_stride;
@@ -596,16 +571,11 @@ class DataPlotter {
 
       size_t element_count = demand_matrix->elements().size();
       double element_count_fraction = element_count / possible_count;
-      subdict->SetValue("name", id);
       subdict->SetValue("load_value", nc::ToStringMaxDecimals(load, 2));
+      subdict->SetValue("locality_value", nc::ToStringMaxDecimals(locality, 2));
       subdict->SetValue("demand_count_value", std::to_string(element_count));
       subdict->SetValue("demand_fraction_value",
                         nc::ToStringMaxDecimals(element_count_fraction, 3));
-
-      subdict = dict.AddSectionDictionary("traffic_matrices");
-      subdict->SetValue("topology_name", topology_name);
-      subdict->SetValue("tm_seed", nc::StrCat(seed));
-      subdict->SetValue("locality", nc::StrCat(locality));
     }
 
     PlotAndAddToTemplate(root, "demand_sizes", demand_sizes_plot, &dict);
@@ -617,7 +587,6 @@ class DataPlotter {
 
     dict.SetValue("topology_name", topology_name);
     dict.SetValue("tm_seed", nc::StrCat(seed));
-    dict.SetValue("tm_load", nc::StrCat(load));
 
     std::string output;
     ctemplate::ExpandTemplate(kLocalityLevelTemplate, ctemplate::DO_NOT_STRIP,
@@ -651,21 +620,15 @@ class DataPlotter {
     ctemplate::TemplateDictionary dict("plot");
     dict.SetValue("topology_name", name);
 
-    for (const auto& seed_and_load : seed_map) {
-      double seed = seed_and_load.first;
-      const LoadMap& load_map = seed_and_load.second;
-      for (const auto& load_and_map : load_map) {
-        double load = load_and_map.first;
-        const LocalityMap& locality_map = load_and_map.second;
-        std::string subdir =
-            nc::StrCat(root, "/tm_seed_", seed, "_load_", load);
-        PlotLocalityMap(name, graph, seed, load, locality_map, subdir);
+    for (const auto& seed_and_ll : seed_map) {
+      double seed = seed_and_ll.first;
+      const LLMap& ll_map = seed_and_ll.second;
+      std::string subdir = nc::StrCat(root, "/tm_seed_", seed);
+      PlotLLMap(name, graph, seed, ll_map, subdir);
 
-        ctemplate::TemplateDictionary* subdict =
-            dict.AddSectionDictionary("traffic_matrices");
-        subdict->SetValue("tm_seed", nc::StrCat(seed));
-        subdict->SetValue("tm_load", nc::StrCat(load));
-      }
+      ctemplate::TemplateDictionary* subdict =
+          dict.AddSectionDictionary("traffic_matrices");
+      subdict->SetValue("tm_seed", nc::StrCat(seed));
     }
 
     nc::net::GraphStats stats = graph->Stats();
@@ -700,11 +663,44 @@ class DataPlotter {
       const std::string& root) {
     PlotPack plots;
     ctemplate::TemplateDictionary dict("plot");
+    std::set<const TMState*> all_tm_states;
+
     for (const auto& optimizer_and_states : opt_map) {
       const std::string& opt = optimizer_and_states.first;
       const std::vector<const OptimizerTMState*>& states =
           optimizer_and_states.second;
-      HandleSingleOptimizer(opt, states, &plots);
+      for (const OptimizerTMState* state : states) {
+        all_tm_states.emplace(state->parent_state);
+      }
+
+      HandleSingleOptimizerResult result =
+          HandleSingleOptimizer(opt, states, &plots);
+      ctemplate::TemplateDictionary* subdict =
+          dict.AddSectionDictionary("max_ratio_table_rows");
+      subdict->SetValue("optimizer", opt);
+      subdict->SetValue("value", nc::StrCat(result.max_value));
+      subdict->SetValue("link", std::to_string(interesting_states.size()));
+      interesting_states.emplace_back(nc::FindOrDie(key_by_state_, result.max));
+
+      subdict = dict.AddSectionDictionary("med_ratio_table_rows");
+      subdict->SetValue("optimizer", opt);
+      subdict->SetValue("value", nc::StrCat(result.med_value));
+      subdict->SetValue("link", std::to_string(interesting_states.size()));
+      interesting_states.emplace_back(nc::FindOrDie(key_by_state_, result.med));
+    }
+
+    nc::viz::CDFPlot link_scales_plot(
+        {"Link scales at X% increase in total delay", "link scale"});
+    std::vector<double> p_values = {1.01, 1.02, 1.05, 1.10};
+    for (double p : p_values) {
+      std::vector<double> link_scales;
+      for (const TMState* tm_state : all_tm_states) {
+        double scale = LinkScaleAtDelayFraction(p, *tm_state);
+        link_scales.emplace_back(scale);
+      }
+
+      uint32_t percents = (p - 1) * 100;
+      link_scales_plot.AddData(nc::StrCat(percents, "%"), link_scales);
     }
 
     PlotAndAddToTemplate(root, "path_ratios", plots.ratios, &dict);
@@ -715,6 +711,7 @@ class DataPlotter {
     PlotAndAddToTemplate(root, "path_count", plots.aggregate_path_count, &dict);
     PlotAndAddToTemplate(root, "link_utilization", plots.link_utilization,
                          &dict);
+    PlotAndAddToTemplate(root, "link_scales", link_scales_plot, &dict);
 
     dict.SetValue("tm_load", nc::StrCat(load));
     dict.SetValue("tm_locality", nc::StrCat(locality));
@@ -732,6 +729,7 @@ class DataPlotter {
   std::map<TopologyAndTM, std::unique_ptr<nc::lp::DemandMatrix>>
       demands_by_topology_;
   std::map<TMKey, const nc::lp::DemandMatrix*> demands_by_key_;
+  std::map<const OptimizerTMState*, TMKey> key_by_state_;
 
   // All data, grouped by load and locality.
   std::map<LoadAndLocality,
@@ -740,6 +738,9 @@ class DataPlotter {
 
   // Stores all data.
   TopologyMap top_level_map_;
+
+  // Interesting states to display.
+  std::vector<TMKey> interesting_states;
 };
 
 int main(int argc, char** argv) {
