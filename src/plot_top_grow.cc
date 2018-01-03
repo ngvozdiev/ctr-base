@@ -5,10 +5,10 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/logging.h"
+#include "ncode/strutil.h"
+#include "ncode/substitute.h"
+#include "ncode/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(metrics_dir, "", "The metrics directory.");

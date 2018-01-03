@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/htsim/queue.h"
-#include "ncode_common/src/htsim/tcp.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/htsim/queue.h"
+#include "ncode/htsim/tcp.h"
 
 namespace ctr {
 namespace controller {

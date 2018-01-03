@@ -9,13 +9,13 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/lp/demand_matrix.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/viz/web_page.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/lp/demand_matrix.h"
+#include "ncode/map_util.h"
+#include "ncode/net/net_common.h"
+#include "ncode/viz/web_page.h"
 #include "metrics/metrics.h"
 
 namespace ctr {

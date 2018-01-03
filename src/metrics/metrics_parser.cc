@@ -16,9 +16,9 @@
 #include <limits>
 #include <sstream>
 
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/thread_runner.h"
+#include "ncode/strutil.h"
+#include "ncode/substitute.h"
+#include "ncode/thread_runner.h"
 
 namespace nc {
 namespace metrics {

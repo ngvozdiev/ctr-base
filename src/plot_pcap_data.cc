@@ -4,10 +4,10 @@
 #include <string>
 #include <vector>
 
-#include "ncode_common/src/stats.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/stats.h"
+#include "ncode/strutil.h"
+#include "ncode/logging.h"
+#include "ncode/viz/grapher.h"
 #include "pcap_data.h"
 
 DEFINE_string(pcap_trace_store, "trace_store.pb",

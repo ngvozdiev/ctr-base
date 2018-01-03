@@ -14,16 +14,16 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/net/algorithm.h"
-#include "ncode_common/src/perfect_hash.h"
-#include "ncode_common/src/stats.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/viz/graph.h"
+#include "ncode/common.h"
+#include "ncode/event_queue.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/net/algorithm.h"
+#include "ncode/perfect_hash.h"
+#include "ncode/stats.h"
+#include "ncode/strutil.h"
+#include "ncode/substitute.h"
+#include "ncode/viz/graph.h"
 #include "opt/oversubscription_model.h"
 
 namespace ctr {

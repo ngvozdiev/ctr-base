@@ -2,9 +2,9 @@
 
 #include <utility>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
+#include "ncode/common.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
 
 namespace ctr {
 

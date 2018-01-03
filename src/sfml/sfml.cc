@@ -4,9 +4,9 @@
 #include <cmath>
 #include <tuple>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/common.h"
+#include "ncode/logging.h"
+#include "ncode/strutil.h"
 
 namespace ctr {
 namespace sfml {

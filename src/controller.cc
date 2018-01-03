@@ -6,13 +6,13 @@
 #include <tuple>
 #include <type_traits>
 
-#include "ncode_common/src/htsim/tcp.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/viz/web_page.h"
+#include "ncode/htsim/tcp.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/strutil.h"
+#include "ncode/substitute.h"
+#include "ncode/file.h"
+#include "ncode/viz/web_page.h"
 #include "routing_system.h"
 
 namespace ctr {

@@ -8,8 +8,8 @@
 #include <iostream>
 #include <fstream>
 
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/map_util.h"
+#include "ncode/strutil.h"
 
 namespace nc {
 namespace geo {

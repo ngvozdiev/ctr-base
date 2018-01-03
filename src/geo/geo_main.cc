@@ -1,10 +1,10 @@
 #include <gflags/gflags.h>
 #include <string>
 
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/net_gen.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/net_gen.h"
 #include "geo.h"
 
 DEFINE_string(cities_file, "cities5000.txt", "Location of the cities file");

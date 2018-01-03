@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/event_queue.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/logging.h"
+#include "ncode/net/net_common.h"
 #include "dist_model.h"
 
 namespace ctr {

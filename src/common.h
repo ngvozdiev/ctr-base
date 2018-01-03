@@ -6,12 +6,12 @@
 #include <set>
 #include <tuple>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/lp/demand_matrix.h"
-#include "ncode_common/src/lp/mc_flow.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/common.h"
+#include "ncode/htsim/match.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/lp/demand_matrix.h"
+#include "ncode/lp/mc_flow.h"
+#include "ncode/net/net_common.h"
 
 namespace nc {
 namespace viz {

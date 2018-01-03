@@ -12,10 +12,10 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/common.h"
+#include "ncode/event_queue.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/net/net_common.h"
 #include "common.h"
 #include "prob_model/dist_model.h"
 

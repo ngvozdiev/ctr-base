@@ -4,10 +4,10 @@
 #include <string>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/strutil.h"
 #include "../build/pcap_data.pb.h"
 #include "pcap_data.h"
 

@@ -7,12 +7,12 @@
 #include <string>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/strutil.h"
+#include "ncode/substitute.h"
+#include "ncode/viz/grapher.h"
 #include "mean_est.h"
 
 DEFINE_string(time_series_file, "",

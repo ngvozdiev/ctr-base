@@ -11,14 +11,14 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/lp/demand_matrix.h"
-#include "ncode_common/src/lp/mc_flow.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/net_gen.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/lp/demand_matrix.h"
+#include "ncode/lp/mc_flow.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/net_gen.h"
+#include "ncode/strutil.h"
 #include "../common.h"
 #include "../metrics/metrics.h"
 #include "ctr.h"

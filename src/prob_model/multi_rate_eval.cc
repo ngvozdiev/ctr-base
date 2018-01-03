@@ -10,13 +10,13 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/bulk_gen.h"
-#include "ncode_common/src/htsim/pcap_consumer.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/event_queue.h"
+#include "ncode/htsim/bulk_gen.h"
+#include "ncode/htsim/pcap_consumer.h"
+#include "ncode/logging.h"
+#include "ncode/net/net_common.h"
+#include "ncode/strutil.h"
+#include "ncode/viz/grapher.h"
 #include "../pcap_data.h"
 #include "dist_model.h"
 #include "multi_rate_queue.h"

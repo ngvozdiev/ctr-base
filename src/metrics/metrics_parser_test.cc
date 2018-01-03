@@ -4,8 +4,8 @@
 #include <numeric>
 
 #include "gtest/gtest.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/substitute.h"
+#include "ncode/map_util.h"
+#include "ncode/substitute.h"
 #include "metrics_test_util.h"
 
 using namespace nc::metrics::parser;

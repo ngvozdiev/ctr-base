@@ -13,16 +13,16 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/animator.h"
-#include "ncode_common/src/htsim/bulk_gen.h"
-#include "ncode_common/src/htsim/flow_driver.h"
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/network.h"
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/htsim/queue.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/common.h"
+#include "ncode/event_queue.h"
+#include "ncode/htsim/animator.h"
+#include "ncode/htsim/bulk_gen.h"
+#include "ncode/htsim/flow_driver.h"
+#include "ncode/htsim/match.h"
+#include "ncode/htsim/network.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/htsim/queue.h"
+#include "ncode/net/net_common.h"
 #include "common.h"
 #include "tldr.h"
 

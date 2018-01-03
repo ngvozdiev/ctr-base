@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <set>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/net/algorithm.h"
+#include "ncode/common.h"
+#include "ncode/map_util.h"
+#include "ncode/net/algorithm.h"
 
 namespace ctr {
 

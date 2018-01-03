@@ -13,10 +13,10 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/thread_runner.h"
+#include "ncode/common.h"
+#include "ncode/strutil.h"
+#include "ncode/net/net_common.h"
+#include "ncode/thread_runner.h"
 #include "../common.h"
 
 namespace ctr {

@@ -10,12 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/net_gen.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/common.h"
+#include "ncode/map_util.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/net_gen.h"
+#include "ncode/strutil.h"
+#include "ncode/viz/grapher.h"
 #include "../common.h"
 #include "../mean_est/mean_est.h"
 #include "../routing_system.h"

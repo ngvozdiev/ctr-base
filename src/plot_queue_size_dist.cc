@@ -6,9 +6,9 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/stats.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/logging.h"
+#include "ncode/stats.h"
+#include "ncode/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(input, "", "The metrics file.");

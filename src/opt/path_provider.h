@@ -5,8 +5,8 @@
 #include <memory>
 #include <vector>
 
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/algorithm.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/algorithm.h"
 #include "../common.h"
 
 namespace ctr {

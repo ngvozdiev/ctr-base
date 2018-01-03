@@ -3,10 +3,10 @@
 #include <algorithm>
 #include <functional>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/stats.h"
+#include "ncode/common.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/stats.h"
 #include "metrics/metrics_parser.h"
 
 static constexpr char kAggregateSPDelayMetric[] = "aggregate_sp_delay_ms";

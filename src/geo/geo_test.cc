@@ -4,7 +4,7 @@
 #include <limits>
 #include <tuple>
 
-#include "ncode_common/src/common.h"
+#include "ncode/common.h"
 
 namespace nc {
 namespace geo {

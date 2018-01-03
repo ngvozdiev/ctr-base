@@ -4,12 +4,12 @@
 #include <stddef.h>
 #include <chrono>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/net_gen.h"
-#include "ncode_common/src/perfect_hash.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/net/net_gen.h"
+#include "ncode/perfect_hash.h"
+#include "ncode/strutil.h"
 
 DEFINE_string(topology_root, "", "Root for topologies. Required.");
 DEFINE_uint64(topology_size_limit, 100000,

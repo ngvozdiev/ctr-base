@@ -6,11 +6,11 @@
 #include <iterator>
 #include <tuple>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/free_list.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
+#include "ncode/common.h"
+#include "ncode/event_queue.h"
+#include "ncode/free_list.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
 #include "../net_mock.h"
 
 namespace ctr {

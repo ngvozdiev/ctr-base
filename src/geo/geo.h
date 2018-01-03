@@ -10,8 +10,8 @@
 #include <vector>
 #include <mutex>
 
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/logging.h"
+#include "ncode/substitute.h"
+#include "ncode/logging.h"
 
 namespace nc {
 namespace geo {

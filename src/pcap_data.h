@@ -13,11 +13,11 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/htsim/pcap_consumer.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/event_queue.h"
+#include "ncode/htsim/match.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/htsim/pcap_consumer.h"
+#include "ncode/net/net_common.h"
 #include "pcap_data.pb.h"
 
 namespace ctr {

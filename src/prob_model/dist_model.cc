@@ -3,7 +3,7 @@
 #include <fftw3.h>
 #include "dist_model.h"
 
-#include "ncode_common/src/substitute.h"
+#include "ncode/substitute.h"
 #include "../common.h"
 
 namespace ctr {

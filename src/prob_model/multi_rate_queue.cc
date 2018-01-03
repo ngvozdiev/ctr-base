@@ -5,8 +5,8 @@
 #include <iterator>
 #include <numeric>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/common.h"
+#include "ncode/strutil.h"
 
 namespace ctr {
 

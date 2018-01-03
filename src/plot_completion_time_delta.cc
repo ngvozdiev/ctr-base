@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/viz/grapher.h"
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(sp_input, "", "The shortest path metrics file.");

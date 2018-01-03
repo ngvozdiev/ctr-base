@@ -9,11 +9,11 @@
 #include <vector>
 #include <mutex>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/common.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/strutil.h"
+#include "ncode/viz/grapher.h"
 #include "../build/metrics.pb.h"
 #include "metrics/metrics_parser.h"
 

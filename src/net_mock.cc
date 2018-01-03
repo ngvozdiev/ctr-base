@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
 #include "metrics/metrics.h"
 
 namespace ctr {

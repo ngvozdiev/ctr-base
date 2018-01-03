@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/lp/demand_matrix.h"
+#include "ncode/lp/demand_matrix.h"
 #include "topology_input.h"
 
 namespace ctr {

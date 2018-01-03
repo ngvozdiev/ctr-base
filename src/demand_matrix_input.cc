@@ -9,12 +9,12 @@
 #include <random>
 #include <string>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/net_gen.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/logging.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/net_gen.h"
+#include "ncode/strutil.h"
 #include "topology_input.h"
 
 DEFINE_string(tm_root, "", "Root for traffic matrix file(s). Required.");

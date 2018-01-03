@@ -13,8 +13,8 @@
 #include <unistd.h>
 
 #include "gflags/gflags.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/file.h"
+#include "ncode/strutil.h"
 
 DEFINE_string(metrics_output, "metrics.out",
               "Directory where the metrics will be stored");

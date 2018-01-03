@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <memory>
 
-#include "ncode_common/src/logging.h"
+#include "ncode/logging.h"
 #include "../common.h"
 #include "path_provider.h"
 

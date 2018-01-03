@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/htsim/packet.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/htsim/packet.h"
+#include "ncode/net/net_common.h"
 
 namespace ctr {
 namespace sfml {

@@ -3,10 +3,10 @@
 
 #include <type_traits>
 
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/htsim/match.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/strutil.h"
 #include "metrics/metrics.h"
 
 DEFINE_bool(enable_triggered_optimization, true,

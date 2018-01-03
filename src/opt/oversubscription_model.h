@@ -4,7 +4,7 @@
 #include <map>
 #include <vector>
 
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/net/net_common.h"
 #include "../common.h"
 
 namespace ctr {

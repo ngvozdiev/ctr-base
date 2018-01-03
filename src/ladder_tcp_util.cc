@@ -11,13 +11,13 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/htsim/match.h"
-#include "ncode_common/src/htsim/tcp.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/net_gen.h"
+#include "ncode/common.h"
+#include "ncode/event_queue.h"
+#include "ncode/htsim/match.h"
+#include "ncode/htsim/tcp.h"
+#include "ncode/logging.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/net_gen.h"
 #include "common.h"
 #include "controller.h"
 #include "mean_est/mean_est.h"

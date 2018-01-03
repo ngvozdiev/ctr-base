@@ -23,12 +23,12 @@
 #include <atomic>
 
 #include "metrics.pb.h"
-#include "ncode_common/src/circular_array.h"
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/event_queue.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/stats.h"
-#include "ncode_common/src/strutil.h"
+#include "ncode/circular_array.h"
+#include "ncode/common.h"
+#include "ncode/event_queue.h"
+#include "ncode/logging.h"
+#include "ncode/stats.h"
+#include "ncode/strutil.h"
 
 namespace nc {
 namespace metrics {

@@ -15,15 +15,15 @@
 #include <type_traits>
 #include <fstream>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/htsim/bulk_gen.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/lru_cache.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/net/pcap.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/substitute.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/htsim/bulk_gen.h"
+#include "ncode/logging.h"
+#include "ncode/lru_cache.h"
+#include "ncode/map_util.h"
+#include "ncode/net/pcap.h"
+#include "ncode/strutil.h"
+#include "ncode/substitute.h"
 #include "common.h"
 
 namespace ctr {

@@ -6,11 +6,11 @@
 #include <type_traits>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/strutil.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/net/pcap.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/common.h"
+#include "ncode/strutil.h"
+#include "ncode/logging.h"
+#include "ncode/net/pcap.h"
+#include "ncode/viz/grapher.h"
 #include "flow_track.h"
 
 DEFINE_string(pcap_file, "", "The file to read from");

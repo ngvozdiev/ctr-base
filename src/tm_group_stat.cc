@@ -8,16 +8,16 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/file.h"
-#include "ncode_common/src/lp/demand_matrix.h"
-#include "ncode_common/src/net/algorithm.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/thread_runner.h"
-#include "ncode_common/src/viz/ctemplate/template.h"
-#include "ncode_common/src/viz/ctemplate/template_dictionary.h"
-#include "ncode_common/src/viz/ctemplate/template_enums.h"
-#include "ncode_common/src/viz/grapher.h"
+#include "ncode/common.h"
+#include "ncode/file.h"
+#include "ncode/lp/demand_matrix.h"
+#include "ncode/net/algorithm.h"
+#include "ncode/net/net_common.h"
+#include "ncode/thread_runner.h"
+#include "ncode/viz/ctemplate/template.h"
+#include "ncode/viz/ctemplate/template_dictionary.h"
+#include "ncode/viz/ctemplate/template_enums.h"
+#include "ncode/viz/grapher.h"
 #include "demand_matrix_input.h"
 #include "topology_input.h"
 

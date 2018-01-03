@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <utility>
 
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/net/net_common.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/net/net_common.h"
 
 namespace ctr {
 

@@ -7,10 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "ncode_common/src/lru_cache.h"
-#include "ncode_common/src/net/net_common.h"
-#include "ncode_common/src/net/pcap.h"
-#include "ncode_common/src/packer.h"
+#include "ncode/lru_cache.h"
+#include "ncode/net/net_common.h"
+#include "ncode/net/pcap.h"
+#include "ncode/packer.h"
 
 namespace nc {
 

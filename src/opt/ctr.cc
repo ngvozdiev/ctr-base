@@ -7,12 +7,12 @@
 #include <string>
 #include <utility>
 
-#include "ncode_common/src/common.h"
-#include "ncode_common/src/logging.h"
-#include "ncode_common/src/map_util.h"
-#include "ncode_common/src/perfect_hash.h"
-#include "ncode_common/src/substitute.h"
-#include "ncode_common/src/lp/lp.h"
+#include "ncode/common.h"
+#include "ncode/logging.h"
+#include "ncode/map_util.h"
+#include "ncode/perfect_hash.h"
+#include "ncode/substitute.h"
+#include "ncode/lp/lp.h"
 #include "path_provider.h"
 
 DEFINE_bool(debug_ctr, false, "Print debugging information about CTR");
