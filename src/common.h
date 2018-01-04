@@ -204,8 +204,18 @@ struct RoutingConfigurationDelta {
 // to route.
 class RoutingConfiguration : public TrafficMatrix {
  public:
+  static constexpr char kDefaultOptimizerString[] = "UNKNOWN";
+
+  // Loads a routing configuration from the text produced by SerializeToText.
+  static std::unique_ptr<RoutingConfiguration> LoadFromSerializedText(
+      const TrafficMatrix& base_matrix,
+      const std::vector<std::string>& node_order, const std::string& text,
+      PathProvider* path_provider);
+
   explicit RoutingConfiguration(const TrafficMatrix& base_matrix)
-      : TrafficMatrix(base_matrix.graph(), base_matrix.demands()) {}
+      : TrafficMatrix(base_matrix.graph(), base_matrix.demands()),
+        time_to_compute_(0),
+        optimizer_string_(kDefaultOptimizerString) {}
 
   void AddRouteAndFraction(
       const AggregateId& aggregate_id,
@@ -225,6 +235,22 @@ class RoutingConfiguration : public TrafficMatrix {
 
   // Renders the configuration as a graph on a web page.
   void ToHTML(nc::viz::HtmlPage* out) const;
+
+  // A simple text-based serialization of the routing configuration. Each line
+  // after the first one represents one path and has the following
+  // comma-separated format:
+  // node_0,...,node_n,fraction_of_demand
+  // where node_0 is the index of the source node, node_n is the index of the
+  // destination node (indices are based on the original .graph file) and
+  // fraction_of_demand is the fraction of the total demand between the source
+  // and the destination that goes along this path. This representation assumes
+  // that there is at most one link between any two nodes in the graph. The
+  // first line has the following format:
+  // optimizer,compute_time
+  // where num_paths is the number of paths, optimizer is a string that
+  // identifies the optimizer that was used to generate this configuration and
+  // compute_time is the time (in milliseconds) it took to produce it.
+  std::string SerializeToText(const std::vector<std::string>& node_order) const;
 
   // Computes the difference between this routing configuration and another.
   // Both should have the same aggregates.
@@ -262,7 +288,13 @@ class RoutingConfiguration : public TrafficMatrix {
   std::unique_ptr<RoutingConfiguration> Copy() const;
 
  private:
+  // For each aggregate the path and fraction through the network.
   std::map<AggregateId, std::vector<RouteAndFraction>> configuration_;
+
+  // Optional fields that identify the time it took to compute the solution and
+  // the optimizer that was used. Set to 0 if unknown.
+  std::chrono::milliseconds time_to_compute_;
+  std::string optimizer_string_;
 };
 
 // A set of aggregates that share capacity.

@@ -716,6 +716,8 @@ std::unique_ptr<RoutingConfiguration> RoutingConfiguration::Copy() const {
   auto out = nc::make_unique<RoutingConfiguration>(
       *static_cast<const TrafficMatrix*>(this));
   out->configuration_ = configuration_;
+  out->time_to_compute_ = time_to_compute_;
+  out->optimizer_string_ = optimizer_string_;
   return out;
 }
 
@@ -1105,6 +1107,115 @@ ctr::AggregateHistory GetDummyHistory(nc::net::Bandwidth rate,
   }
 
   return {bins, std::chrono::milliseconds(bin_size_ms), flow_count};
+}
+
+static std::vector<nc::net::GraphNodeIndex> NodesFromPath(
+    const nc::net::Walk& path, const nc::net::GraphStorage& graph) {
+  std::vector<nc::net::GraphNodeIndex> out;
+  for (nc::net::GraphLinkIndex link : path.links()) {
+    nc::net::GraphNodeIndex node = graph.GetLink(link)->src();
+    out.emplace_back(node);
+  }
+
+  nc::net::GraphLinkIndex last_link = path.links().back();
+  nc::net::GraphNodeIndex last_node = graph.GetLink(last_link)->dst();
+  out.emplace_back(last_node);
+  return out;
+}
+
+std::string RoutingConfiguration::SerializeToText(
+    const std::vector<std::string>& node_order) const {
+  std::map<std::string, uint32_t> indices;
+  for (size_t i = 0; i < node_order.size(); ++i) {
+    indices[node_order[i]] = i;
+  }
+
+  std::string out;
+  nc::StrAppend(&out, optimizer_string_, ",", time_to_compute_.count(), "\n");
+  for (const auto& aggregate_and_paths : configuration_) {
+    for (const auto& path_and_fraction : aggregate_and_paths.second) {
+      const nc::net::Walk* path = path_and_fraction.first;
+      double fraction = path_and_fraction.second;
+
+      std::vector<nc::net::GraphNodeIndex> nodes =
+          NodesFromPath(*path, *graph_);
+
+      std::vector<std::string> strings;
+      for (nc::net::GraphNodeIndex node : nodes) {
+        const std::string& node_id = graph_->GetNode(node)->id();
+        strings.emplace_back(nc::StrCat(nc::FindOrDie(indices, node_id)));
+      }
+
+      strings.emplace_back(nc::StrCat(fraction));
+      nc::StrAppend(&out, nc::Join(strings, ","), "\n");
+    }
+  }
+
+  return out;
+}
+
+std::unique_ptr<RoutingConfiguration>
+RoutingConfiguration::LoadFromSerializedText(
+    const TrafficMatrix& base_matrix,
+    const std::vector<std::string>& node_order, const std::string& text,
+    PathProvider* path_provider) {
+  std::vector<std::string> lines = nc::Split(text, "\n");
+  CHECK(!lines.empty());
+
+  std::vector<std::string> first_line = nc::Split(lines[0], ",");
+  CHECK(first_line.size() == 2);
+
+  std::string optimizer_string = first_line[0];
+  uint32_t time_to_compute;
+  CHECK(nc::safe_strtou32(first_line[1], &time_to_compute));
+
+  std::map<AggregateId, std::vector<RouteAndFraction>> routes;
+  const nc::net::GraphStorage* graph = base_matrix.graph();
+  for (size_t i = 1; i < lines.size(); ++i) {
+    const std::string& line = lines[i];
+    std::vector<std::string> line_split = nc::Split(line, ",");
+    CHECK(line_split.size() >= 3);
+
+    double fraction;
+    CHECK(nc::safe_strtod(line_split.back(), &fraction));
+
+    std::vector<nc::net::GraphNodeIndex> nodes_on_path;
+    for (size_t j = 0; j < line_split.size() - 1; ++j) {
+      uint32_t node_index;
+      CHECK(nc::safe_strtou32(line_split[j], &node_index));
+      CHECK(node_index < node_order.size());
+
+      const std::string& node_id = node_order[node_index];
+      nc::net::GraphNodeIndex node = graph->NodeFromStringOrDie(node_id);
+      nodes_on_path.emplace_back(node);
+    }
+    CHECK(nodes_on_path.size() >= 2);
+
+    nc::net::Links links_on_path;
+    for (size_t j = 0; j < nodes_on_path.size() - 1; ++j) {
+      auto link = graph->LinkOrDie(nodes_on_path[j], nodes_on_path[j + 1]);
+      links_on_path.emplace_back(link);
+    }
+
+    auto new_path = nc::make_unique<nc::net::Walk>(links_on_path, *graph);
+    const nc::net::Walk* path_ptr =
+        path_provider->TakeOwnership(std::move(new_path));
+
+    AggregateId id(nodes_on_path.front(), nodes_on_path.back());
+    CHECK(nc::ContainsKey(base_matrix.demands(), id));
+    routes[id].emplace_back(path_ptr, fraction);
+  }
+
+  auto out = nc::make_unique<RoutingConfiguration>(base_matrix);
+  out->time_to_compute_ = std::chrono::milliseconds(time_to_compute);
+  out->optimizer_string_ = optimizer_string;
+
+  for (const auto& aggregate_id_and_routes : routes) {
+    const AggregateId& id = aggregate_id_and_routes.first;
+    out->AddRouteAndFraction(id, aggregate_id_and_routes.second);
+  }
+
+  return out;
 }
 
 }  // namespace ctr
