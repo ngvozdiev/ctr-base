@@ -1,32 +1,32 @@
 #include "common.h"
 
-#include <stdint.h>
-#include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <iostream>
-#include <iterator>
-#include <map>
-#include <memory>
+#include <ncode/common.h>
+#include <ncode/event_queue.h>
+#include <ncode/free_list.h>
+#include <ncode/htsim/packet.h>
+#include <ncode/lp/demand_matrix.h>
+#include <ncode/lp/mc_flow.h>
+#include <ncode/net/algorithm.h>
+#include <ncode/net/net_common.h>
+#include <ncode/perfect_hash.h>
+#include <ncode/stats.h>
+#include <ncode/strutil.h>
+#include <ncode/substitute.h>
+#include <ncode/viz/graph.h>
+#include <stddef.h>
+#include <initializer_list>
+#include <random>
 #include <ratio>
+#include <set>
 #include <string>
-#include <type_traits>
-#include <utility>
-#include <vector>
+#include <tuple>
 
-#include "ncode/common.h"
-#include "ncode/event_queue.h"
-#include "ncode/logging.h"
-#include "ncode/map_util.h"
-#include "ncode/net/algorithm.h"
-#include "ncode/perfect_hash.h"
-#include "ncode/stats.h"
-#include "ncode/strutil.h"
-#include "ncode/substitute.h"
-#include "ncode/viz/graph.h"
 #include "opt/oversubscription_model.h"
+#include "opt/path_provider.h"
 
 namespace ctr {
+
+constexpr char RoutingConfiguration::kDefaultOptimizerString[];
 
 bool operator<(const AggregateId& a, const AggregateId& b) {
   return std::tie(a.src_, a.dst_) < std::tie(b.src_, b.dst_);

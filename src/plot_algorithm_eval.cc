@@ -24,8 +24,6 @@
 #include "ncode/viz/ctemplate/template.h"
 #include "ncode/viz/ctemplate/template_dictionary.h"
 #include "ncode/viz/ctemplate/template_enums.h"
-#include "metrics/metrics_parser.h"
-#include "plot_algorithm_eval_tools.h"
 
 DEFINE_string(metrics_dir, "", "The metrics directory.");
 DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
@@ -33,77 +31,64 @@ DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
 DEFINE_string(output_prefix, "",
               "Prefix that will be added to all output directories.");
 
-static constexpr char kAggregatePathCountMetric[] = "opt_path_count";
-static constexpr char kRuntimeMetric[] = "ctr_runtime_ms";
-static constexpr char kRuntimeCachedMetric[] = "ctr_runtime_cached_ms";
 static constexpr char kTopLevelTemplate[] = "top_level_template.rst";
 static constexpr char kSingleTopTemplate[] = "single_top_template.rst";
 static constexpr char kSummaryTemplate[] = "summary_template.rst";
 static constexpr char kLocalityLevelTemplate[] = "tm_stat_template.rst";
 static constexpr char kSingleTmTemplate[] = "single_tm_template.rst";
 
+static constexpr size_t kDiscreteMultiplier = 10000;
+static constexpr size_t kPercentilesCount = 10000;
+
 using namespace nc::metrics::parser;
 using namespace ctr::alg_eval;
+using namespace ctr;
+using namespace std::chrono;
 
-// Returns the set of fields for which all aggregates use only one path.
-static std::set<TopologyAndTM> FieldsWithSinglePath(
-    const DataMap& path_count_data) {
-  std::set<TopologyAndTM> out;
-  for (const auto& key_and_data : path_count_data) {
-    const std::pair<std::string, std::string>& metric_and_fields =
-        key_and_data.first;
+using TopologyAndTM = std::pair<std::string, std::string>;
 
-    // Assuming the field string is <topology_file>:<tm_file>:<optimizer>
-    std::string field_string = metric_and_fields.second;
-    std::vector<std::string> split = nc::Split(field_string, ":");
-    CHECK(split.size() == 3);
-
-    const DataVector& path_counts = key_and_data.second;
-    bool all_ones = true;
-    for (double count : path_counts) {
-      double path_count;
-      CHECK(std::modf(count, &path_count) == 0.0);
-
-      if (path_count != 1.0) {
-        all_ones = false;
-        break;
-      }
-    }
-
-    if (all_ones) {
-      out.emplace(split[0], split[1]);
-    }
-  }
-
-  return out;
+static double ToMs(nc::net::Delay delay) {
+  return duration_cast<microseconds>(delay).count() / 1000.0;
 }
 
-static std::tuple<std::vector<double>, const OptimizerTMState*,
-                  const OptimizerTMState*, double, double>
-GetPathRatios(const std::vector<const OptimizerTMState*>& tm_states) {
-  std::vector<std::pair<double, const OptimizerTMState*>> decorated;
-  for (const OptimizerTMState* tm_state : tm_states) {
-    std::vector<AggregateTMState> aggregates = tm_state->GetAggregates();
+static std::tuple<std::vector<double>, const RoutingConfiguration*,
+                  const RoutingConfiguration*, double, double>
+GetPathRatios(const std::vector<const RoutingConfiguration*>& routing_configs) {
+  std::vector<std::pair<double, const RoutingConfiguration*>> decorated;
+  for (const RoutingConfiguration* rc : routing_configs) {
     double total_sp_delay = 0;
     double total_delay = 0;
-    for (const auto& aggregate : aggregates) {
-      double sp_delay_ms = aggregate.sp_delay_ms;
-      for (const auto& delay_and_count : aggregate.paths) {
-        double path_delay_ms = delay_and_count.first;
+    for (const auto& aggregate_and_routes : rc->routes()) {
+      const AggregateId& id = aggregate_and_routes.first;
+      const DemandAndFlowCount& demand_and_flow_count =
+          nc::FindOrDie(rc->demands(), id);
+      double aggregate_flow_count = demand_and_flow_count.second;
+
+      nc::net::Delay sp_delay = id.GetSPDelay(*rc->graph());
+      double sp_delay_ms = ToMs(sp_delay);
+
+      for (const RouteAndFraction& route_and_fraction :
+           aggregate_and_routes.second) {
+        const nc::net::Walk* path = route_and_fraction.first;
+        double fraction = route_and_fraction.second;
+
+        double path_delay_ms = ToMs(path->delay());
         double abs_stretch = path_delay_ms - sp_delay_ms;
-        uint32_t flow_count = delay_and_count.second;
+        size_t flow_count = aggregate_flow_count * fraction;
+        flow_count = std::max(1ul, flow_count);
+
         total_sp_delay += sp_delay_ms * flow_count;
         total_delay += (sp_delay_ms + abs_stretch) * flow_count;
       }
     }
 
     double change = (total_delay - total_sp_delay) / total_sp_delay;
-    decorated.emplace_back(change, tm_state);
+    decorated.emplace_back(change, rc);
   }
 
   std::sort(decorated.begin(), decorated.end());
-  const OptimizerTMState* max = decorated.back().second;
-  const OptimizerTMState* med = decorated[decorated.size() / 2].second;
+  const RoutingConfiguration* max = decorated.back().second;
+  const RoutingConfiguration* med = decorated[decorated.size() / 2].second;
 
   std::vector<double> out;
   for (const auto& change_and_state : decorated) {
@@ -113,41 +98,77 @@ GetPathRatios(const std::vector<const OptimizerTMState*>& tm_states) {
   return std::make_tuple(out, med, max, out[out.size() / 2], out.back());
 }
 
-static std::pair<double, std::string> MedianPathRatio(
-    const std::vector<double>& ratios, const TMStateMap& tm_state_map) {
-  std::vector<std::pair<double, std::string>> to_sort;
-  size_t i = 0;
-  for (const auto& key_and_data : tm_state_map) {
-    to_sort.emplace_back(ratios[i], key_and_data.first.second);
+static std::pair<std::vector<double>, std::vector<double>>
+GetStretchDistribution(const std::vector<const RoutingConfiguration*>& rcs) {
+  nc::DiscreteDistribution<uint64_t> dist;
+  std::vector<double> maxs;
 
-    ++i;
-  }
+  for (const RoutingConfiguration* rc : rcs) {
+    double max = 0;
+    for (const auto& aggregate_and_routes : rc->routes()) {
+      const AggregateId& id = aggregate_and_routes.first;
+      const DemandAndFlowCount& demand_and_flow_count =
+          nc::FindOrDie(rc->demands(), id);
+      double aggregate_flow_count = demand_and_flow_count.second;
 
-  std::sort(to_sort.begin(), to_sort.end());
-  return to_sort[to_sort.size() / 2];
-}
+      nc::net::Delay sp_delay = id.GetSPDelay(*rc->graph());
+      double sp_delay_ms = ToMs(sp_delay);
 
-static std::vector<double> GetTotalDelays(const TMStateMap& tm_state_map) {
-  std::vector<double> out;
-  for (const auto& key_and_data : tm_state_map) {
-    const OptimizerTMState& tm_state = *(key_and_data.second);
-    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
-    double total_delay = 0;
-    for (const auto& aggregate : aggregates) {
-      double sp_delay_ms = aggregate.sp_delay_ms;
-      for (const auto& delay_and_count : aggregate.paths) {
-        double path_delay_ms = delay_and_count.first;
+      for (const RouteAndFraction& route_and_fraction :
+           aggregate_and_routes.second) {
+        const nc::net::Walk* path = route_and_fraction.first;
+        double fraction = route_and_fraction.second;
+
+        double path_delay_ms = ToMs(path->delay());
+        size_t flow_count = aggregate_flow_count * fraction;
+
+        CHECK(path_delay_ms >= sp_delay_ms);
         double abs_stretch = path_delay_ms - sp_delay_ms;
-        uint32_t flow_count = delay_and_count.second;
-        total_delay += (sp_delay_ms + abs_stretch) * flow_count;
+        double rel_stretch = abs_stretch / sp_delay_ms;
+        max = std::max(rel_stretch, max);
+
+        // Have to discretize the value.
+        uint64_t value_discrete =
+            static_cast<uint64_t>(kDiscreteMultiplier * abs_stretch);
+        dist.Add(value_discrete, flow_count);
       }
     }
-
-    out.emplace_back(total_delay);
+    maxs.emplace_back(max);
   }
 
-  return out;
+  std::vector<uint64_t> percentiles = dist.Percentiles(kPercentilesCount);
+  CHECK(percentiles.size() == kPercentilesCount + 1);
+
+  std::vector<double> out;
+  out.reserve(percentiles.size());
+  for (uint64_t discrete_value : percentiles) {
+    out.emplace_back(static_cast<double>(discrete_value) / kDiscreteMultiplier);
+  }
+
+  return {out, maxs};
 }
+
+// static std::vector<double> GetTotalDelays(const TMStateMap& tm_state_map) {
+//  std::vector<double> out;
+//  for (const auto& key_and_data : tm_state_map) {
+//    const OptimizerTMState& tm_state = *(key_and_data.second);
+//    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
+//    double total_delay = 0;
+//    for (const auto& aggregate : aggregates) {
+//      double sp_delay_ms = aggregate.sp_delay_ms;
+//      for (const auto& delay_and_count : aggregate.paths) {
+//        double path_delay_ms = delay_and_count.first;
+//        double abs_stretch = path_delay_ms - sp_delay_ms;
+//        uint32_t flow_count = delay_and_count.second;
+//        total_delay += (sp_delay_ms + abs_stretch) * flow_count;
+//      }
+//    }
+//
+//    out.emplace_back(total_delay);
+//  }
+//
+//  return out;
+//}
 
 struct PlotPack {
   PlotPack()
@@ -167,21 +188,21 @@ struct PlotPack {
 };
 
 struct HandleSingleOptimizerResult {
-  const OptimizerTMState* med;
-  const OptimizerTMState* max;
+  const RoutingConfiguration* med;
+  const RoutingConfiguration* max;
   double med_value;
   double max_value;
 };
 
 static HandleSingleOptimizerResult HandleSingleOptimizer(
     const std::string& optimizer,
-    const std::vector<const OptimizerTMState*>& tm_states, PlotPack* plots) {
+    const std::vector<const RoutingConfiguration*>& rcs, PlotPack* plots) {
   std::vector<double> ratios;
-  const OptimizerTMState* med;
-  const OptimizerTMState* max;
+  const RoutingConfiguration* med;
+  const RoutingConfiguration* max;
   double med_value;
   double max_value;
-  std::tie(ratios, med, max, med_value, max_value) = GetPathRatios(tm_states);
+  std::tie(ratios, med, max, med_value, max_value) = GetPathRatios(rcs);
   plots->ratios.AddData(optimizer, ratios);
   CHECK(med != nullptr);
   CHECK(max != nullptr);
@@ -189,7 +210,7 @@ static HandleSingleOptimizerResult HandleSingleOptimizer(
   // Will plot the percentiles to get a CDF.
   std::vector<double> percentiles;
   std::vector<double> maxs;
-  std::tie(percentiles, maxs) = GetStretchDistribution(tm_states);
+  std::tie(percentiles, maxs) = GetStretchDistribution(rcs);
   std::vector<std::pair<double, double>> path_stretch_rel_data;
   for (size_t i = 0; i < percentiles.size(); ++i) {
     double p = percentiles[i];
@@ -199,17 +220,19 @@ static HandleSingleOptimizerResult HandleSingleOptimizer(
   plots->path_stretch_max_rel.AddData(optimizer, maxs);
 
   std::vector<double> per_aggregate_path_counts;
-  for (const OptimizerTMState* tm_state : tm_states) {
-    for (uint32_t path_count : tm_state->aggregate_path_count) {
-      per_aggregate_path_counts.emplace_back(path_count);
+  for (const RoutingConfiguration* rc : rcs) {
+    std::vector<size_t> num_paths = rc->NumberOfPathsInAggregate();
+    for (size_t num : num_paths) {
+      per_aggregate_path_counts.emplace_back(num);
     }
   }
   plots->aggregate_path_count.AddData(optimizer, per_aggregate_path_counts);
 
   std::vector<double> link_utilizations;
-  for (const OptimizerTMState* tm_state : tm_states) {
-    for (float link_utilization : tm_state->link_utilization) {
-      link_utilizations.emplace_back(link_utilization);
+  for (const RoutingConfiguration* rc : rcs) {
+    const nc::net::GraphLinkMap<double>& utilizations = rc->LinkUtilizations();
+    for (const auto& link_and_utilization : utilizations) {
+      link_utilizations.emplace_back(*link_and_utilization.second);
     }
   }
   plots->link_utilization.AddData(optimizer, link_utilizations);
@@ -217,13 +240,33 @@ static HandleSingleOptimizerResult HandleSingleOptimizer(
   return {med, max, med_value, max_value};
 }
 
+// Parses a comma-separated string of doubles.
+static std::vector<double> GetCommaSeparated(const std::string& value) {
+  std::vector<std::string> split = nc::Split(value, ",");
+  std::vector<double> out;
+  for (const auto& piece : split) {
+    double v;
+    CHECK(nc::safe_strtod(piece, &v));
+    out.emplace_back(v);
+  }
+
+  return out;
+}
+
 // Returns the link scale at which total delay will be 'fraction' of the one at
 // no headroom.
-static double LinkScaleAtDelayFraction(double fraction,
-                                       const TMState& tm_state) {
-  double abs_stride = tm_state.link_scale_stride;
+static double LinkScaleAtDelayFraction(
+    double fraction, const nc::lp::DemandMatrix& demand_matrix) {
+  const std::map<std::string, std::string>& properties =
+      demand_matrix.properties();
+  std::string step_str = nc::FindOrDie(properties, "headroom_vs_delay_step");
+  std::string delays_at_scale_str =
+      nc::FindOrDie(properties, "headroom_vs_delay");
+
+  double abs_stride;
+  CHECK(nc::safe_strtod(step_str, &abs_stride));
   const std::vector<double>& delay_at_scale =
-      tm_state.total_delay_at_link_scale;
+      GetCommaSeparated(delays_at_scale_str);
 
   std::vector<double> xs;
   std::vector<double> ys;
@@ -251,77 +294,78 @@ static double LinkScaleAtDelayFraction(double fraction,
   return 0;
 }
 
-static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
-                           const std::vector<std::string>& optimizers) {
-  std::vector<nc::viz::DataSeries2D> to_plot;
-  for (const std::string& opt : optimizers) {
-    const TMStateMap& state_map = nc::FindOrDie(data, opt);
-
-    std::vector<std::pair<double, double>> xy;
-    std::vector<double> total_delays = GetTotalDelays(state_map);
-    for (size_t i = 0; i < total_delays.size(); ++i) {
-      xy.emplace_back(i, total_delays[i]);
-    }
-
-    to_plot.push_back({opt, xy});
-  }
-
-  nc::viz::LinePlot plot;
-  plot.AddData(to_plot);
-  plot.PlotToDir("total_delays");
-}
+// static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
+//                           const std::vector<std::string>& optimizers) {
+//  std::vector<nc::viz::DataSeries2D> to_plot;
+//  for (const std::string& opt : optimizers) {
+//    const TMStateMap& state_map = nc::FindOrDie(data, opt);
+//
+//    std::vector<std::pair<double, double>> xy;
+//    std::vector<double> total_delays = GetTotalDelays(state_map);
+//    for (size_t i = 0; i < total_delays.size(); ++i) {
+//      xy.emplace_back(i, total_delays[i]);
+//    }
+//
+//    to_plot.push_back({opt, xy});
+//  }
+//
+//  nc::viz::LinePlot plot;
+//  plot.AddData(to_plot);
+//  plot.PlotToDir("total_delays");
+//}
 
 // Returns a list of topology/tm pairs ordered by number of aggregates.
-static std::vector<std::pair<size_t, TopologyAndTM>>
-TopologiesAndTMOrderedBySize(const TMStateMap& data) {
-  std::vector<std::pair<size_t, TopologyAndTM>> out;
-  for (const auto& topology_and_tm_and_state : data) {
-    const TopologyAndTM& topology_and_tm = topology_and_tm_and_state.first;
-    const OptimizerTMState& tm_state = *(topology_and_tm_and_state.second);
-
-    size_t aggregate_count = tm_state.aggregate_path_count.size();
-    out.emplace_back(aggregate_count, topology_and_tm);
-  }
-
-  std::sort(out.begin(), out.end());
-  return out;
-}
-
-static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
-  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metrics_dir, kRuntimeMetric, ".*");
-  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
-      FLAGS_metrics_dir, kRuntimeCachedMetric, ".*");
-
-  const TMStateMap& state_map = nc::FindOrDie(data, "CTR");
-  std::vector<std::pair<size_t, TopologyAndTM>> runs_ordered =
-      TopologiesAndTMOrderedBySize(state_map);
-
-  std::vector<double> y;
-  std::vector<double> y_cached;
-  for (const auto& size_and_topology : runs_ordered) {
-    size_t size = size_and_topology.first;
-    const TopologyAndTM& topology_and_tm = size_and_topology.second;
-
-    std::string key =
-        nc::StrCat(topology_and_tm.first, ":", topology_and_tm.second);
-    const DataVector& runtime_data_vector =
-        nc::FindOrDieNoPrint(runtime_data, std::make_pair(kRuntimeMetric, key));
-    const DataVector& runtime_data_cached_vector = nc::FindOrDieNoPrint(
-        runtime_data_cached, std::make_pair(kRuntimeCachedMetric, key));
-
-    CHECK(runtime_data_vector.size() == 1);
-    CHECK(runtime_data_cached_vector.size() == 1);
-
-    y.emplace_back(runtime_data_vector.front());
-    y_cached.emplace_back(runtime_data_cached_vector.front());
-  }
-
-  nc::viz::CDFPlot plot;
-  plot.AddData("Regular", y_cached);
-  plot.AddData("Cold run", y);
-  plot.PlotToDir("runtime");
-}
+// static std::vector<std::pair<size_t, TopologyAndTM>>
+// TopologiesAndTMOrderedBySize(const TMStateMap& data) {
+//  std::vector<std::pair<size_t, TopologyAndTM>> out;
+//  for (const auto& topology_and_tm_and_state : data) {
+//    const TopologyAndTM& topology_and_tm = topology_and_tm_and_state.first;
+//    const OptimizerTMState& tm_state = *(topology_and_tm_and_state.second);
+//
+//    size_t aggregate_count = tm_state.aggregate_path_count.size();
+//    out.emplace_back(aggregate_count, topology_and_tm);
+//  }
+//
+//  std::sort(out.begin(), out.end());
+//  return out;
+//}
+//
+// static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
+//  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
+//      FLAGS_metrics_dir, kRuntimeMetric, ".*");
+//  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
+//      FLAGS_metrics_dir, kRuntimeCachedMetric, ".*");
+//
+//  const TMStateMap& state_map = nc::FindOrDie(data, "CTR");
+//  std::vector<std::pair<size_t, TopologyAndTM>> runs_ordered =
+//      TopologiesAndTMOrderedBySize(state_map);
+//
+//  std::vector<double> y;
+//  std::vector<double> y_cached;
+//  for (const auto& size_and_topology : runs_ordered) {
+//    size_t size = size_and_topology.first;
+//    const TopologyAndTM& topology_and_tm = size_and_topology.second;
+//
+//    std::string key =
+//        nc::StrCat(topology_and_tm.first, ":", topology_and_tm.second);
+//    const DataVector& runtime_data_vector =
+//        nc::FindOrDieNoPrint(runtime_data, std::make_pair(kRuntimeMetric,
+//        key));
+//    const DataVector& runtime_data_cached_vector = nc::FindOrDieNoPrint(
+//        runtime_data_cached, std::make_pair(kRuntimeCachedMetric, key));
+//
+//    CHECK(runtime_data_vector.size() == 1);
+//    CHECK(runtime_data_cached_vector.size() == 1);
+//
+//    y.emplace_back(runtime_data_vector.front());
+//    y_cached.emplace_back(runtime_data_cached_vector.front());
+//  }
+//
+//  nc::viz::CDFPlot plot;
+//  plot.AddData("Regular", y_cached);
+//  plot.AddData("Cold run", y);
+//  plot.PlotToDir("runtime");
+//}
 
 static std::string Indent(const std::string& input) {
   std::vector<std::string> pieces = nc::Split(input, "\n");
@@ -336,7 +380,7 @@ static std::string Indent(const std::string& input) {
 class DataPlotter {
  public:
   void AddData(const std::string& opt, const TopologyAndTM& topology_and_tm,
-               const OptimizerTMState* optimizer_state) {
+               const RoutingConfiguration* rc) {
     const std::string& topology_file = topology_and_tm.first;
     const std::string& tm_file = topology_and_tm.second;
     std::unique_ptr<GraphAndNodeOrder>& graph_and_node_order =
@@ -383,11 +427,11 @@ class DataPlotter {
 
     TMKey key = std::make_tuple(graph, seed, load, locality);
     demands_by_key_[key] = demand_matrix.get();
-    key_by_state_[optimizer_state] = key;
+    key_by_state_[rc] = key;
 
     auto ll = std::make_pair(load, locality);
-    top_level_map_[graph][seed][ll] = optimizer_state->parent_state;
-    data_by_load_and_localiy_[ll][opt].emplace_back(optimizer_state);
+    top_level_map_[graph][seed][ll] = demand_matrix.get();
+    data_by_load_and_localiy_[ll][opt].emplace_back(rc);
   }
 
   void PlotRoot(const std::string& root) {
@@ -476,7 +520,7 @@ class DataPlotter {
   };
 
   // Maps a combination of load and locality to a traffic matrix.
-  using LLMap = std::map<LoadAndLocality, const TMState*>;
+  using LLMap = std::map<LoadAndLocality, const nc::lp::DemandMatrix*>;
 
   // Groups TMs with the same seed value.
   using SeedMap = std::map<double, LLMap>;
@@ -504,9 +548,7 @@ class DataPlotter {
       double load;
       double locality;
       std::tie(load, locality) = load_locality_and_tm.first;
-      const TMState* tm_state = load_locality_and_tm.second;
-      const nc::lp::DemandMatrix* demand_matrix = nc::FindOrDieNoPrint(
-          demands_by_key_, std::make_tuple(graph, seed, load, locality));
+      const nc::lp::DemandMatrix* demand_matrix = load_locality_and_tm.second;
 
       std::vector<double> demand_sizes_Mbps;
       std::vector<double> sp_utilizations;
@@ -550,12 +592,22 @@ class DataPlotter {
       sp_utilizations_plot.AddData(id, sp_utilizations);
       cumulative_demands_plot.AddData(id, cumulative_distances);
 
+      const std::map<std::string, std::string>& properties =
+          demand_matrix->properties();
+      std::string step_str =
+          nc::FindOrDie(properties, "headroom_vs_delay_step");
+      std::string delays_at_scale_str =
+          nc::FindOrDie(properties, "headroom_vs_delay");
+
+      double abs_stride;
+      CHECK(nc::safe_strtod(step_str, &abs_stride));
+      const std::vector<double>& delay_at_scale =
+          GetCommaSeparated(delays_at_scale_str);
+
       std::vector<std::pair<double, double>> total_delay_values;
-      double abs_stride = tm_state->link_scale_stride;
-      for (size_t i = 0; i < tm_state->total_delay_at_link_scale.size(); ++i) {
+      for (size_t i = 0; i < delay_at_scale.size(); ++i) {
         double multiplier = i * abs_stride;
-        total_delay_values.emplace_back(multiplier,
-                                        tm_state->total_delay_at_link_scale[i]);
+        total_delay_values.emplace_back(multiplier, delay_at_scale[i]);
       }
 
       double first_value = total_delay_values.front().second;
@@ -658,23 +710,27 @@ class DataPlotter {
 
   void PlotDataByLoadAndLocality(
       double load, double locality,
-      const std::map<std::string, std::vector<const OptimizerTMState*>>&
+      const std::map<std::string, std::vector<const RoutingConfiguration*>>&
           opt_map,
       const std::string& root) {
     PlotPack plots;
     ctemplate::TemplateDictionary dict("plot");
-    std::set<const TMState*> all_tm_states;
+    std::set<const nc::lp::DemandMatrix*> all_demands;
 
-    for (const auto& optimizer_and_states : opt_map) {
-      const std::string& opt = optimizer_and_states.first;
-      const std::vector<const OptimizerTMState*>& states =
-          optimizer_and_states.second;
-      for (const OptimizerTMState* state : states) {
-        all_tm_states.emplace(state->parent_state);
+    for (const auto& optimizer_and_rcs : opt_map) {
+      const std::string& opt = optimizer_and_rcs.first;
+      const std::vector<const RoutingConfiguration*>& rcs =
+          optimizer_and_rcs.second;
+      for (const RoutingConfiguration* state : rcs) {
+        const TMKey& key = nc::FindOrDieNoPrint(key_by_state_, state);
+        const nc::lp::DemandMatrix* demand_matrix =
+            nc::FindOrDieNoPrint(demands_by_key_, key);
+
+        all_demands.emplace(demand_matrix);
       }
 
       HandleSingleOptimizerResult result =
-          HandleSingleOptimizer(opt, states, &plots);
+          HandleSingleOptimizer(opt, rcs, &plots);
       ctemplate::TemplateDictionary* subdict =
           dict.AddSectionDictionary("max_ratio_table_rows");
       subdict->SetValue("optimizer", opt);
@@ -694,8 +750,8 @@ class DataPlotter {
     std::vector<double> p_values = {1.01, 1.02, 1.05, 1.10};
     for (double p : p_values) {
       std::vector<double> link_scales;
-      for (const TMState* tm_state : all_tm_states) {
-        double scale = LinkScaleAtDelayFraction(p, *tm_state);
+      for (const nc::lp::DemandMatrix* demand_matrix : all_demands) {
+        double scale = LinkScaleAtDelayFraction(p, *demand_matrix);
         link_scales.emplace_back(scale);
       }
 
@@ -729,11 +785,11 @@ class DataPlotter {
   std::map<TopologyAndTM, std::unique_ptr<nc::lp::DemandMatrix>>
       demands_by_topology_;
   std::map<TMKey, const nc::lp::DemandMatrix*> demands_by_key_;
-  std::map<const OptimizerTMState*, TMKey> key_by_state_;
+  std::map<const RoutingConfiguration*, TMKey> key_by_state_;
 
   // All data, grouped by load and locality.
   std::map<LoadAndLocality,
-           std::map<std::string, std::vector<const OptimizerTMState*>>>
+           std::map<std::string, std::vector<const RoutingConfiguration*>>>
       data_by_load_and_localiy_;
 
   // Stores all data.
@@ -745,7 +801,6 @@ class DataPlotter {
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  CHECK(!FLAGS_metrics_dir.empty()) << "need --metrics_dir";
 
   std::unique_ptr<DataStorage> data_storage =
       ParseTMGenUtilMetrics(FLAGS_metrics_dir);

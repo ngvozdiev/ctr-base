@@ -1,19 +1,24 @@
 #ifndef CTR_COMMON_H
 #define CTR_COMMON_H
 
+#include <ncode/common.h>
+#include <ncode/htsim/match.h>
+#include <ncode/htsim/packet.h>
+#include <ncode/lp/mc_flow.h>
+#include <ncode/net/net_common.h>
 #include <stddef.h>
 #include <random>
 #include <set>
+#include <string>
 #include <tuple>
 
-#include "ncode/common.h"
-#include "ncode/htsim/match.h"
-#include "ncode/htsim/packet.h"
-#include "ncode/lp/demand_matrix.h"
-#include "ncode/lp/mc_flow.h"
-#include "ncode/net/net_common.h"
-
+namespace ctr {
+class PathProvider;
+} /* namespace ctr */
 namespace nc {
+namespace lp {
+class DemandMatrix;
+} /* namespace lp */
 namespace viz {
 class HtmlPage;
 } /* namespace viz */
@@ -284,8 +289,33 @@ class RoutingConfiguration : public TrafficMatrix {
     return out;
   }
 
+  // Returns for each aggregate the number of paths in the aggregate.
+  std::vector<size_t> NumberOfPathsInAggregate() const {
+    std::vector<size_t> out;
+    for (const auto& aggregate_and_routes : configuration_) {
+      size_t count = aggregate_and_routes.second.size();
+      out.emplace_back(count);
+    }
+
+    return out;
+  }
+
   // Makes a copy.
   std::unique_ptr<RoutingConfiguration> Copy() const;
+
+  void set_time_to_compute(std::chrono::milliseconds time) {
+    time_to_compute_ = time;
+  }
+
+  void set_optimizer_string(const std::string& opt_string) {
+    optimizer_string_ = opt_string;
+  }
+
+  const std::string& optimizer_string() const { return optimizer_string_; }
+
+  const std::chrono::milliseconds& time_to_compute() const {
+    return time_to_compute_;
+  }
 
  private:
   // For each aggregate the path and fraction through the network.

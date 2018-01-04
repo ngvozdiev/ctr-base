@@ -23,6 +23,21 @@ class Optimizer {
   virtual std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) = 0;
 
+  // Same as Optimize, but will also time itself and set the time and optimizer
+  // string variables in the returned RoutingConfiguration.
+  std::unique_ptr<RoutingConfiguration> OptimizeWithTimeAndOptString(
+      const TrafficMatrix& tm, const std::string& opt_string) {
+    auto start = std::chrono::high_resolution_clock::now();
+    auto rc = Optimize(tm);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::milliseconds duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+    rc->set_time_to_compute(duration);
+    rc->set_optimizer_string(opt_string);
+    return rc;
+  }
+
   const nc::net::GraphStorage* graph() { return path_provider_->graph(); }
 
   const PathProvider* path_provider() const { return path_provider_; }
