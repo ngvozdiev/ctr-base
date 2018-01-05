@@ -10,14 +10,14 @@ Path ratios (:download:`tgz <{{path_ratios_location_tgz}}>`):
    :widths: 10, 10, 15
    
 {{#max_ratio_table_rows}}
-   "{{optimizer}}", "{{value}}", "{{link}}"{{/max_ratio_table_rows}}
+   "{{optimizer}}", "{{value}}", see :ref:`interesting_{{interesting_index}}`{{/max_ratio_table_rows}}
    
 .. csv-table:: Median ratio
    :header: "optimizer", "value", "link"
    :widths: 10, 10, 15
    
 {{#med_ratio_table_rows}}
-   "{{optimizer}}", "{{value}}", "{{link}}"{{/med_ratio_table_rows}}
+   "{{optimizer}}", "{{value}}", see :ref:`interesting_{{interesting_index}}`{{/med_ratio_table_rows}}
 
 Relative path stretch (:download:`tgz <{{path_stretch_rel_location_tgz}}>`):
 

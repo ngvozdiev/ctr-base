@@ -12,4 +12,4 @@ Distribution of propagation delays of all shortest paths (:download:`tgz <{{node
 .. toctree::
    :maxdepth: 1
 {{#traffic_matrices}}
-   tm_seed_{{tm_seed}}/main {{/traffic_matrices}}
+   tm_seed_{{tm_seed}}/index {{/traffic_matrices}}

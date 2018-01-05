@@ -1,4 +1,6 @@
-Seed {{tm_seed}}
+.. _interesting_{{interesting_index}}:
+
+Seed {{tm_seed}} on topology {{topology_name}}
 ------------------------
 
 .. csv-table:: Summary

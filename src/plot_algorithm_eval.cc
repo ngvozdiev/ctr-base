@@ -1,7 +1,20 @@
 #include <gflags/gflags.h>
+#include <ncode/common.h>
+#include <ncode/file.h>
+#include <ncode/logging.h>
+#include <ncode/lp/demand_matrix.h>
+#include <ncode/map_util.h>
+#include <ncode/net/algorithm.h>
+#include <ncode/net/net_common.h>
+#include <ncode/stats.h>
+#include <ncode/strutil.h>
+#include <ncode/viz/ctemplate/template.h>
+#include <ncode/viz/ctemplate/template_dictionary.h>
+#include <ncode/viz/ctemplate/template_enums.h>
+#include <ncode/viz/grapher.h>
+#include <stddef.h>
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -11,37 +24,25 @@
 #include <utility>
 #include <vector>
 
-#include "ncode/common.h"
-#include "ncode/file.h"
-#include "ncode/logging.h"
-#include "ncode/lp/demand_matrix.h"
-#include "ncode/map_util.h"
-#include "ncode/net/algorithm.h"
-#include "ncode/net/net_common.h"
-#include "ncode/net/net_gen.h"
-#include "ncode/strutil.h"
-#include "ncode/viz/grapher.h"
-#include "ncode/viz/ctemplate/template.h"
-#include "ncode/viz/ctemplate/template_dictionary.h"
-#include "ncode/viz/ctemplate/template_enums.h"
+#include "common.h"
+#include "demand_matrix_input.h"
+#include "opt/path_provider.h"
+#include "topology_input.h"
 
-DEFINE_string(metrics_dir, "", "The metrics directory.");
 DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
               "Optimizers to plot.");
 DEFINE_string(output_prefix, "",
               "Prefix that will be added to all output directories.");
 
-static constexpr char kTopLevelTemplate[] = "top_level_template.rst";
-static constexpr char kSingleTopTemplate[] = "single_top_template.rst";
-static constexpr char kSummaryTemplate[] = "summary_template.rst";
-static constexpr char kLocalityLevelTemplate[] = "tm_stat_template.rst";
+static constexpr char kTopLevelTemplate[] = "../rst/top_level_template.rst";
+static constexpr char kSingleTopTemplate[] = "../rst/single_top_template.rst";
+static constexpr char kSummaryTemplate[] = "../rst/summary_template.rst";
+static constexpr char kLocalityLevelTemplate[] = "../rst/tm_stat_template.rst";
 static constexpr char kSingleTmTemplate[] = "single_tm_template.rst";
 
-static constexpr size_t kDiscreteMultiplier = 10000;
+static constexpr size_t kDiscreteMultiplier = 100;
 static constexpr size_t kPercentilesCount = 10000;
 
-using namespace nc::metrics::parser;
-using namespace ctr::alg_eval;
 using namespace ctr;
 using namespace std::chrono;
 
@@ -51,44 +52,108 @@ static double ToMs(nc::net::Delay delay) {
   return duration_cast<microseconds>(delay).count() / 1000.0;
 }
 
-static std::tuple<std::vector<double>, const RoutingConfiguration*,
-                  const RoutingConfiguration*, double, double>
-GetPathRatios(const std::vector<const RoutingConfiguration*>& routing_configs) {
-  std::vector<std::pair<double, const RoutingConfiguration*>> decorated;
-  for (const RoutingConfiguration* rc : routing_configs) {
-    double total_sp_delay = 0;
-    double total_delay = 0;
-    for (const auto& aggregate_and_routes : rc->routes()) {
-      const AggregateId& id = aggregate_and_routes.first;
-      const DemandAndFlowCount& demand_and_flow_count =
-          nc::FindOrDie(rc->demands(), id);
-      double aggregate_flow_count = demand_and_flow_count.second;
+// Graph, seed and load and locality.
+using TMKey = std::tuple<const nc::net::GraphStorage*, double, double, double>;
 
-      nc::net::Delay sp_delay = id.GetSPDelay(*rc->graph());
-      double sp_delay_ms = ToMs(sp_delay);
+struct RCSummary {
+  double total_sp_delay = 0;
+  double total_delay = 0;
 
-      for (const RouteAndFraction& route_and_fraction :
-           aggregate_and_routes.second) {
-        const nc::net::Walk* path = route_and_fraction.first;
-        double fraction = route_and_fraction.second;
+  // One value per path.
+  std::vector<double> abs_stretches;
+  std::vector<double> rel_stretches;
+  std::vector<double> flow_counts;
 
-        double path_delay_ms = ToMs(path->delay());
-        double abs_stretch = path_delay_ms - sp_delay_ms;
-        size_t flow_count = aggregate_flow_count * fraction;
-        flow_count = std::max(1ul, flow_count);
+  // One value per aggregate.
+  std::vector<double> path_counts;
 
-        total_sp_delay += sp_delay_ms * flow_count;
-        total_delay += (sp_delay_ms + abs_stretch) * flow_count;
-      }
+  // One value per link.
+  std::vector<double> link_utilizations;
+
+  // The demand matrix.
+  const nc::lp::DemandMatrix* demand_matrix;
+
+  // Identifies the graph, seed, load and locality.
+  TMKey key;
+};
+
+static RCSummary ParseRC(const RoutingConfiguration& rc,
+                         const nc::lp::DemandMatrix* demand_matrix) {
+  RCSummary out;
+
+  for (const auto& aggregate_and_routes : rc.routes()) {
+    const AggregateId& id = aggregate_and_routes.first;
+    const DemandAndFlowCount& demand_and_flow_count =
+        nc::FindOrDieNoPrint(rc.demands(), id);
+    double aggregate_flow_count = demand_and_flow_count.second;
+    const nc::net::GraphStorage* graph = rc.graph();
+
+    nc::net::Delay sp_delay = id.GetSPDelay(*graph);
+    double sp_delay_ms = ToMs(sp_delay);
+    sp_delay_ms = std::max(1.0, sp_delay_ms);
+
+    for (const RouteAndFraction& route_and_fraction :
+         aggregate_and_routes.second) {
+      const nc::net::Walk* path = route_and_fraction.first;
+      double fraction = route_and_fraction.second;
+
+      double path_delay_ms = ToMs(path->delay());
+      path_delay_ms = std::max(1.0, path_delay_ms);
+
+      double abs_stretch = path_delay_ms - sp_delay_ms;
+      double rel_stretch = (path_delay_ms - sp_delay_ms) / sp_delay_ms;
+      CHECK(abs_stretch >= 0);
+      CHECK(rel_stretch >= 0);
+      CHECK(rel_stretch < 1000);
+
+      size_t flow_count = aggregate_flow_count * fraction;
+      flow_count = std::max(1ul, flow_count);
+      out.abs_stretches.emplace_back(abs_stretch);
+      out.rel_stretches.emplace_back(rel_stretch);
+      out.flow_counts.emplace_back(flow_count);
+      out.total_sp_delay += sp_delay_ms * flow_count;
+      out.total_delay += (sp_delay_ms + abs_stretch) * flow_count;
     }
+    out.path_counts.emplace_back(aggregate_and_routes.second.size());
+  }
 
-    double change = (total_delay - total_sp_delay) / total_sp_delay;
-    decorated.emplace_back(change, rc);
+  double locality;
+  std::string locality_str =
+      nc::FindOrDie(demand_matrix->properties(), "locality");
+  CHECK(nc::safe_strtod(locality_str, &locality));
+
+  double load;
+  std::string load_str = nc::FindOrDie(demand_matrix->properties(), "load");
+  CHECK(nc::safe_strtod(load_str, &load));
+
+  double seed;
+  std::string seed_str = nc::FindOrDie(demand_matrix->properties(), "seed");
+  CHECK(nc::safe_strtod(seed_str, &seed));
+
+  out.demand_matrix = demand_matrix;
+  out.key = std::make_tuple(demand_matrix->graph(), seed, load, locality);
+
+  nc::net::GraphLinkMap<double> utilizations = rc.LinkUtilizations();
+  for (const auto& link_and_utilization : utilizations) {
+    double utilization = *(link_and_utilization.second);
+    out.link_utilizations.emplace_back(utilization);
+  }
+
+  return out;
+}
+
+static std::tuple<std::vector<double>, const RCSummary*, const RCSummary*,
+                  double, double>
+GetPathRatios(const std::vector<RCSummary>& rcs) {
+  std::vector<std::pair<double, const RCSummary*>> decorated;
+  for (const RCSummary& rc : rcs) {
+    double change = (rc.total_delay - rc.total_sp_delay) / rc.total_sp_delay;
+    decorated.emplace_back(change, &rc);
   }
 
   std::sort(decorated.begin(), decorated.end());
-  const RoutingConfiguration* max = decorated.back().second;
-  const RoutingConfiguration* med = decorated[decorated.size() / 2].second;
+  const RCSummary* max = decorated.back().second;
+  const RCSummary* med = decorated[decorated.size() / 2].second;
 
   std::vector<double> out;
   for (const auto& change_and_state : decorated) {
@@ -99,39 +164,19 @@ GetPathRatios(const std::vector<const RoutingConfiguration*>& routing_configs) {
 }
 
 static std::pair<std::vector<double>, std::vector<double>>
-GetStretchDistribution(const std::vector<const RoutingConfiguration*>& rcs) {
+GetStretchDistribution(const std::vector<RCSummary>& rcs) {
   nc::DiscreteDistribution<uint64_t> dist;
   std::vector<double> maxs;
 
-  for (const RoutingConfiguration* rc : rcs) {
+  for (const RCSummary& rc : rcs) {
     double max = 0;
-    for (const auto& aggregate_and_routes : rc->routes()) {
-      const AggregateId& id = aggregate_and_routes.first;
-      const DemandAndFlowCount& demand_and_flow_count =
-          nc::FindOrDie(rc->demands(), id);
-      double aggregate_flow_count = demand_and_flow_count.second;
-
-      nc::net::Delay sp_delay = id.GetSPDelay(*rc->graph());
-      double sp_delay_ms = ToMs(sp_delay);
-
-      for (const RouteAndFraction& route_and_fraction :
-           aggregate_and_routes.second) {
-        const nc::net::Walk* path = route_and_fraction.first;
-        double fraction = route_and_fraction.second;
-
-        double path_delay_ms = ToMs(path->delay());
-        size_t flow_count = aggregate_flow_count * fraction;
-
-        CHECK(path_delay_ms >= sp_delay_ms);
-        double abs_stretch = path_delay_ms - sp_delay_ms;
-        double rel_stretch = abs_stretch / sp_delay_ms;
-        max = std::max(rel_stretch, max);
-
-        // Have to discretize the value.
-        uint64_t value_discrete =
-            static_cast<uint64_t>(kDiscreteMultiplier * abs_stretch);
-        dist.Add(value_discrete, flow_count);
-      }
+    for (size_t i = 0; i < rc.rel_stretches.size(); ++i) {
+      double rel_stretch = rc.rel_stretches[i];
+      double flow_count = rc.flow_counts[i];
+      uint64_t value_discrete =
+          static_cast<uint64_t>(kDiscreteMultiplier * rel_stretch);
+      dist.Add(value_discrete, flow_count);
+      max = std::max(rel_stretch, max);
     }
     maxs.emplace_back(max);
   }
@@ -142,33 +187,12 @@ GetStretchDistribution(const std::vector<const RoutingConfiguration*>& rcs) {
   std::vector<double> out;
   out.reserve(percentiles.size());
   for (uint64_t discrete_value : percentiles) {
-    out.emplace_back(static_cast<double>(discrete_value) / kDiscreteMultiplier);
+    double v = static_cast<double>(discrete_value) / kDiscreteMultiplier;
+    out.emplace_back(v);
   }
 
   return {out, maxs};
 }
-
-// static std::vector<double> GetTotalDelays(const TMStateMap& tm_state_map) {
-//  std::vector<double> out;
-//  for (const auto& key_and_data : tm_state_map) {
-//    const OptimizerTMState& tm_state = *(key_and_data.second);
-//    std::vector<AggregateTMState> aggregates = tm_state.GetAggregates();
-//    double total_delay = 0;
-//    for (const auto& aggregate : aggregates) {
-//      double sp_delay_ms = aggregate.sp_delay_ms;
-//      for (const auto& delay_and_count : aggregate.paths) {
-//        double path_delay_ms = delay_and_count.first;
-//        double abs_stretch = path_delay_ms - sp_delay_ms;
-//        uint32_t flow_count = delay_and_count.second;
-//        total_delay += (sp_delay_ms + abs_stretch) * flow_count;
-//      }
-//    }
-//
-//    out.emplace_back(total_delay);
-//  }
-//
-//  return out;
-//}
 
 struct PlotPack {
   PlotPack()
@@ -188,18 +212,18 @@ struct PlotPack {
 };
 
 struct HandleSingleOptimizerResult {
-  const RoutingConfiguration* med;
-  const RoutingConfiguration* max;
+  const RCSummary* med;
+  const RCSummary* max;
   double med_value;
   double max_value;
 };
 
 static HandleSingleOptimizerResult HandleSingleOptimizer(
-    const std::string& optimizer,
-    const std::vector<const RoutingConfiguration*>& rcs, PlotPack* plots) {
+    const std::string& optimizer, const std::vector<RCSummary>& rcs,
+    PlotPack* plots) {
   std::vector<double> ratios;
-  const RoutingConfiguration* med;
-  const RoutingConfiguration* max;
+  const RCSummary* med;
+  const RCSummary* max;
   double med_value;
   double max_value;
   std::tie(ratios, med, max, med_value, max_value) = GetPathRatios(rcs);
@@ -220,20 +244,18 @@ static HandleSingleOptimizerResult HandleSingleOptimizer(
   plots->path_stretch_max_rel.AddData(optimizer, maxs);
 
   std::vector<double> per_aggregate_path_counts;
-  for (const RoutingConfiguration* rc : rcs) {
-    std::vector<size_t> num_paths = rc->NumberOfPathsInAggregate();
-    for (size_t num : num_paths) {
-      per_aggregate_path_counts.emplace_back(num);
-    }
+  for (const RCSummary& rc : rcs) {
+    per_aggregate_path_counts.insert(per_aggregate_path_counts.end(),
+                                     rc.path_counts.begin(),
+                                     rc.path_counts.end());
   }
   plots->aggregate_path_count.AddData(optimizer, per_aggregate_path_counts);
 
   std::vector<double> link_utilizations;
-  for (const RoutingConfiguration* rc : rcs) {
-    const nc::net::GraphLinkMap<double>& utilizations = rc->LinkUtilizations();
-    for (const auto& link_and_utilization : utilizations) {
-      link_utilizations.emplace_back(*link_and_utilization.second);
-    }
+  for (const RCSummary& rc : rcs) {
+    link_utilizations.insert(link_utilizations.end(),
+                             rc.link_utilizations.begin(),
+                             rc.link_utilizations.end());
   }
   plots->link_utilization.AddData(optimizer, link_utilizations);
 
@@ -294,151 +316,37 @@ static double LinkScaleAtDelayFraction(
   return 0;
 }
 
-// static void PlotTotalDelay(const std::map<std::string, TMStateMap>& data,
-//                           const std::vector<std::string>& optimizers) {
-//  std::vector<nc::viz::DataSeries2D> to_plot;
-//  for (const std::string& opt : optimizers) {
-//    const TMStateMap& state_map = nc::FindOrDie(data, opt);
-//
-//    std::vector<std::pair<double, double>> xy;
-//    std::vector<double> total_delays = GetTotalDelays(state_map);
-//    for (size_t i = 0; i < total_delays.size(); ++i) {
-//      xy.emplace_back(i, total_delays[i]);
-//    }
-//
-//    to_plot.push_back({opt, xy});
+// static std::string Indent(const std::string& input) {
+//  std::vector<std::string> pieces = nc::Split(input, "\n");
+//  std::string out;
+//  for (const auto& piece : pieces) {
+//    nc::StrAppend(&out, "   ", piece, "\n");
 //  }
 //
-//  nc::viz::LinePlot plot;
-//  plot.AddData(to_plot);
-//  plot.PlotToDir("total_delays");
-//}
-
-// Returns a list of topology/tm pairs ordered by number of aggregates.
-// static std::vector<std::pair<size_t, TopologyAndTM>>
-// TopologiesAndTMOrderedBySize(const TMStateMap& data) {
-//  std::vector<std::pair<size_t, TopologyAndTM>> out;
-//  for (const auto& topology_and_tm_and_state : data) {
-//    const TopologyAndTM& topology_and_tm = topology_and_tm_and_state.first;
-//    const OptimizerTMState& tm_state = *(topology_and_tm_and_state.second);
-//
-//    size_t aggregate_count = tm_state.aggregate_path_count.size();
-//    out.emplace_back(aggregate_count, topology_and_tm);
-//  }
-//
-//  std::sort(out.begin(), out.end());
 //  return out;
 //}
-//
-// static void PlotCTRRuntime(const std::map<std::string, TMStateMap>& data) {
-//  DataMap runtime_data = SimpleParseNumericDataNoTimestamps(
-//      FLAGS_metrics_dir, kRuntimeMetric, ".*");
-//  DataMap runtime_data_cached = SimpleParseNumericDataNoTimestamps(
-//      FLAGS_metrics_dir, kRuntimeCachedMetric, ".*");
-//
-//  const TMStateMap& state_map = nc::FindOrDie(data, "CTR");
-//  std::vector<std::pair<size_t, TopologyAndTM>> runs_ordered =
-//      TopologiesAndTMOrderedBySize(state_map);
-//
-//  std::vector<double> y;
-//  std::vector<double> y_cached;
-//  for (const auto& size_and_topology : runs_ordered) {
-//    size_t size = size_and_topology.first;
-//    const TopologyAndTM& topology_and_tm = size_and_topology.second;
-//
-//    std::string key =
-//        nc::StrCat(topology_and_tm.first, ":", topology_and_tm.second);
-//    const DataVector& runtime_data_vector =
-//        nc::FindOrDieNoPrint(runtime_data, std::make_pair(kRuntimeMetric,
-//        key));
-//    const DataVector& runtime_data_cached_vector = nc::FindOrDieNoPrint(
-//        runtime_data_cached, std::make_pair(kRuntimeCachedMetric, key));
-//
-//    CHECK(runtime_data_vector.size() == 1);
-//    CHECK(runtime_data_cached_vector.size() == 1);
-//
-//    y.emplace_back(runtime_data_vector.front());
-//    y_cached.emplace_back(runtime_data_cached_vector.front());
-//  }
-//
-//  nc::viz::CDFPlot plot;
-//  plot.AddData("Regular", y_cached);
-//  plot.AddData("Cold run", y);
-//  plot.PlotToDir("runtime");
-//}
-
-static std::string Indent(const std::string& input) {
-  std::vector<std::string> pieces = nc::Split(input, "\n");
-  std::string out;
-  for (const auto& piece : pieces) {
-    nc::StrAppend(&out, "   ", piece, "\n");
-  }
-
-  return out;
-}
 
 class DataPlotter {
  public:
-  void AddData(const std::string& opt, const TopologyAndTM& topology_and_tm,
-               const RoutingConfiguration* rc) {
-    const std::string& topology_file = topology_and_tm.first;
-    const std::string& tm_file = topology_and_tm.second;
-    std::unique_ptr<GraphAndNodeOrder>& graph_and_node_order =
-        graphs_[topology_file];
-
-    // In case the same graph was already used by a different TM.
-    if (!graph_and_node_order) {
-      std::vector<std::string> new_node_order;
-      nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
-          nc::File::ReadFileToStringOrDie(topology_file), &new_node_order);
-      builder.RemoveMultipleLinks();
-      graph_and_node_order =
-          nc::make_unique<GraphAndNodeOrder>(builder, new_node_order);
-
-      std::string name = nc::File::ExtractFileName(topology_file);
-      name = nc::StringReplace(name, ".graph", "", true);
-
-      graph_to_name_[&graph_and_node_order->graph] = name;
-    }
-
-    // Same as above, but for TMs.
-    const nc::net::GraphStorage* graph = &graph_and_node_order->graph;
-    std::unique_ptr<nc::lp::DemandMatrix>& demand_matrix =
-        demands_by_topology_[topology_and_tm];
-    if (!demand_matrix) {
-      const std::vector<std::string>& node_order =
-          graph_and_node_order->node_order;
-      demand_matrix = nc::lp::DemandMatrix::LoadRepetitaFileOrDie(
-          tm_file, node_order, graph);
-    }
-
-    double locality;
-    std::string locality_str =
-        nc::FindOrDie(demand_matrix->properties(), "locality");
-    CHECK(nc::safe_strtod(locality_str, &locality));
-
-    double load;
-    std::string load_str = nc::FindOrDie(demand_matrix->properties(), "load");
-    CHECK(nc::safe_strtod(load_str, &load));
-
+  void AddData(const std::string& opt, const std::string& topology_file,
+               const RCSummary& rc_summary) {
+    const nc::net::GraphStorage* graph;
     double seed;
-    std::string seed_str = nc::FindOrDie(demand_matrix->properties(), "seed");
-    CHECK(nc::safe_strtod(seed_str, &seed));
-
-    TMKey key = std::make_tuple(graph, seed, load, locality);
-    demands_by_key_[key] = demand_matrix.get();
-    key_by_state_[rc] = key;
+    double load;
+    double locality;
+    std::tie(graph, seed, load, locality) = rc_summary.key;
 
     auto ll = std::make_pair(load, locality);
-    top_level_map_[graph][seed][ll] = demand_matrix.get();
-    data_by_load_and_localiy_[ll][opt].emplace_back(rc);
+    graph_to_name_[graph] = topology_file;
+    top_level_map_[graph][seed][ll] = rc_summary.demand_matrix;
+    data_by_load_and_locality_[ll][opt].emplace_back(rc_summary);
   }
 
   void PlotRoot(const std::string& root) {
     using namespace std::chrono;
     ctemplate::TemplateDictionary dict("plot");
 
-    for (const auto& load_and_locality_and_data : data_by_load_and_localiy_) {
+    for (const auto& load_and_locality_and_data : data_by_load_and_locality_) {
       double load;
       double locality;
       std::tie(load, locality) = load_and_locality_and_data.first;
@@ -451,36 +359,6 @@ class DataPlotter {
           dict.AddSectionDictionary("subdirs");
       subdict->SetValue("name", nc::StrCat("data_load_", load, "_", locality));
     }
-
-    //    for (const auto& graph_and_seed_map : top_level_map_) {
-    //      const nc::net::GraphStorage* graph = graph_and_seed_map.first;
-    //      const SeedMap& seed_map = graph_and_seed_map.second;
-    //      const std::string& name = nc::FindOrDie(graph_to_name_, graph);
-    //
-    //      std::string subdir = nc::StrCat(root, "/", name);
-    //      PlotSeedMap(name, graph, seed_map, subdir);
-    //
-    //      nc::net::GraphStats stats = graph->Stats();
-    //      double diameter_ms =
-    //          duration_cast<milliseconds>(stats.sp_delay_percentiles.back())
-    //              .count();
-    //      double min_linkspeed =
-    //      stats.link_capacity_percentiles.front().Mbps();
-    //      double max_linkspeed =
-    //      stats.link_capacity_percentiles.back().Mbps();
-    //
-    //      ctemplate::TemplateDictionary* subdict =
-    //          dict.AddSectionDictionary("summary_table_rows");
-    //      subdict->SetValue("name", name);
-    //      subdict->SetValue("node_count", std::to_string(stats.nodes_count));
-    //      subdict->SetValue("link_count", std::to_string(stats.links_count));
-    //      subdict->SetValue("diameter", nc::StrCat(diameter_ms, " ms"));
-    //      subdict->SetValue("linkspeed", nc::StrCat(min_linkspeed, " Mbps / ",
-    //                                                max_linkspeed, " Mbps"));
-    //
-    //      subdict = dict.AddSectionDictionary("subdirs");
-    //      subdict->SetValue("name", name);
-    //    }
 
     for (uint32_t i = 0; i < interesting_states.size(); ++i) {
       const TMKey& key = interesting_states[i];
@@ -495,29 +373,17 @@ class DataPlotter {
       const LLMap& ll_map =
           nc::FindOrDie(nc::FindOrDie(top_level_map_, graph), seed);
       std::string subdir = nc::StrCat(root, "/interesting_", i);
-      PlotLLMap(name, graph, seed, ll_map, subdir);
+      PlotLLMap(name, graph, seed, ll_map, subdir, i);
     }
 
     std::string output;
     ctemplate::ExpandTemplate(kTopLevelTemplate, ctemplate::DO_NOT_STRIP, &dict,
                               &output);
-    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/main.rst"));
+    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/index.rst"));
   }
 
  private:
-  // Graph, seed and load and locality.
-  using TMKey =
-      std::tuple<const nc::net::GraphStorage*, double, double, double>;
   using LoadAndLocality = std::pair<double, double>;
-
-  struct GraphAndNodeOrder {
-    GraphAndNodeOrder(const nc::net::GraphBuilder& builder,
-                      const std::vector<std::string>& node_order)
-        : graph(builder), node_order(node_order) {}
-
-    nc::net::GraphStorage graph;
-    std::vector<std::string> node_order;
-  };
 
   // Maps a combination of load and locality to a traffic matrix.
   using LLMap = std::map<LoadAndLocality, const nc::lp::DemandMatrix*>;
@@ -530,7 +396,8 @@ class DataPlotter {
 
   void PlotLLMap(const std::string& topology_name,
                  const nc::net::GraphStorage* graph, double seed,
-                 const LLMap& ll_map, const std::string& root) {
+                 const LLMap& ll_map, const std::string& root,
+                 uint32_t interesting_index) {
     using namespace std::chrono;
 
     nc::viz::CDFPlot demand_sizes_plot(
@@ -639,60 +506,64 @@ class DataPlotter {
 
     dict.SetValue("topology_name", topology_name);
     dict.SetValue("tm_seed", nc::StrCat(seed));
+    dict.SetValue("interesting_index", nc::StrCat(interesting_index));
 
     std::string output;
     ctemplate::ExpandTemplate(kLocalityLevelTemplate, ctemplate::DO_NOT_STRIP,
                               &dict, &output);
-    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/main.rst"));
+    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/index.rst"));
   }
 
-  void PlotSeedMap(const std::string& name, const nc::net::GraphStorage* graph,
-                   const SeedMap& seed_map, const std::string& root) {
-    using namespace std::chrono;
-    nc::viz::CDFPlot node_distances_plot(
-        {"Length of each of all N*(N - 1) pair\\'s shortest path",
-         "SP length (ms)"});
-
-    nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr,
-                                    nullptr);
-    std::vector<double> node_distances_ms;
-    for (nc::net::GraphNodeIndex src : graph->AllNodes()) {
-      for (nc::net::GraphNodeIndex dst : graph->AllNodes()) {
-        if (src == dst) {
-          continue;
-        }
-
-        double distance_ms =
-            duration_cast<milliseconds>(sp.GetDistance(src, dst)).count();
-        node_distances_ms.emplace_back(distance_ms);
-      }
-    }
-    node_distances_plot.AddData("", node_distances_ms);
-
-    ctemplate::TemplateDictionary dict("plot");
-    dict.SetValue("topology_name", name);
-
-    for (const auto& seed_and_ll : seed_map) {
-      double seed = seed_and_ll.first;
-      const LLMap& ll_map = seed_and_ll.second;
-      std::string subdir = nc::StrCat(root, "/tm_seed_", seed);
-      PlotLLMap(name, graph, seed, ll_map, subdir);
-
-      ctemplate::TemplateDictionary* subdict =
-          dict.AddSectionDictionary("traffic_matrices");
-      subdict->SetValue("tm_seed", nc::StrCat(seed));
-    }
-
-    nc::net::GraphStats stats = graph->Stats();
-    dict.SetValue("topology_summary", Indent(stats.ToString()));
-
-    PlotAndAddToTemplate(root, "node_distances", node_distances_plot, &dict);
-
-    std::string output;
-    ctemplate::ExpandTemplate(kSingleTopTemplate, ctemplate::DO_NOT_STRIP,
-                              &dict, &output);
-    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/main.rst"));
-  }
+  //  void PlotSeedMap(const std::string& name, const nc::net::GraphStorage*
+  //  graph,
+  //                   const SeedMap& seed_map, const std::string& root) {
+  //    using namespace std::chrono;
+  //    nc::viz::CDFPlot node_distances_plot(
+  //        {"Length of each of all N*(N - 1) pair\\'s shortest path",
+  //         "SP length (ms)"});
+  //
+  //    nc::net::AllPairShortestPath sp({}, graph->AdjacencyList(), nullptr,
+  //                                    nullptr);
+  //    std::vector<double> node_distances_ms;
+  //    for (nc::net::GraphNodeIndex src : graph->AllNodes()) {
+  //      for (nc::net::GraphNodeIndex dst : graph->AllNodes()) {
+  //        if (src == dst) {
+  //          continue;
+  //        }
+  //
+  //        double distance_ms =
+  //            duration_cast<milliseconds>(sp.GetDistance(src, dst)).count();
+  //        node_distances_ms.emplace_back(distance_ms);
+  //      }
+  //    }
+  //    node_distances_plot.AddData("", node_distances_ms);
+  //
+  //    ctemplate::TemplateDictionary dict("plot");
+  //    dict.SetValue("topology_name", name);
+  //
+  //    for (const auto& seed_and_ll : seed_map) {
+  //      double seed = seed_and_ll.first;
+  //      const LLMap& ll_map = seed_and_ll.second;
+  //      std::string subdir = nc::StrCat(root, "/tm_seed_", seed);
+  //      PlotLLMap(name, graph, seed, ll_map, subdir);
+  //
+  //      ctemplate::TemplateDictionary* subdict =
+  //          dict.AddSectionDictionary("traffic_matrices");
+  //      subdict->SetValue("tm_seed", nc::StrCat(seed));
+  //    }
+  //
+  //    nc::net::GraphStats stats = graph->Stats();
+  //    dict.SetValue("topology_summary", Indent(stats.ToString()));
+  //
+  //    PlotAndAddToTemplate(root, "node_distances", node_distances_plot,
+  //    &dict);
+  //
+  //    std::string output;
+  //    ctemplate::ExpandTemplate(kSingleTopTemplate, ctemplate::DO_NOT_STRIP,
+  //                              &dict, &output);
+  //    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root,
+  //    "/index.rst"));
+  //  }
 
   void PlotAndAddToTemplate(const std::string& root, const std::string& base,
                             const nc::viz::Plot& plot,
@@ -710,8 +581,7 @@ class DataPlotter {
 
   void PlotDataByLoadAndLocality(
       double load, double locality,
-      const std::map<std::string, std::vector<const RoutingConfiguration*>>&
-          opt_map,
+      const std::map<std::string, std::vector<RCSummary>>& opt_map,
       const std::string& root) {
     PlotPack plots;
     ctemplate::TemplateDictionary dict("plot");
@@ -719,14 +589,9 @@ class DataPlotter {
 
     for (const auto& optimizer_and_rcs : opt_map) {
       const std::string& opt = optimizer_and_rcs.first;
-      const std::vector<const RoutingConfiguration*>& rcs =
-          optimizer_and_rcs.second;
-      for (const RoutingConfiguration* state : rcs) {
-        const TMKey& key = nc::FindOrDieNoPrint(key_by_state_, state);
-        const nc::lp::DemandMatrix* demand_matrix =
-            nc::FindOrDieNoPrint(demands_by_key_, key);
-
-        all_demands.emplace(demand_matrix);
+      const std::vector<RCSummary>& rcs = optimizer_and_rcs.second;
+      for (const RCSummary& rc : rcs) {
+        all_demands.emplace(rc.demand_matrix);
       }
 
       HandleSingleOptimizerResult result =
@@ -735,14 +600,16 @@ class DataPlotter {
           dict.AddSectionDictionary("max_ratio_table_rows");
       subdict->SetValue("optimizer", opt);
       subdict->SetValue("value", nc::StrCat(result.max_value));
-      subdict->SetValue("link", std::to_string(interesting_states.size()));
-      interesting_states.emplace_back(nc::FindOrDie(key_by_state_, result.max));
+      subdict->SetValue("interesting_index",
+                        std::to_string(interesting_states.size()));
+      interesting_states.emplace_back(result.max->key);
 
       subdict = dict.AddSectionDictionary("med_ratio_table_rows");
       subdict->SetValue("optimizer", opt);
       subdict->SetValue("value", nc::StrCat(result.med_value));
-      subdict->SetValue("link", std::to_string(interesting_states.size()));
-      interesting_states.emplace_back(nc::FindOrDie(key_by_state_, result.med));
+      subdict->SetValue("interesting_index",
+                        std::to_string(interesting_states.size()));
+      interesting_states.emplace_back(result.med->key);
     }
 
     nc::viz::CDFPlot link_scales_plot(
@@ -774,23 +641,15 @@ class DataPlotter {
     std::string output;
     ctemplate::ExpandTemplate(kSummaryTemplate, ctemplate::DO_NOT_STRIP, &dict,
                               &output);
-    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/main.rst"));
+    nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/index.rst"));
   }
 
   // Stores graphs.
-  std::map<std::string, std::unique_ptr<GraphAndNodeOrder>> graphs_;
   std::map<const nc::net::GraphStorage*, std::string> graph_to_name_;
 
-  // Stores demands.
-  std::map<TopologyAndTM, std::unique_ptr<nc::lp::DemandMatrix>>
-      demands_by_topology_;
-  std::map<TMKey, const nc::lp::DemandMatrix*> demands_by_key_;
-  std::map<const RoutingConfiguration*, TMKey> key_by_state_;
-
   // All data, grouped by load and locality.
-  std::map<LoadAndLocality,
-           std::map<std::string, std::vector<const RoutingConfiguration*>>>
-      data_by_load_and_localiy_;
+  std::map<LoadAndLocality, std::map<std::string, std::vector<RCSummary>>>
+      data_by_load_and_locality_;
 
   // Stores all data.
   TopologyMap top_level_map_;
@@ -799,27 +658,47 @@ class DataPlotter {
   std::vector<TMKey> interesting_states;
 };
 
+static std::string GetFilename(const std::string& tm_file,
+                               const std::string opt_string) {
+  std::string tm_base = nc::StringReplace(tm_file, ".demands", "", true);
+  return nc::StrCat(tm_base, "_", opt_string, ".rc");
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  std::unique_ptr<DataStorage> data_storage =
-      ParseTMGenUtilMetrics(FLAGS_metrics_dir);
-
-  // The data is grouped by optimizer.
+  std::vector<ctr::TopologyAndFilename> topologies;
+  std::vector<ctr::DemandMatrixAndFilename> matrices;
+  std::tie(topologies, matrices) = ctr::GetDemandMatrixInputs();
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
-  const std::map<std::string, TMStateMap>& data = data_storage->data();
 
-  PlotTotalDelay(data, optimizers);
-  PlotCTRRuntime(data);
+  std::map<std::string, const ctr::TopologyAndFilename*> topologies_by_name;
+  for (const auto& topology : topologies) {
+    topologies_by_name[topology.file] = &topology;
+  }
 
   // A tree of plots.
   DataPlotter data_plotter;
-  for (const std::string& opt : optimizers) {
-    const TMStateMap& state_map = nc::FindOrDie(data, opt);
-    for (const auto& topology_and_tm_and_rest : state_map) {
-      const TopologyAndTM& topology_and_tm = topology_and_tm_and_rest.first;
-      const OptimizerTMState* state = topology_and_tm_and_rest.second.get();
-      data_plotter.AddData(opt, topology_and_tm, state);
+  for (const auto& matrix : matrices) {
+    const ctr::TopologyAndFilename* topology_and_filename =
+        nc::FindOrDieNoPrint(topologies_by_name, matrix.topology_file);
+
+    ctr::PathProvider path_provider(topology_and_filename->graph.get());
+    const nc::lp::DemandMatrix* demand_matrix = matrix.demand_matrix.get();
+
+    for (const std::string& opt : optimizers) {
+      std::string rc_filename = GetFilename(matrix.file, opt);
+      std::string rc_serialized = nc::File::ReadFileToStringOrDie(rc_filename);
+      std::unique_ptr<TrafficMatrix> tm =
+          TrafficMatrix::DistributeFromDemandMatrix(*demand_matrix);
+      auto rc = RoutingConfiguration::LoadFromSerializedText(
+          *tm, topology_and_filename->node_order, rc_serialized,
+          &path_provider);
+
+      LOG(INFO) << "Will parse " << matrix.file << " at "
+                << matrix.topology_file << " opt " << opt;
+      RCSummary summary = ParseRC(*rc, demand_matrix);
+      data_plotter.AddData(opt, matrix.topology_file, summary);
     }
   }
 

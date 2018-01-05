@@ -46,6 +46,10 @@ class AggregateId {
   // aggregate can be routed on.
   nc::net::Delay GetSPDelay(const nc::net::GraphStorage& graph) const;
 
+  // Returns the shortest path.
+  std::unique_ptr<nc::net::Walk> GetSP(
+      const nc::net::GraphStorage& graph) const;
+
   AggregateId Reverse() const { return {dst_, src_}; }
 
   friend bool operator<(const AggregateId& a, const AggregateId& b);

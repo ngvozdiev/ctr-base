@@ -48,10 +48,15 @@ std::string AggregateId::ToString(const nc::net::GraphStorage& graph) const {
 
 nc::net::Delay AggregateId::GetSPDelay(
     const nc::net::GraphStorage& graph) const {
+  return GetSP(graph)->delay();
+}
+
+std::unique_ptr<nc::net::Walk> AggregateId::GetSP(
+    const nc::net::GraphStorage& graph) const {
   std::unique_ptr<nc::net::Walk> sp =
       nc::net::ShortestPathWithConstraints(src_, dst_, graph, {});
   CHECK(sp);
-  return sp->delay();
+  return sp;
 }
 
 void TrafficMatrix::AddDemand(const AggregateId& aggregate_id,
@@ -1171,6 +1176,7 @@ RoutingConfiguration::LoadFromSerializedText(
 
   std::map<AggregateId, std::vector<RouteAndFraction>> routes;
   const nc::net::GraphStorage* graph = base_matrix.graph();
+
   for (size_t i = 1; i < lines.size(); ++i) {
     const std::string& line = lines[i];
     std::vector<std::string> line_split = nc::Split(line, ",");

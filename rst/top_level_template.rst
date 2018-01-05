@@ -13,4 +13,4 @@ Contents:
 .. toctree::
    :maxdepth: 1
 {{#subdirs}}
-   {{name}}/main {{/subdirs}}
+   {{name}}/index {{/subdirs}}

@@ -126,7 +126,6 @@ static void RunOptimizers(const Input& input) {
 
 }  // namespace ctr
 
-using TopologyAndMatrix = std::tuple<std::string, std::string, double>;
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
