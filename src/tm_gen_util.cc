@@ -215,6 +215,14 @@ void ProcessMatrix(const Input& input, const std::vector<double>& localities,
 
   for (double locality : localities) {
     for (double scale_factor : scale_factors) {
+      std::string output_location =
+          nc::Substitute(FLAGS_output_pattern.c_str(), topology_filename,
+                         locality, scale_factor, id);
+      if (nc::File::Exists(output_location)) {
+        LOG(INFO) << "Skipping existing " << output_location;
+        continue;
+      }
+
       DemandGenerator generator(input.first->graph.get());
       std::mt19937 gen(FLAGS_seed + id);
       auto demand_matrix =
@@ -228,9 +236,6 @@ void ProcessMatrix(const Input& input, const std::vector<double>& localities,
       double load = 1.0 / scale_factor;
       demand_matrix = demand_matrix->Scale(load);
 
-      std::string output_location =
-          nc::Substitute(FLAGS_output_pattern.c_str(), topology_filename,
-                         locality, scale_factor, id);
       std::string directory = nc::File::ExtractDirectoryName(output_location);
       if (directory != "") {
         nc::File::RecursivelyCreateDir(directory, 0777);
