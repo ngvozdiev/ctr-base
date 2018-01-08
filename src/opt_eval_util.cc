@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
 
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> matrices;
-  std::tie(topologies, matrices) = ctr::GetDemandMatrixInputs();
+  std::tie(topologies, matrices) = ctr::GetDemandMatrixInputs(true);
 
   std::map<std::string, const ctr::TopologyAndFilename*> topologies_by_name;
   for (const auto& topology : topologies) {

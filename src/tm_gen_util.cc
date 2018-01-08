@@ -265,10 +265,9 @@ int main(int argc, char** argv) {
   std::vector<ctr::TopologyAndFilename> topologies = ctr::GetTopologyInputs();
 
   std::vector<Input> inputs;
-  uint32_t id = 0;
   for (const auto& topology : topologies) {
     for (size_t i = 0; i < FLAGS_tm_count; ++i) {
-      inputs.emplace_back(&topology, id++);
+      inputs.emplace_back(&topology, i);
     }
   }
 

@@ -385,7 +385,7 @@ int main(int argc, char** argv) {
 
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> to_process;
-  std::tie(topologies, to_process) = ctr::GetDemandMatrixInputs();
+  std::tie(topologies, to_process) = ctr::GetDemandMatrixInputs(true);
 
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
   for (const auto& opt : optimizers) {

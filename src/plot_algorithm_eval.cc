@@ -78,17 +78,16 @@ struct RCSummary {
 };
 
 static RCSummary ParseRC(const RoutingConfiguration& rc,
+                         const nc::net::AllPairShortestPath& sp,
                          const nc::lp::DemandMatrix* demand_matrix) {
   RCSummary out;
-
   for (const auto& aggregate_and_routes : rc.routes()) {
     const AggregateId& id = aggregate_and_routes.first;
     const DemandAndFlowCount& demand_and_flow_count =
         nc::FindOrDieNoPrint(rc.demands(), id);
     double aggregate_flow_count = demand_and_flow_count.second;
-    const nc::net::GraphStorage* graph = rc.graph();
 
-    nc::net::Delay sp_delay = id.GetSPDelay(*graph);
+    nc::net::Delay sp_delay = sp.GetDistance(id.src(), id.dst());
     double sp_delay_ms = ToMs(sp_delay);
     sp_delay_ms = std::max(1.0, sp_delay_ms);
 
@@ -669,12 +668,21 @@ int main(int argc, char** argv) {
 
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> matrices;
-  std::tie(topologies, matrices) = ctr::GetDemandMatrixInputs();
+  std::tie(topologies, matrices) = ctr::GetDemandMatrixInputs(false);
   std::vector<std::string> optimizers = nc::Split(FLAGS_optimizers, ",");
+
+  // Need to know the shortest paths for each graph.
+  std::map<const nc::net::GraphStorage*, nc::net::AllPairShortestPath> sp_map;
 
   std::map<std::string, const ctr::TopologyAndFilename*> topologies_by_name;
   for (const auto& topology : topologies) {
     topologies_by_name[topology.file] = &topology;
+
+    const nc::net::GraphStorage* graph = topology.graph.get();
+    sp_map.emplace(
+        std::piecewise_construct, std::forward_as_tuple(graph),
+        std::forward_as_tuple(nc::net::ExclusionSet(), graph->AdjacencyList(),
+                              nullptr, nullptr));
   }
 
   // A tree of plots.
@@ -686,18 +694,37 @@ int main(int argc, char** argv) {
     ctr::PathProvider path_provider(topology_and_filename->graph.get());
     const nc::lp::DemandMatrix* demand_matrix = matrix.demand_matrix.get();
 
+    std::vector<std::unique_ptr<RoutingConfiguration>> rcs;
     for (const std::string& opt : optimizers) {
       std::string rc_filename = GetFilename(matrix.file, opt);
+      if (!nc::File::Exists(rc_filename)) {
+        break;
+      }
+
       std::string rc_serialized = nc::File::ReadFileToStringOrDie(rc_filename);
       std::unique_ptr<TrafficMatrix> tm =
           TrafficMatrix::DistributeFromDemandMatrix(*demand_matrix);
+      LOG(INFO) << "Will parse " << matrix.file << " at "
+                << matrix.topology_file << " opt " << opt;
       auto rc = RoutingConfiguration::LoadFromSerializedText(
           *tm, topology_and_filename->node_order, rc_serialized,
           &path_provider);
+      rcs.emplace_back(std::move(rc));
+    }
 
-      LOG(INFO) << "Will parse " << matrix.file << " at "
-                << matrix.topology_file << " opt " << opt;
-      RCSummary summary = ParseRC(*rc, demand_matrix);
+    if (rcs.size() != optimizers.size()) {
+      LOG(INFO) << "Will skip " << matrix.file << " at "
+                << matrix.topology_file;
+      continue;
+    }
+
+    for (size_t i = 0; i < optimizers.size(); ++i) {
+      const std::string& opt = optimizers[i];
+      const RoutingConfiguration& rc = *(rcs[i]);
+
+      const nc::net::AllPairShortestPath& sp =
+          nc::FindOrDieNoPrint(sp_map, rc.graph());
+      RCSummary summary = ParseRC(rc, sp, demand_matrix);
       data_plotter.AddData(opt, matrix.topology_file, summary);
     }
   }

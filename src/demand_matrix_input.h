@@ -32,7 +32,7 @@ struct DemandMatrixAndFilename {
 // matrices.
 std::pair<std::vector<TopologyAndFilename>,
           std::vector<DemandMatrixAndFilename>>
-GetDemandMatrixInputs();
+GetDemandMatrixInputs(bool skip_trivial);
 
 }  // namespace ctr
 

@@ -49,6 +49,7 @@ static std::string FindTopologyFileForDemandFileOrDie(
   for (const auto& file : topology_files) {
     std::string top_base = nc::File::ExtractFileName(file);
     top_base = nc::StringReplace(top_base, kTopologyExtension, "", true);
+    top_base = nc::StrCat(top_base, "_");
 
     if (nc::HasPrefixString(demand_base, top_base) ||
         nc::HasSuffixString(demand_base, top_base)) {
@@ -61,7 +62,8 @@ static std::string FindTopologyFileForDemandFileOrDie(
   return to_return;
 }
 
-static std::map<std::string, std::vector<std::string>> GetTopologyToDemands() {
+static std::map<std::string, std::vector<std::string>> GetTopologyToDemands(
+    size_t* topology_count, size_t* tm_count) {
   std::string tm_root = FLAGS_tm_root;
   CHECK(tm_root != "");
   std::string top_root =
@@ -77,15 +79,16 @@ static std::map<std::string, std::vector<std::string>> GetTopologyToDemands() {
     std::string topology_file =
         FindTopologyFileForDemandFileOrDie(tm_file, topologies);
     out[topology_file].emplace_back(tm_file);
-    LOG(INFO) << "Topology " << topology_file << " for " << tm_file;
   }
+  *tm_count = traffic_matrices.size();
+  *topology_count = out.size();
 
   return out;
 }
 
 std::pair<std::vector<TopologyAndFilename>,
           std::vector<DemandMatrixAndFilename>>
-GetDemandMatrixInputs() {
+GetDemandMatrixInputs(bool skip_trivial) {
   // Inputs.
   std::vector<TopologyAndFilename> topologies_out;
   std::vector<DemandMatrixAndFilename> demands_out;
@@ -93,8 +96,12 @@ GetDemandMatrixInputs() {
   // Randomness to pick tms for each topology.
   std::mt19937 rnd(FLAGS_seed);
 
+  size_t topology_count;
+  size_t tm_count;
   std::map<std::string, std::vector<std::string>> topology_to_demands =
-      GetTopologyToDemands();
+      GetTopologyToDemands(&topology_count, &tm_count);
+  LOG(INFO) << "Will load " << tm_count << " TMs from " << topology_count
+            << " topologies";
   for (auto& topology_and_demands : topology_to_demands) {
     const std::string& topology_file = topology_and_demands.first;
     std::vector<std::string>& demands_for_topology =
@@ -147,7 +154,7 @@ GetDemandMatrixInputs() {
         continue;
       }
 
-      if (demand_matrix->IsTriviallySatisfiable()) {
+      if (skip_trivial && demand_matrix->IsTriviallySatisfiable()) {
         LOG(INFO) << "Skipping " << demand_file << " trivially satisfiable";
         continue;
       }

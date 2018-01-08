@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> demands;
-  std::tie(topologies, demands) = ctr::GetDemandMatrixInputs();
+  std::tie(topologies, demands) = ctr::GetDemandMatrixInputs(true);
 
   PlotDemandStats(demands);
 }
