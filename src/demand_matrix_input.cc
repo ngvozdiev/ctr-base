@@ -154,9 +154,14 @@ GetDemandMatrixInputs(bool skip_trivial) {
         continue;
       }
 
-      if (skip_trivial && demand_matrix->IsTriviallySatisfiable()) {
-        LOG(INFO) << "Skipping " << demand_file << " trivially satisfiable";
-        continue;
+      if (skip_trivial) {
+        const std::map<std::string, std::string>& props =
+            demand_matrix->properties();
+        const std::string& trivial = nc::FindOrDie(props, "trivial");
+        if (trivial == "true") {
+          LOG(INFO) << "Skipping " << demand_file << " trivially satisfiable";
+          continue;
+        }
       }
 
       demands_out.emplace_back(topology_file, demand_file,
