@@ -76,6 +76,7 @@ class MinMaxOptimizer : public Optimizer {
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
 
+ private:
   // All links' capacity is multiplied by this number.
   double link_capacity_multiplier_;
 
@@ -128,6 +129,21 @@ class B4Optimizer : public Optimizer {
   bool flow_count_as_fair_share_;
 
   // All links' capacity is multiplied by this number.
+  double link_capacity_multiplier_;
+};
+
+// A link-based formulation of CTR.
+class CTRLinkBased : public Optimizer {
+ public:
+  CTRLinkBased(PathProvider* path_provider, double link_capacity_multiplier)
+      : Optimizer(path_provider),
+        link_capacity_multiplier_(link_capacity_multiplier) {}
+
+  std::unique_ptr<RoutingConfiguration> Optimize(
+      const TrafficMatrix& tm) override;
+
+ private:
+  // All links' capacities will be multiplied by this number.
   double link_capacity_multiplier_;
 };
 

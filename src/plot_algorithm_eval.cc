@@ -114,7 +114,7 @@ static RCSummary ParseRC(const RoutingConfiguration& rc,
       path_delay_ms = std::max(1.0, path_delay_ms);
 
       double abs_stretch = path_delay_ms - sp_delay_ms;
-      double rel_stretch = (path_delay_ms - sp_delay_ms) / sp_delay_ms;
+      double rel_stretch = path_delay_ms / sp_delay_ms;
       CHECK(abs_stretch >= 0);
       CHECK(rel_stretch >= 0);
       CHECK(rel_stretch < 1000);

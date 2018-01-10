@@ -207,6 +207,7 @@ using Input = std::pair<const ctr::TopologyAndFilename*, uint32_t>;
 void ProcessMatrix(const Input& input, const std::vector<double>& localities,
                    const std::vector<double>& scale_factors) {
   std::string topology_filename = input.first->file;
+  const nc::net::GraphStorage* graph = input.first->graph.get();
   topology_filename = nc::File::ExtractFileName(topology_filename);
   topology_filename = nc::Split(topology_filename, ".").front();
 
@@ -219,11 +220,25 @@ void ProcessMatrix(const Input& input, const std::vector<double>& localities,
           nc::Substitute(FLAGS_output_pattern.c_str(), topology_filename,
                          locality, scale_factor, id);
       if (nc::File::Exists(output_location)) {
-        LOG(INFO) << "Skipping existing " << output_location;
+        // Will check if it has the 'trivial' property and update it if not.
+        auto demand_matrix = nc::lp::DemandMatrix::LoadRepetitaFileOrDie(
+            output_location, node_order, graph);
+        const std::map<std::string, std::string>& props =
+            demand_matrix->properties();
+
+        if (nc::ContainsKey(props, "trivial")) {
+          LOG(INFO) << "Skipping existing " << output_location;
+        } else {
+          bool trivial = demand_matrix->IsTriviallySatisfiable();
+          demand_matrix->UpdateProperty("trivial", trivial ? "true" : "false");
+          demand_matrix->ToRepetitaFileOrDie(node_order, output_location);
+          LOG(INFO) << "Updated 'trivial' property of " << output_location;
+        }
+
         continue;
       }
 
-      DemandGenerator generator(input.first->graph.get());
+      DemandGenerator generator(graph);
       std::mt19937 gen(FLAGS_seed + id);
       auto demand_matrix =
           generator.Generate(nc::net::Bandwidth::FromGBitsPerSecond(1), &gen);
@@ -248,6 +263,9 @@ void ProcessMatrix(const Input& input, const std::vector<double>& localities,
       demand_matrix->UpdateProperty("load", nc::ToStringMaxDecimals(load, 2));
       demand_matrix->UpdateProperty(
           "seed", nc::ToStringMaxDecimals(FLAGS_seed + id, 2));
+
+      bool trivial = demand_matrix->IsTriviallySatisfiable();
+      demand_matrix->UpdateProperty("trivial", trivial ? "true" : "false");
       demand_matrix->ToRepetitaFileOrDie(node_order, output_location);
     }
   }

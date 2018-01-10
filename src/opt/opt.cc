@@ -45,21 +45,9 @@ static nc::net::GraphLinkMap<double> GetCapacities(
   return out;
 }
 
-std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
-    const TrafficMatrix& tm) {
-  nc::lp::MinMaxProblem problem(
-      graph_, GetCapacities(*graph_, link_capacity_multiplier_),
-      also_minimize_delay_);
-
-  for (const auto& aggregate_and_demand : tm.demands()) {
-    const AggregateId& aggregate_id = aggregate_and_demand.first;
-    nc::net::Bandwidth demand = aggregate_and_demand.second.first;
-    problem.AddDemand(aggregate_id.src(), aggregate_id.dst(), demand.Mbps());
-  }
-
-  std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
-  problem.Solve(&paths);
-
+static std::unique_ptr<RoutingConfiguration> GetRoutingConfig(
+    const TrafficMatrix& tm, PathProvider* path_provider,
+    std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>>* paths) {
   auto out = nc::make_unique<RoutingConfiguration>(tm);
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
@@ -67,7 +55,7 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
 
     // All input aggregates should have an entry in the solution.
     std::vector<nc::lp::FlowAndPath>& flow_and_paths =
-        nc::FindOrDieNoPrint(paths, {aggregate_id.src(), aggregate_id.dst()});
+        nc::FindOrDieNoPrint(*paths, {aggregate_id.src(), aggregate_id.dst()});
 
     std::vector<RouteAndFraction> routes_for_aggregate;
     for (nc::lp::FlowAndPath& flow_and_path : flow_and_paths) {
@@ -83,13 +71,66 @@ std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
       // time this runs.
       auto path = flow_and_path.TakeOwnershipOfPath();
       routes_for_aggregate.emplace_back(
-          path_provider_->TakeOwnership(std::move(path)), fraction);
+          path_provider->TakeOwnership(std::move(path)), fraction);
     }
 
     out->AddRouteAndFraction(aggregate_id, routes_for_aggregate);
   }
 
   return out;
+}
+
+std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
+    const TrafficMatrix& tm) {
+  nc::lp::MinMaxProblem problem(
+      graph_, GetCapacities(*graph_, link_capacity_multiplier_),
+      also_minimize_delay_);
+
+  for (const auto& aggregate_and_demand : tm.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+    nc::net::Bandwidth demand = aggregate_and_demand.second.first;
+    problem.AddDemand(aggregate_id.src(), aggregate_id.dst(), demand.Mbps());
+  }
+
+  std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
+  problem.Solve(&paths);
+
+  return GetRoutingConfig(tm, path_provider_, &paths);
+}
+
+static nc::net::GraphLinkMap<double> GetCosts(
+    const nc::net::GraphStorage& graph) {
+  nc::net::GraphLinkMap<double> out;
+  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
+    nc::net::Delay link_delay = graph.GetLink(link)->delay();
+    double cost = std::chrono::duration<double, std::milli>(link_delay).count();
+    out[link] = cost;
+  }
+
+  return out;
+}
+
+std::unique_ptr<RoutingConfiguration> CTRLinkBased::Optimize(
+    const TrafficMatrix& tm) {
+  nc::lp::MinCostMultiCommodityFlowProblem problem(
+      GetCapacities(*graph_, link_capacity_multiplier_), GetCosts(*graph_),
+      graph_);
+
+  for (const auto& aggregate_and_demand : tm.demands()) {
+    const AggregateId& aggregate_id = aggregate_and_demand.first;
+    const DemandAndFlowCount& demand_and_flow_count =
+        aggregate_and_demand.second;
+    nc::net::Bandwidth demand = demand_and_flow_count.first;
+    double weight = demand_and_flow_count.second;
+
+    problem.AddDemand(aggregate_id.src(), aggregate_id.dst(), demand.Mbps(),
+                      weight);
+  }
+
+  std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
+  problem.Solve(&paths);
+
+  return GetRoutingConfig(tm, path_provider_, &paths);
 }
 
 struct MMPathAndAggregate {
