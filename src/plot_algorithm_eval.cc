@@ -67,8 +67,10 @@ struct RCSummary {
   // One value per aggregate.
   std::vector<double> path_counts;
 
-  // One value per link.
-  std::vector<double> link_utilizations;
+  // Link utilizations for links that are less than the median link lenght and
+  // more than it.
+  std::vector<double> short_link_utilizations;
+  std::vector<double> long_link_utilizations;
 
   // The demand matrix.
   const nc::lp::DemandMatrix* demand_matrix;
@@ -76,6 +78,18 @@ struct RCSummary {
   // Identifies the graph, seed, load and locality.
   TMKey key;
 };
+
+static nc::net::Delay MedianLinkDelay(const nc::net::GraphStorage& graph) {
+  std::vector<nc::net::Delay> delays;
+  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
+    nc::net::Delay delay = graph.GetLink(link)->delay();
+    delays.emplace_back(delay);
+  }
+
+  std::sort(delays.begin(), delays.end());
+  CHECK(!delays.empty());
+  return delays[delays.size() / 2];
+}
 
 static RCSummary ParseRC(const RoutingConfiguration& rc,
                          const nc::net::AllPairShortestPath& sp,
@@ -132,10 +146,19 @@ static RCSummary ParseRC(const RoutingConfiguration& rc,
   out.demand_matrix = demand_matrix;
   out.key = std::make_tuple(demand_matrix->graph(), seed, load, locality);
 
+  const nc::net::GraphStorage* graph = rc.graph();
+  nc::net::Delay median_link_delay = MedianLinkDelay(*graph);
+
   nc::net::GraphLinkMap<double> utilizations = rc.LinkUtilizations();
   for (const auto& link_and_utilization : utilizations) {
+    nc::net::GraphLinkIndex link = link_and_utilization.first;
     double utilization = *(link_and_utilization.second);
-    out.link_utilizations.emplace_back(utilization);
+    nc::net::Delay link_delay = graph->GetLink(link)->delay();
+    if (link_delay < median_link_delay) {
+      out.short_link_utilizations.emplace_back(utilization);
+    } else {
+      out.long_link_utilizations.emplace_back(utilization);
+    }
   }
 
   return out;
@@ -217,6 +240,43 @@ struct HandleSingleOptimizerResult {
   double max_value;
 };
 
+static double FractionOfLinksWithUtilizationMoreThan(
+    const std::vector<double>& utilizations, double utilization_threshold) {
+  double count = 0;
+  for (double utilization : utilizations) {
+    if (utilization >= utilization_threshold) {
+      ++count;
+    }
+  }
+
+  return count / utilizations.size();
+}
+
+static nc::viz::CDFPlot LinkUtilizationsPlot(
+    const std::vector<RCSummary>& rcs,
+    const std::vector<double>& utilization_thresholds) {
+  nc::viz::CDFPlot out;
+  for (double utilization_threshold : utilization_thresholds) {
+    std::vector<double> short_utilizations;
+    std::vector<double> long_utilizations;
+    for (const RCSummary& rc : rcs) {
+      double short_f = FractionOfLinksWithUtilizationMoreThan(
+          rc.short_link_utilizations, utilization_threshold);
+      double long_f = FractionOfLinksWithUtilizationMoreThan(
+          rc.long_link_utilizations, utilization_threshold);
+      short_utilizations.emplace_back(short_f);
+      long_utilizations.emplace_back(long_f);
+    }
+
+    out.AddData(nc::StrCat("short >", utilization_threshold, "%"),
+                short_utilizations);
+    out.AddData(nc::StrCat("long >", utilization_threshold, "%"),
+                long_utilizations);
+  }
+
+  return out;
+}
+
 static HandleSingleOptimizerResult HandleSingleOptimizer(
     const std::string& optimizer, const std::vector<RCSummary>& rcs,
     PlotPack* plots) {
@@ -253,8 +313,11 @@ static HandleSingleOptimizerResult HandleSingleOptimizer(
   std::vector<double> link_utilizations;
   for (const RCSummary& rc : rcs) {
     link_utilizations.insert(link_utilizations.end(),
-                             rc.link_utilizations.begin(),
-                             rc.link_utilizations.end());
+                             rc.short_link_utilizations.begin(),
+                             rc.short_link_utilizations.end());
+    link_utilizations.insert(link_utilizations.end(),
+                             rc.long_link_utilizations.begin(),
+                             rc.long_link_utilizations.end());
   }
   plots->link_utilization.AddData(optimizer, link_utilizations);
 
@@ -384,19 +447,7 @@ class DataPlotter {
  private:
   using LoadAndLocality = std::pair<double, double>;
 
-  // Maps a combination of load and locality to a traffic matrix.
-  using LLMap = std::map<LoadAndLocality, const nc::lp::DemandMatrix*>;
-
-  // Groups TMs with the same seed value.
-  using SeedMap = std::map<double, LLMap>;
-
-  // Maps a topology to all traffic matrices on the same topology.
-  using TopologyMap = std::map<const nc::net::GraphStorage*, SeedMap>;
-
-  void PlotLLMap(const std::string& topology_name,
-                 const nc::net::GraphStorage* graph, double seed,
-                 const LLMap& ll_map, const std::string& root,
-                 uint32_t interesting_index) {
+  void PlotSingleTM(const RCSummary& summary, uint32_t interesting_index) {
     using namespace std::chrono;
 
     nc::viz::CDFPlot demand_sizes_plot(
@@ -625,6 +676,11 @@ class DataPlotter {
       link_scales_plot.AddData(nc::StrCat(percents, "%"), link_scales);
     }
 
+    // Will only plot link utilizations for CTR.
+    const std::vector<RCSummary>& ctr_rcs = nc::FindOrDie(opt_map, "CTR");
+    nc::viz::CDFPlot ctr_utilizations_plot =
+        LinkUtilizationsPlot(ctr_rcs, {0.9, 0.6});
+
     PlotAndAddToTemplate(root, "path_ratios", plots.ratios, &dict);
     PlotAndAddToTemplate(root, "path_stretch_rel", plots.path_stretch_rel,
                          &dict);
@@ -634,6 +690,8 @@ class DataPlotter {
     PlotAndAddToTemplate(root, "link_utilization", plots.link_utilization,
                          &dict);
     PlotAndAddToTemplate(root, "link_scales", link_scales_plot, &dict);
+    PlotAndAddToTemplate(root, "ctr_utilizations", ctr_utilizations_plot,
+                         &dict);
 
     dict.SetValue("tm_load", nc::StrCat(load));
     dict.SetValue("tm_locality", nc::StrCat(locality));
