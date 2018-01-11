@@ -5,20 +5,8 @@ Path ratios (:download:`tgz <{{path_ratios_location_tgz}}>`):
 
 .. image:: {{path_ratios_location}}
 
-.. csv-table:: Maximum ratio
-   :header: "optimizer", "value", "link"
-   :widths: 10, 10, 15
+{{path_ratios_interesting_table}}
    
-{{#max_ratio_table_rows}}
-   "{{optimizer}}", "{{value}}", see :ref:`interesting_{{interesting_index}}`{{/max_ratio_table_rows}}
-   
-.. csv-table:: Median ratio
-   :header: "optimizer", "value", "link"
-   :widths: 10, 10, 15
-   
-{{#med_ratio_table_rows}}
-   "{{optimizer}}", "{{value}}", see :ref:`interesting_{{interesting_index}}`{{/med_ratio_table_rows}}
-
 Relative path stretch (:download:`tgz <{{path_stretch_rel_location_tgz}}>`):
 
 .. image:: {{path_stretch_rel_location}}
@@ -26,6 +14,8 @@ Relative path stretch (:download:`tgz <{{path_stretch_rel_location_tgz}}>`):
 Max relative path stretch (:download:`tgz <{{max_path_stretch_rel_location_tgz}}>`):
 
 .. image:: {{max_path_stretch_rel_location}}
+
+{{max_path_stretch_rel_interesting_table}}
 
 Path count (:download:`tgz <{{path_count_location_tgz}}>`):
 
