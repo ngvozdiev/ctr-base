@@ -94,12 +94,22 @@ class InterestingTable {
  public:
   InterestingTable(const std::vector<std::string>& header) : header_(header) {}
 
+  static std::vector<std::string> Escape(const std::vector<std::string>& row) {
+    std::vector<std::string> new_row;
+    for (const auto& element : row) {
+      new_row.emplace_back(nc::StrCat("\"", element, "\""));
+    }
+    return new_row;
+  }
+
   void Add(const std::vector<std::string>& row, const RCSummary* rc) {
-    rows_.emplace_back(row);
+    rows_.emplace_back(Escape(row));
     rcs_.emplace_back(rc);
   }
 
-  void Add(const std::vector<std::string>& row) { rows_.emplace_back(row); }
+  void Add(const std::vector<std::string>& row) {
+    rows_.emplace_back(Escape(row));
+  }
 
   const std::vector<const RCSummary*>& rcs() const { return rcs_; }
 
@@ -122,17 +132,17 @@ class InterestingTable {
     std::vector<std::string> widths;
     size_t count = has_rcs ? header_.size() + 1 : header_.size();
     for (size_t i = 0; i < count; ++i) {
-      widths.emplace_back("10");
+      widths.emplace_back("1");
     }
 
-    nc::StrAppend(&out, "   :widths: ", nc::Join(widths, ","), "\n");
+    nc::StrAppend(&out, "   :widths: ", nc::Join(widths, ","), "\n\n");
     for (size_t row_i = 0; row_i < rows_.size(); ++row_i) {
       const std::vector<std::string>& row = rows_[row_i];
       nc::StrAppend(&out, "   ", nc::Join(row, ","));
 
       if (has_rcs) {
-        std::string link = nc::StrCat(", see :ref:`interesting_",
-                                      interestring_rc_list->size(), "`");
+        uint32_t current_size = interestring_rc_list->size();
+        nc::StrAppend(&out, ", see :ref:`interesting_", current_size, "`");
         interestring_rc_list->emplace_back(rcs_[row_i]);
       }
       nc::StrAppend(&out, "\n");
@@ -757,6 +767,10 @@ class DataPlotter {
     }
 
     for (uint32_t i = 0; i < interesting_data_.size(); ++i) {
+      if (i == 5) {
+        break;
+      }
+
       const RCSummary* rc = interesting_data_[i];
       const TMKey& key = rc->key;
 
@@ -815,7 +829,8 @@ class DataPlotter {
     double locality;
     std::tie(graph, seed, load, locality) = rc->key;
 
-    dict.SetValue("topology_name", *(rc->topology_file_name));
+    dict.SetValue("topology_name",
+                  nc::File::ExtractFileName(*(rc->topology_file_name)));
     dict.SetValue("tm_seed", nc::StrCat(seed));
     dict.SetValue("load", nc::StrCat(load));
     dict.SetValue("locality", nc::StrCat(locality));
