@@ -13,9 +13,11 @@
 
 DEFINE_string(topology_root, "", "Root for topologies. Required.");
 DEFINE_uint64(topology_size_limit, 100000,
-              "Topologies with size more than this will be skipped");
+              "Topologies with node count more than this will be skipped");
 DEFINE_uint64(topology_delay_limit_ms, 10,
               "Topologies with diameter less than this limit will be skipped");
+DEFINE_uint64(topology_n_top, 100000,
+              "Only the top N (in node count) topologies will be included");
 
 namespace ctr {
 
@@ -66,7 +68,20 @@ std::vector<TopologyAndFilename> GetTopologyInputs() {
     out.emplace_back(std::move(graph), node_order, topology_file);
   }
 
-  return out;
+  std::sort(out.begin(), out.end(),
+            [](const TopologyAndFilename& lhs, const TopologyAndFilename& rhs) {
+              return lhs.graph->NodeCount() > rhs.graph->NodeCount();
+            });
+
+  std::vector<TopologyAndFilename> out_truncated;
+  size_t limit = static_cast<size_t>(FLAGS_topology_n_top);
+  size_t count = std::min(out.size(), limit);
+  for (size_t i = 0; i < count; ++i) {
+    out_truncated.emplace_back(std::move(out[i].graph), out[i].node_order,
+                               out[i].file);
+  }
+
+  return out_truncated;
 }
 
 }  // namespace ctr
