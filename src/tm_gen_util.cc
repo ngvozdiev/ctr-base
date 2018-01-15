@@ -16,6 +16,7 @@
 #include "ncode/logging.h"
 #include "ncode/lp/demand_matrix.h"
 #include "ncode/lp/lp.h"
+#include "ncode/lp/mc_flow.h"
 #include "ncode/net/algorithm.h"
 #include "ncode/net/net_common.h"
 #include "ncode/perfect_hash.h"
@@ -61,7 +62,7 @@ static void AddSumConstraints(
 // Generates a demand distribution based on either incoming traffic or incoming
 // traffic and outgoing traffic levels. The distribution will be as local as
 // possible (will have cost per byte minimized).
-std::unique_ptr<nc::lp::DemandMatrix> LPDemandGenerate(
+std::unique_ptr<nc::lp::DemandMatrix> LPLocalize(
     const nc::lp::DemandMatrix& seed_matrix, double fraction_allowance) {
   nc::net::GraphNodeMap<nc::net::Bandwidth> demand_out;
   nc::net::GraphNodeMap<nc::net::Bandwidth> demand_in;
@@ -115,6 +116,33 @@ std::unique_ptr<nc::lp::DemandMatrix> LPDemandGenerate(
   }
 
   return nc::make_unique<nc::lp::DemandMatrix>(new_elements, graph);
+}
+
+// Makes sure each aggregate's reverse carries at least 'fraction' as much
+// traffic as the forward does.
+std::unique_ptr<nc::lp::DemandMatrix> BalanceReverse(
+    const nc::lp::DemandMatrix& seed_matrix, double fraction) {
+  std::map<nc::lp::SrcAndDst, nc::net::Bandwidth> src_and_dst_to_demand;
+  for (const auto& element : seed_matrix.elements()) {
+    nc::lp::SrcAndDst src_and_dst = {element.src, element.dst};
+    nc::net::Bandwidth& current = src_and_dst_to_demand[src_and_dst];
+    current = std::max(current, element.demand);
+
+    nc::lp::SrcAndDst reverse = {element.dst, element.src};
+    nc::net::Bandwidth& current_reverse = src_and_dst_to_demand[reverse];
+    current_reverse = std::max(current_reverse, element.demand * fraction);
+  }
+
+  std::vector<nc::lp::DemandMatrixElement> new_elements;
+  for (const auto& src_and_dst_and_demand : src_and_dst_to_demand) {
+    nc::net::GraphNodeIndex src = src_and_dst_and_demand.first.first;
+    nc::net::GraphNodeIndex dst = src_and_dst_and_demand.first.second;
+    nc::net::Bandwidth demand = src_and_dst_and_demand.second;
+    new_elements.emplace_back(src, dst, demand);
+  }
+
+  return nc::make_unique<nc::lp::DemandMatrix>(new_elements,
+                                               seed_matrix.graph());
 }
 
 // Generates a DemandMatrix using a scheme based on Roughan's '93 CCR paper. The
@@ -242,7 +270,8 @@ void ProcessMatrix(const Input& input, const std::vector<double>& localities,
       std::mt19937 gen(FLAGS_seed + id);
       auto demand_matrix =
           generator.Generate(nc::net::Bandwidth::FromGBitsPerSecond(1), &gen);
-      demand_matrix = LPDemandGenerate(*demand_matrix, locality);
+      demand_matrix = LPLocalize(*demand_matrix, locality);
+      demand_matrix = BalanceReverse(*demand_matrix, 0.1);
       double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
       CHECK(csf != 0);
       CHECK(csf == csf);

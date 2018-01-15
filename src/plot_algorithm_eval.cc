@@ -581,6 +581,9 @@ class SingleRCSummaryPlotPack {
         cumulative_demands_plot_({"Cumulative distance vs aggregate size",
                                   "SP distance (ms)",
                                   "Cumulative size (Mbps)"}),
+        cumulative_demands_hop_plot_({"Cumulative distance vs aggregate size",
+                                      "SP distance (hops)",
+                                      "Cumulative size (Mbps)"}),
         total_delay_at_link_scale_plot_(
             {"Total delay vs link scale", "Link scale", "Total delay"}),
         link_delay_vs_link_utilization_plot_(
@@ -592,6 +595,10 @@ class SingleRCSummaryPlotPack {
   void PlotCumulativeDistances(const nc::lp::DemandMatrix& demand_matrix,
                                const nc::net::AllPairShortestPath& sp) {
     std::vector<std::pair<double, double>> distances_and_demands;
+
+    // Since hop counts are quantized, will store them in a map.
+    std::map<uint32_t, double> hop_to_demand;
+
     for (const auto& element : demand_matrix.elements()) {
       nc::net::GraphNodeIndex src = element.src;
       nc::net::GraphNodeIndex dst = element.dst;
@@ -600,9 +607,12 @@ class SingleRCSummaryPlotPack {
         continue;
       }
 
-      double distance_ms =
-          duration_cast<milliseconds>(sp.GetDistance(src, dst)).count();
+      auto path = sp.GetPath(src, dst);
+      double distance_ms = duration_cast<milliseconds>(path->delay()).count();
       distances_and_demands.emplace_back(distance_ms, demand_Mbps);
+
+      uint32_t hop_count = path->links().size();
+      hop_to_demand[hop_count] += demand_Mbps;
     }
     std::sort(distances_and_demands.begin(), distances_and_demands.end());
 
@@ -613,7 +623,18 @@ class SingleRCSummaryPlotPack {
       demand = total;
     }
 
+    total = 0;
+    std::vector<std::pair<double, double>> hops_and_demands;
+    for (const auto& hop_and_demand : hop_to_demand) {
+      uint32_t hop_count = hop_and_demand.first;
+      double demand = hop_and_demand.second;
+
+      total += demand;
+      hops_and_demands.emplace_back(hop_count, total);
+    }
+
     cumulative_demands_plot_.AddData("", distances_and_demands);
+    cumulative_demands_hop_plot_.AddData("", hops_and_demands);
   }
 
   void PlotDemandSizes(const nc::lp::DemandMatrix& demand_matrix) {
@@ -782,6 +803,7 @@ class SingleRCSummaryPlotPack {
 
   // Plots cumulative distance.
   nc::viz::LinePlot cumulative_demands_plot_;
+  nc::viz::LinePlot cumulative_demands_hop_plot_;
 
   // Plots how adding headroom to all links affects the total delay experienced
   // by all flows in the topology.
