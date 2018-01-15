@@ -24,6 +24,7 @@
 using namespace std::chrono;
 
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
+DEFINE_bool(run_ctr_link_based, false, "Also run a link-based version of CTR");
 
 struct Input {
   const ctr::DemandMatrixAndFilename* demand_matrix_and_filename;
@@ -123,7 +124,9 @@ static void RunOptimizers(const Input& input) {
                &minmax_low_delay_optimizer);
   OptAndRecord(tm_file, *tm, node_order, "MinMaxK10", &minmax_ksp_optimizer);
   OptAndRecord(tm_file, *tm, node_order, "B4", &b4_optimizer);
-  OptAndRecord(tm_file, *tm, node_order, "CTRLB", &ctr_link_based_optimizer);
+  if (FLAGS_run_ctr_link_based) {
+    OptAndRecord(tm_file, *tm, node_order, "CTRLB", &ctr_link_based_optimizer);
+  }
 }
 
 }  // namespace ctr
