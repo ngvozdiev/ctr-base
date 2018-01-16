@@ -29,16 +29,18 @@
 #include "opt/path_provider.h"
 #include "topology_input.h"
 
-DEFINE_string(optimizers, "MinMaxLD,CTRNFC,B4,CTR,MinMaxK10",
+DEFINE_string(optimizers, "MinMaxK10,CTRNFC,B4,MinMaxLD,CTR",
               "Optimizers to plot.");
+DEFINE_string(
+    optimizer_labels,
+    "MinMax (10 paths),LDR (no flow counts),AB4,MinMax (low delay),LDR",
+    "Labels of optimizers to plot.");
 DEFINE_string(output_prefix, "",
               "Prefix that will be added to all output directories.");
 
 static constexpr char kTopLevelTemplate[] = "../rst/top_level_template.rst";
-static constexpr char kSingleTopTemplate[] = "../rst/single_top_template.rst";
 static constexpr char kSummaryTemplate[] = "../rst/summary_template.rst";
-static constexpr char kLocalityLevelTemplate[] = "../rst/tm_stat_template.rst";
-static constexpr char kSingleTmTemplate[] = "single_tm_template.rst";
+static constexpr char kSingleTMTemplate[] = "../rst/tm_stat_template.rst";
 
 static constexpr size_t kDiscreteMultiplier = 100;
 static constexpr size_t kPercentilesCount = 10000;
@@ -55,6 +57,8 @@ static double ToMs(nc::net::Delay delay) {
 // Graph, seed and load and locality.
 using TMKey = std::tuple<const nc::net::GraphStorage*, double, double, double>;
 
+struct TMSummary;
+
 struct RCSummary {
   RCSummary() {}
 
@@ -69,10 +73,20 @@ struct RCSummary {
   // One value per aggregate.
   std::vector<double> path_counts;
 
-  // Link utilizations for links that are less than the median link lenght and
-  // more than it.
-  std::vector<double> short_link_utilizations;
-  std::vector<double> long_link_utilizations;
+  // Link utilizations.
+  nc::net::GraphLinkMap<double> utilizations;
+
+  // The optimizer that was used to generate the summary.
+  const std::string* opt = nullptr;
+
+  // The parent.
+  const TMSummary* parent = nullptr;
+
+  DISALLOW_COPY_AND_ASSIGN(RCSummary);
+};
+
+struct TMSummary {
+  TMSummary() {}
 
   // The demand matrix.
   const nc::lp::DemandMatrix* demand_matrix = nullptr;
@@ -80,14 +94,14 @@ struct RCSummary {
   // Identifies the graph, seed, load and locality.
   TMKey key;
 
-  // The optimizer that was used to generate the summary.
-  const std::string* opt = nullptr;
-
   // File names.
   const std::string* topology_file_name = nullptr;
   const std::string* demand_matrix_file_name = nullptr;
 
-  DISALLOW_COPY_AND_ASSIGN(RCSummary);
+  // RCs for this traffic matrix.
+  std::map<std::string, std::unique_ptr<RCSummary>> rcs;
+
+  DISALLOW_COPY_AND_ASSIGN(TMSummary);
 };
 
 class InterestingTable {
@@ -102,24 +116,24 @@ class InterestingTable {
     return new_row;
   }
 
-  void Add(const std::vector<std::string>& row, const RCSummary* rc) {
+  void Add(const std::vector<std::string>& row, const TMSummary* tm) {
     rows_.emplace_back(Escape(row));
-    rcs_.emplace_back(rc);
+    tms_.emplace_back(tm);
   }
 
   void Add(const std::vector<std::string>& row) {
     rows_.emplace_back(Escape(row));
   }
 
-  const std::vector<const RCSummary*>& rcs() const { return rcs_; }
+  const std::vector<const TMSummary*>& tms() const { return tms_; }
 
   const std::vector<std::vector<std::string>>& rows() const { return rows_; }
 
   std::string ToRSTTable(
-      std::vector<const RCSummary*>* interestring_rc_list) const {
-    bool has_rcs = !rcs_.empty();
+      std::vector<const TMSummary*>* interestring_tm_list) const {
+    bool has_rcs = !tms_.empty();
     if (has_rcs) {
-      CHECK(rows_.size() == rcs_.size());
+      CHECK(rows_.size() == tms_.size());
     }
 
     std::string out = nc::StrCat(".. csv-table:: ", title_, "\n");
@@ -141,9 +155,9 @@ class InterestingTable {
       nc::StrAppend(&out, "   ", nc::Join(row, ","));
 
       if (has_rcs) {
-        uint32_t current_size = interestring_rc_list->size();
+        uint32_t current_size = interestring_tm_list->size();
         nc::StrAppend(&out, ", see :ref:`interesting_", current_size, "`");
-        interestring_rc_list->emplace_back(rcs_[row_i]);
+        interestring_tm_list->emplace_back(tms_[row_i]);
       }
       nc::StrAppend(&out, "\n");
     }
@@ -155,25 +169,52 @@ class InterestingTable {
   std::string title_;
   std::vector<std::string> header_;
   std::vector<std::vector<std::string>> rows_;
-  std::vector<const RCSummary*> rcs_;
+  std::vector<const TMSummary*> tms_;
 };
 
-static nc::net::Delay MedianLinkDelay(const nc::net::GraphStorage& graph) {
-  std::vector<nc::net::Delay> delays;
-  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
-    nc::net::Delay delay = graph.GetLink(link)->delay();
-    delays.emplace_back(delay);
-  }
+static std::string Indent(const std::string& input) {
+  return nc::StrCat("   ", nc::StringReplace(input, "\n", "\n   ", true));
+}
 
-  std::sort(delays.begin(), delays.end());
-  CHECK(!delays.empty());
-  return delays[delays.size() / 2];
+// static nc::net::Delay MedianLinkDelay(const nc::net::GraphStorage& graph) {
+//  std::vector<nc::net::Delay> delays;
+//  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
+//    nc::net::Delay delay = graph.GetLink(link)->delay();
+//    delays.emplace_back(delay);
+//  }
+//
+//  std::sort(delays.begin(), delays.end());
+//  CHECK(!delays.empty());
+//  return delays[delays.size() / 2];
+//}
+
+static std::unique_ptr<TMSummary> ParseTM(
+    const nc::lp::DemandMatrix* demand_matrix, const std::string* top_file,
+    const std::string* tm_file) {
+  auto out = nc::make_unique<TMSummary>();
+  double locality;
+  std::string locality_str =
+      nc::FindOrDie(demand_matrix->properties(), "locality");
+  CHECK(nc::safe_strtod(locality_str, &locality));
+
+  double load;
+  std::string load_str = nc::FindOrDie(demand_matrix->properties(), "load");
+  CHECK(nc::safe_strtod(load_str, &load));
+
+  double seed;
+  std::string seed_str = nc::FindOrDie(demand_matrix->properties(), "seed");
+  CHECK(nc::safe_strtod(seed_str, &seed));
+
+  out->demand_matrix = demand_matrix;
+  out->key = std::make_tuple(demand_matrix->graph(), seed, load, locality);
+  out->topology_file_name = top_file;
+  out->demand_matrix_file_name = tm_file;
+  return out;
 }
 
 static std::unique_ptr<RCSummary> ParseRC(
     const RoutingConfiguration& rc, const nc::net::AllPairShortestPath& sp,
-    const nc::lp::DemandMatrix* demand_matrix, const std::string* tm_file,
-    const std::string* top_file, const std::string* opt) {
+    const std::string* opt) {
   auto out = nc::make_unique<RCSummary>();
   for (const auto& aggregate_and_routes : rc.routes()) {
     const AggregateId& id = aggregate_and_routes.first;
@@ -210,41 +251,9 @@ static std::unique_ptr<RCSummary> ParseRC(
     out->path_counts.emplace_back(aggregate_and_routes.second.size());
   }
 
-  double locality;
-  std::string locality_str =
-      nc::FindOrDie(demand_matrix->properties(), "locality");
-  CHECK(nc::safe_strtod(locality_str, &locality));
-
-  double load;
-  std::string load_str = nc::FindOrDie(demand_matrix->properties(), "load");
-  CHECK(nc::safe_strtod(load_str, &load));
-
-  double seed;
-  std::string seed_str = nc::FindOrDie(demand_matrix->properties(), "seed");
-  CHECK(nc::safe_strtod(seed_str, &seed));
-
-  out->demand_matrix = demand_matrix;
-  out->key = std::make_tuple(demand_matrix->graph(), seed, load, locality);
-
-  const nc::net::GraphStorage* graph = rc.graph();
-  nc::net::Delay median_link_delay = MedianLinkDelay(*graph);
-
   nc::net::GraphLinkMap<double> utilizations = rc.LinkUtilizations();
-  for (const auto& link_and_utilization : utilizations) {
-    nc::net::GraphLinkIndex link = link_and_utilization.first;
-    double utilization = *(link_and_utilization.second);
-    nc::net::Delay link_delay = graph->GetLink(link)->delay();
-    if (link_delay < median_link_delay) {
-      out->short_link_utilizations.emplace_back(utilization);
-    } else {
-      out->long_link_utilizations.emplace_back(utilization);
-    }
-  }
-
-  out->topology_file_name = top_file;
-  out->demand_matrix_file_name = tm_file;
+  out->utilizations = utilizations;
   out->opt = opt;
-
   return out;
 }
 
@@ -258,6 +267,19 @@ static std::vector<double> GetCommaSeparated(const std::string& value) {
     out.emplace_back(v);
   }
 
+  return out;
+}
+
+// Returns a list of optimizer name and optimizer label in plot.
+static std::vector<std::pair<std::string, std::string>> GetOrderedOptimizers() {
+  std::vector<std::string> opts = nc::Split(FLAGS_optimizers, ",");
+  std::vector<std::string> labels = nc::Split(FLAGS_optimizer_labels, ",");
+  CHECK(opts.size() == labels.size());
+
+  std::vector<std::pair<std::string, std::string>> out;
+  for (size_t i = 0; i < opts.size(); ++i) {
+    out.emplace_back(opts[i], labels[i]);
+  }
   return out;
 }
 
@@ -318,7 +340,8 @@ class MultiRCSummaryPlotPack {
             {"Number of paths per aggregate", "path count"}),
         aggregate_path_count_interesting_({"optimizer", "type", "value"}),
         link_scales_plot_(
-            {"Link scales at X% increase in total delay", "link scale"}) {}
+            {"Link scales at X% increase in total delay", "link scale"}),
+        link_scales_interesting_({"percent", "type", "value"}) {}
 
   void PlotStretchDistribution(const std::string& optimizer,
                                const std::vector<const RCSummary*>& rcs) {
@@ -342,9 +365,11 @@ class MultiRCSummaryPlotPack {
     const auto* max = &maxs_decorated.back();
     const auto* med = &maxs_decorated[maxs_decorated.size() / 2];
     path_stretch_max_rel_interesting_.Add(
-        {optimizer, "max", nc::StrCat(max->first)}, max->second);
+        {optimizer, "max", nc::ToStringMaxDecimals(max->first, 2)},
+        max->second->parent);
     path_stretch_max_rel_interesting_.Add(
-        {optimizer, "med", nc::StrCat(med->first)}, med->second);
+        {optimizer, "med", nc::ToStringMaxDecimals(med->first, 2)},
+        med->second->parent);
 
     std::vector<uint64_t> percentiles = dist.Percentiles(kPercentilesCount);
     CHECK(percentiles.size() == kPercentilesCount + 1);
@@ -383,9 +408,13 @@ class MultiRCSummaryPlotPack {
       ratios.emplace_back(change_and_rc.first);
     }
 
-    ratios_interesting_.Add({optimizer, "max", nc::StrCat(ratios.back())}, max);
     ratios_interesting_.Add(
-        {optimizer, "med", nc::StrCat(ratios[ratios.size() / 2])}, med);
+        {optimizer, "max", nc::ToStringMaxDecimals(ratios.back(), 2)},
+        max->parent);
+    ratios_interesting_.Add(
+        {optimizer, "med",
+         nc::ToStringMaxDecimals(ratios[ratios.size() / 2], 2)},
+        med->parent);
     ratios_plot_.AddData(optimizer, ratios);
   }
 
@@ -408,10 +437,12 @@ class MultiRCSummaryPlotPack {
     }
 
     aggregate_path_count_interesting_.Add(
-        {optimizer, "max", nc::StrCat(path_counts.back())}, max);
+        {optimizer, "max", nc::ToStringMaxDecimals(path_counts.back(), 2)},
+        max->parent);
     aggregate_path_count_interesting_.Add(
-        {optimizer, "med", nc::StrCat(path_counts[path_counts.size() / 2])},
-        med);
+        {optimizer, "med",
+         nc::ToStringMaxDecimals(path_counts[path_counts.size() / 2], 2)},
+        med->parent);
     aggregate_path_count_plot_.AddData(optimizer, path_counts);
   }
 
@@ -419,10 +450,8 @@ class MultiRCSummaryPlotPack {
                             const std::vector<const RCSummary*>& rcs) {
     std::vector<std::pair<double, const RCSummary*>> decorated;
     for (const RCSummary* rc : rcs) {
-      for (double link_utilization : rc->short_link_utilizations) {
-        decorated.emplace_back(link_utilization, rc);
-      }
-      for (double link_utilization : rc->long_link_utilizations) {
+      for (const auto& link_and_utilization : rc->utilizations) {
+        double link_utilization = *(link_and_utilization.second);
         decorated.emplace_back(link_utilization, rc);
       }
     }
@@ -437,26 +466,47 @@ class MultiRCSummaryPlotPack {
     }
 
     link_utilization_interesting_.Add(
-        {optimizer, "max", nc::StrCat(link_utilizations.back())}, max);
+        {optimizer, "max",
+         nc::ToStringMaxDecimals(link_utilizations.back(), 2)},
+        max->parent);
     link_utilization_interesting_.Add(
         {optimizer, "med",
-         nc::StrCat(link_utilizations[link_utilizations.size() / 2])},
-        med);
+         nc::ToStringMaxDecimals(
+             link_utilizations[link_utilizations.size() / 2], 2)},
+        med->parent);
     link_utilization_plot_.AddData(optimizer, link_utilizations);
   }
 
-  void PlotLinkScalesAtDelay(
-      const std::set<const nc::lp::DemandMatrix*>& all_demands) {
+  void PlotLinkScalesAtDelay(const std::vector<const TMSummary*>& all_demands) {
     std::vector<double> p_values = {1.01, 1.02, 1.05, 1.10};
     for (double p : p_values) {
+      std::vector<std::pair<double, const TMSummary*>> decorated;
+
+      for (const TMSummary* tm : all_demands) {
+        double scale = LinkScaleAtDelayFraction(p, *(tm->demand_matrix));
+        decorated.emplace_back(scale, tm);
+      }
+
+      std::sort(decorated.begin(), decorated.end());
+      const TMSummary* max = decorated.back().second;
+      const TMSummary* med = decorated[decorated.size() / 2].second;
+
       std::vector<double> link_scales;
-      for (const nc::lp::DemandMatrix* demand_matrix : all_demands) {
-        double scale = LinkScaleAtDelayFraction(p, *demand_matrix);
-        link_scales.emplace_back(scale);
+      for (const auto& value_and_tm : decorated) {
+        link_scales.emplace_back(value_and_tm.first);
       }
 
       uint32_t percents = (p - 1) * 100;
-      link_scales_plot_.AddData(nc::StrCat(percents, "%"), link_scales);
+      std::string p_string = nc::StrCat(percents, "%");
+
+      link_scales_interesting_.Add(
+          {p_string, "max", nc::ToStringMaxDecimals(link_scales.back(), 2)},
+          max);
+      link_scales_interesting_.Add(
+          {p_string, "med",
+           nc::ToStringMaxDecimals(link_scales[link_scales.size() / 2], 2)},
+          med);
+      link_scales_plot_.AddData(p_string, link_scales);
     }
   }
 
@@ -494,6 +544,10 @@ class MultiRCSummaryPlotPack {
     return ratios_interesting_;
   }
 
+  const InterestingTable& link_scales_interesting() const {
+    return link_scales_interesting_;
+  }
+
   const nc::viz::CDFPlot& ratios_plot() const { return ratios_plot_; }
 
  private:
@@ -512,6 +566,7 @@ class MultiRCSummaryPlotPack {
   InterestingTable aggregate_path_count_interesting_;
 
   nc::viz::CDFPlot link_scales_plot_;
+  InterestingTable link_scales_interesting_;
 };
 
 class SingleRCSummaryPlotPack {
@@ -530,7 +585,12 @@ class SingleRCSummaryPlotPack {
                                       "SP distance (hops)",
                                       "Cumulative size (Mbps)"}),
         total_delay_at_link_scale_plot_(
-            {"Total delay vs link scale", "Link scale", "Total delay"}) {}
+            {"Total delay vs link scale", "Link scale", "Total delay"}),
+        link_delay_vs_link_utilization_plot_(
+            {"Link delay vs link uilization",
+             "Links ranked by propagation delay", "Link utilization"}) {
+    link_delay_vs_link_utilization_plot_.TurnIntoScatterPlot();
+  }
 
   void PlotCumulativeDistances(const nc::lp::DemandMatrix& demand_matrix,
                                const nc::net::AllPairShortestPath& sp) {
@@ -602,11 +662,14 @@ class SingleRCSummaryPlotPack {
       demand_sizes.emplace_back(value_and_id.first);
     }
 
-    demand_sizes_interesting_.Add({"max",
-                                   nc::StrCat(demand_sizes.back(), " Mbps"),
-                                   max.ToString(*graph)});
     demand_sizes_interesting_.Add(
-        {"med", nc::StrCat(demand_sizes[demand_sizes.size() / 2], " Mbps"),
+        {"max",
+         nc::StrCat(nc::ToStringMaxDecimals(demand_sizes.back(), 2), " Mbps"),
+         max.ToString(*graph)});
+    demand_sizes_interesting_.Add(
+        {"med", nc::StrCat(nc::ToStringMaxDecimals(
+                               demand_sizes[demand_sizes.size() / 2], 2),
+                           " Mbps"),
          med.ToString(*graph)});
     demand_sizes_plot_.AddData("", demand_sizes);
   }
@@ -630,11 +693,12 @@ class SingleRCSummaryPlotPack {
       link_utilizations.emplace_back(value_and_id.first);
     }
 
-    sp_utilizations_interesting_.Add({"max",
-                                      nc::StrCat(link_utilizations.back()),
-                                      graph->GetLink(max)->ToStringNoPorts()});
     sp_utilizations_interesting_.Add(
-        {"med", nc::StrCat(link_utilizations[link_utilizations.size() / 2]),
+        {"max", nc::ToStringMaxDecimals(link_utilizations.back(), 2),
+         graph->GetLink(max)->ToStringNoPorts()});
+    sp_utilizations_interesting_.Add(
+        {"med", nc::ToStringMaxDecimals(
+                    link_utilizations[link_utilizations.size() / 2], 2),
          graph->GetLink(med)->ToStringNoPorts()});
     sp_utilizations_plot_.AddData("", link_utilizations);
   }
@@ -666,6 +730,40 @@ class SingleRCSummaryPlotPack {
     total_delay_at_link_scale_plot_.AddData("", total_delay_values);
   }
 
+  void PlotDelayVsUtilization(const std::string& opt_label,
+                              const RCSummary& rc) {
+    nc::net::GraphLinkMap<double> utilizations = rc.utilizations;
+    std::vector<std::pair<nc::net::GraphLinkIndex, double>> all_links;
+
+    const nc::net::GraphStorage* graph = rc.parent->demand_matrix->graph();
+    for (nc::net::GraphLinkIndex link : graph->AllLinks()) {
+      if (utilizations.HasValue(link)) {
+        all_links.emplace_back(link, utilizations.GetValueOrDie(link));
+      } else {
+        all_links.emplace_back(link, 0);
+      }
+    }
+
+    std::sort(all_links.begin(), all_links.end(),
+              [graph](const std::pair<nc::net::GraphLinkIndex, double>& lhs,
+                      const std::pair<nc::net::GraphLinkIndex, double>& rhs) {
+                nc::net::Delay lhs_delay = graph->GetLink(lhs.first)->delay();
+                nc::net::Delay rhs_delay = graph->GetLink(rhs.first)->delay();
+                return lhs_delay < rhs_delay;
+              });
+
+    std::vector<double> xs;
+    std::vector<double> ys;
+    for (size_t i = 0; i < all_links.size(); ++i) {
+      xs.emplace_back(i);
+
+      double utilization = all_links[i].second;
+      ys.emplace_back(utilization);
+    }
+
+    link_delay_vs_link_utilization_plot_.AddData(opt_label, xs, ys);
+  }
+
   const nc::viz::LinePlot& cumulative_demands_plot() const {
     return cumulative_demands_plot_;
   }
@@ -690,6 +788,10 @@ class SingleRCSummaryPlotPack {
     return total_delay_at_link_scale_plot_;
   }
 
+  const nc::viz::LinePlot& link_delay_vs_link_utilization_plot() const {
+    return link_delay_vs_link_utilization_plot_;
+  }
+
  private:
   // Plots demand sizes for the topology.
   nc::viz::CDFPlot demand_sizes_plot_;
@@ -706,6 +808,9 @@ class SingleRCSummaryPlotPack {
   // Plots how adding headroom to all links affects the total delay experienced
   // by all flows in the topology.
   nc::viz::LinePlot total_delay_at_link_scale_plot_;
+
+  // Plot with one curve per optimizer. X axis is links, Y axis is utilization.
+  nc::viz::LinePlot link_delay_vs_link_utilization_plot_;
 };
 
 // static double FractionOfLinksWithUtilizationMoreThan(
@@ -719,7 +824,7 @@ class SingleRCSummaryPlotPack {
 //
 //  return count / utilizations.size();
 //}
-
+//
 // static nc::viz::CDFPlot LinkUtilizationsPlot(
 //    const std::vector<RCSummary>& rcs,
 //    const std::vector<double>& utilization_thresholds) {
@@ -745,28 +850,18 @@ class SingleRCSummaryPlotPack {
 //  return out;
 //}
 
-// static std::string Indent(const std::string& input) {
-//  std::vector<std::string> pieces = nc::Split(input, "\n");
-//  std::string out;
-//  for (const auto& piece : pieces) {
-//    nc::StrAppend(&out, "   ", piece, "\n");
-//  }
-//
-//  return out;
-//}
-
 class DataPlotter {
  public:
-  void AddData(std::unique_ptr<RCSummary> rc_summary) {
+  void AddData(std::unique_ptr<TMSummary> tm_summary) {
     const nc::net::GraphStorage* graph;
     double seed;
     double load;
     double locality;
-    std::tie(graph, seed, load, locality) = rc_summary->key;
+    std::tie(graph, seed, load, locality) = tm_summary->key;
 
     auto ll = std::make_pair(load, locality);
-    data_[ll].emplace_back(rc_summary.get());
-    data_storage_.emplace_back(std::move(rc_summary));
+    data_[ll].emplace_back(tm_summary.get());
+    data_storage_.emplace_back(std::move(tm_summary));
   }
 
   void PlotRoot(const std::string& root,
@@ -789,12 +884,8 @@ class DataPlotter {
     }
 
     for (uint32_t i = 0; i < interesting_data_.size(); ++i) {
-      if (i == 5) {
-        break;
-      }
-
-      const RCSummary* rc = interesting_data_[i];
-      const TMKey& key = rc->key;
+      const TMSummary* tm = interesting_data_[i];
+      const TMKey& key = tm->key;
 
       const nc::net::GraphStorage* graph;
       double seed;
@@ -804,7 +895,7 @@ class DataPlotter {
 
       const nc::net::AllPairShortestPath& sp = nc::FindOrDie(sp_map, graph);
       std::string subdir = nc::StrCat(root, "/interesting_", i);
-      PlotSingleTM(subdir, rc, sp, i);
+      PlotSingleTM(subdir, tm, sp, i);
     }
 
     std::string output;
@@ -819,17 +910,29 @@ class DataPlotter {
 
   // Plots a single TM. The first argument is summaries, grouped by optimizer.
   // All summaries should be for the same TM.
-  void PlotSingleTM(const std::string& root, const RCSummary* rc,
+  void PlotSingleTM(const std::string& root, const TMSummary* tm,
                     const nc::net::AllPairShortestPath& sp,
                     uint32_t interesting_index) {
     using namespace std::chrono;
 
-    const nc::lp::DemandMatrix& demand_matrix = *(rc->demand_matrix);
+    const nc::net::GraphStorage* graph;
+    double seed;
+    double load;
+    double locality;
+    std::tie(graph, seed, load, locality) = tm->key;
+
+    const nc::lp::DemandMatrix& demand_matrix = *(tm->demand_matrix);
     SingleRCSummaryPlotPack plot_pack;
     plot_pack.PlotCumulativeDistances(demand_matrix, sp);
     plot_pack.PlotDemandSizes(demand_matrix);
     plot_pack.PlotSPUtilizations(demand_matrix);
     plot_pack.PlotTotalDelayAtLinkScale(demand_matrix);
+
+    auto ordered_opt = GetOrderedOptimizers();
+    for (const auto& opt_and_label : ordered_opt) {
+      const RCSummary* rc = nc::FindOrDie(tm->rcs, opt_and_label.first).get();
+      plot_pack.PlotDelayVsUtilization(opt_and_label.first, *(rc));
+    }
 
     ctemplate::TemplateDictionary dict("plot");
     PlotAndAddToTemplate(root, "demand_sizes", plot_pack.demand_sizes_plot(),
@@ -840,27 +943,28 @@ class DataPlotter {
                          plot_pack.total_delay_at_link_scale_plot(), &dict);
     PlotAndAddToTemplate(root, "cumulative_demands",
                          plot_pack.cumulative_demands_plot(), &dict);
+    PlotAndAddToTemplate(root, "link_delay_vs_utilization",
+                         plot_pack.link_delay_vs_link_utilization_plot(),
+                         &dict);
 
     dict.SetValue(
         "demand_sizes_interesting_table",
         plot_pack.demand_sizes_interesting().ToRSTTable(&interesting_data_));
 
-    const nc::net::GraphStorage* graph;
-    double seed;
-    double load;
-    double locality;
-    std::tie(graph, seed, load, locality) = rc->key;
+    std::string name_stripped =
+        nc::File::ExtractFileName(*(tm->topology_file_name));
+    name_stripped = nc::StringReplace(name_stripped, ".graph", "", true);
 
-    dict.SetValue("topology_name",
-                  nc::File::ExtractFileName(*(rc->topology_file_name)));
+    dict.SetValue("topology_name", name_stripped);
     dict.SetValue("tm_seed", nc::StrCat(seed));
     dict.SetValue("load", nc::StrCat(load));
     dict.SetValue("locality", nc::StrCat(locality));
     dict.SetValue("interesting_index", nc::StrCat(interesting_index));
+    dict.SetValue("tm_summary", Indent(demand_matrix.ToString()));
 
     std::string output;
-    ctemplate::ExpandTemplate(kLocalityLevelTemplate, ctemplate::DO_NOT_STRIP,
-                              &dict, &output);
+    ctemplate::ExpandTemplate(kSingleTMTemplate, ctemplate::DO_NOT_STRIP, &dict,
+                              &output);
     nc::File::WriteStringToFileOrDie(output, nc::StrCat(root, "/index.rst"));
   }
 
@@ -880,12 +984,16 @@ class DataPlotter {
 
   std::map<std::string, std::vector<const RCSummary*>> DataByOptimizer(
       double load, double locality) {
-    const std::vector<const RCSummary*>& all_data =
+    const std::vector<const TMSummary*>& all_data =
         nc::FindOrDieNoPrint(data_, std::make_pair(load, locality));
 
     std::map<std::string, std::vector<const RCSummary*>> out;
-    for (const RCSummary* rc : all_data) {
-      out[*(rc->opt)].emplace_back(rc);
+    for (const TMSummary* tm : all_data) {
+      for (const auto& opt_and_rc : tm->rcs) {
+        const std::string& opt = opt_and_rc.first;
+        const RCSummary* rc = opt_and_rc.second.get();
+        out[opt].emplace_back(rc);
+      }
     }
     return out;
   }
@@ -897,20 +1005,20 @@ class DataPlotter {
     std::map<std::string, std::vector<const RCSummary*>> opt_map =
         DataByOptimizer(load, locality);
 
-    std::set<const nc::lp::DemandMatrix*> all_demands;
-    for (const auto& optimizer_and_rcs : opt_map) {
-      const std::string& opt = optimizer_and_rcs.first;
-      const std::vector<const RCSummary*>& rcs = optimizer_and_rcs.second;
-      for (const RCSummary* rc : rcs) {
-        all_demands.emplace(rc->demand_matrix);
-      }
-
-      plot_pack.PlotLinkUtilizations(opt, rcs);
-      plot_pack.PlotPathCounts(opt, rcs);
-      plot_pack.PlotPathRatios(opt, rcs);
-      plot_pack.PlotStretchDistribution(opt, rcs);
+    auto ordered_opt = GetOrderedOptimizers();
+    for (const auto& opt_and_label : ordered_opt) {
+      const std::vector<const RCSummary*>& rcs =
+          nc::FindOrDie(opt_map, opt_and_label.first);
+      const std::string& label = opt_and_label.second;
+      plot_pack.PlotLinkUtilizations(label, rcs);
+      plot_pack.PlotPathCounts(label, rcs);
+      plot_pack.PlotPathRatios(label, rcs);
+      plot_pack.PlotStretchDistribution(label, rcs);
     }
-    plot_pack.PlotLinkScalesAtDelay(all_demands);
+
+    const std::vector<const TMSummary*>& tms =
+        nc::FindOrDieNoPrint(data_, std::make_pair(load, locality));
+    plot_pack.PlotLinkScalesAtDelay(tms);
 
     PlotAndAddToTemplate(root, "path_ratios", plot_pack.ratios_plot(), &dict);
     PlotAndAddToTemplate(root, "path_stretch_rel",
@@ -930,6 +1038,9 @@ class DataPlotter {
     dict.SetValue("max_path_stretch_rel_interesting_table",
                   plot_pack.path_stretch_max_rel_interesting().ToRSTTable(
                       &interesting_data_));
+    dict.SetValue(
+        "link_scales_interesting_table",
+        plot_pack.link_scales_interesting().ToRSTTable(&interesting_data_));
 
     dict.SetValue("tm_load", nc::StrCat(load));
     dict.SetValue("tm_locality", nc::StrCat(locality));
@@ -940,12 +1051,12 @@ class DataPlotter {
   }
 
   // All data, grouped by load and locality.
-  std::map<LoadAndLocality, std::vector<const RCSummary*>> data_;
+  std::map<LoadAndLocality, std::vector<const TMSummary*>> data_;
 
-  std::vector<const RCSummary*> interesting_data_;
+  std::vector<const TMSummary*> interesting_data_;
 
   // All data is stored here.
-  std::vector<std::unique_ptr<RCSummary>> data_storage_;
+  std::vector<std::unique_ptr<TMSummary>> data_storage_;
 };
 
 static std::string GetFilename(const std::string& tm_file,
@@ -1010,16 +1121,19 @@ int main(int argc, char** argv) {
       continue;
     }
 
+    auto tm_summary =
+        ParseTM(demand_matrix, &(matrix.file), &(matrix.topology_file));
     for (size_t i = 0; i < optimizers.size(); ++i) {
       const std::string& opt = optimizers[i];
       const RoutingConfiguration& rc = *(rcs[i]);
 
       const nc::net::AllPairShortestPath& sp =
           nc::FindOrDieNoPrint(sp_map, rc.graph());
-      auto summary = ParseRC(rc, sp, demand_matrix, &(matrix.file),
-                             &(matrix.topology_file), &opt);
-      data_plotter.AddData(std::move(summary));
+      auto summary = ParseRC(rc, sp, &opt);
+      summary->parent = tm_summary.get();
+      tm_summary->rcs[opt] = std::move(summary);
     }
+    data_plotter.AddData(std::move(tm_summary));
   }
 
   data_plotter.PlotRoot("plot_tree", sp_map);
