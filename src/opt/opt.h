@@ -153,6 +153,9 @@ class CTRLinkBased : public Optimizer {
 std::map<AggregateId, double> GetCapacityAtDelay(
     const nc::net::GraphStorage& graph, double fraction);
 
+std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
+    const nc::net::GraphStorage& graph, double fraction);
+
 }  // namespace ctr
 
 #endif

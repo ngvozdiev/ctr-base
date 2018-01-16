@@ -28,6 +28,12 @@ aggregate with the shortest path of smallest length. This plot is useful in
 judging how local (geographically) aggregates are
 (:download:`download plot data <{{cumulative_demands_location_tgz}}>`).
 
+.. image:: {{cumulative_demands_hop_location}}
+
+Same as the previous plot, but each aggregate's shortest path is represented as 
+hop count instead of as delay 
+(:download:`download plot data <{{cumulative_demands_hop_location_tgz}}>`). 
+
 .. image:: {{sp_utilization_location}}
 
 The distrubition of link utilizations when all aggregates are routed on the 
@@ -61,3 +67,8 @@ values are below 1, the routing scheme was able to fit the traffic matrix and
 there will be no congestion (barring variability) 
 (:download:`download plot data <{{link_delay_vs_utilization_location_tgz}}>`).
 
+.. image:: {{absolute_stretch_location}}
+
+A CDF with each flow's absolute path stretch---the difference between the flow's 
+path and its shortest path 
+(:download:`download plot data <{{absolute_stretch_location_tgz}}>`).

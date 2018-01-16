@@ -16,50 +16,38 @@
 #include "opt/opt.h"
 #include "topology_input.h"
 
-DEFINE_uint64(seed, 1ul, "Seed for the generated TM.");
-DEFINE_uint64(k, 10000ul, "Number of paths");
+DEFINE_string(sp_fractions, "1.2", "How far from the SP a path can be");
+
+static std::vector<double> GetCommaSeparated(const std::string& value) {
+  std::vector<std::string> split = nc::Split(value, ",");
+  std::vector<double> out;
+  for (const auto& piece : split) {
+    double v;
+    CHECK(nc::safe_strtod(piece, &v));
+    out.emplace_back(v);
+  }
+
+  return out;
+}
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   std::vector<ctr::TopologyAndFilename> topologies = ctr::GetTopologyInputs();
   CHECK(topologies.size() == 1) << "Too many topologies";
 
-  const nc::net::GraphStorage* graph = topologies[0].graph.get();
-  std::vector<nc::net::GraphNodeIndex> nodes_ordered;
-  for (nc::net::GraphNodeIndex node : graph->AllNodes()) {
-    nodes_ordered.emplace_back(node);
-  }
-
-  std::map<ctr::AggregateId, double> capacity_at_delay =
-      ctr::GetCapacityAtDelay(*graph, 1.2);
-  std::vector<double> capacities;
-  for (const auto& aggregate_and_capacity : capacity_at_delay) {
-    capacities.emplace_back(aggregate_and_capacity.second);
-  }
   nc::viz::CDFPlot capacities_plot;
-  capacities_plot.AddData("", capacities);
-  capacities_plot.PlotToDir("capacities_out");
-
-  std::mt19937 rnd(FLAGS_seed);
-  std::shuffle(nodes_ordered.begin(), nodes_ordered.end(), rnd);
-  CHECK(nodes_ordered.size() > 1);
-
-  nc::net::GraphNodeIndex src = nodes_ordered[0];
-  nc::net::GraphNodeIndex dst = nodes_ordered[1];
-
-  std::vector<std::pair<double, double>> delays;
-  nc::net::KShortestPathsGenerator ksp_gen(src, dst, *graph, {});
-  for (size_t i = 0; i < FLAGS_k; ++i) {
-    const nc::net::Walk* p = ksp_gen.KthShortestPathOrNull(i);
-    if (p == nullptr) {
-      break;
+  const nc::net::GraphStorage* graph = topologies[0].graph.get();
+  std::vector<double> values = GetCommaSeparated(FLAGS_sp_fractions);
+  for (double v : values) {
+    std::map<ctr::AggregateId, uint64_t> counts_at_delay =
+        ctr::GetPathCountsAtDelay(*graph, v);
+    std::vector<double> capacities;
+    for (const auto& aggregate_and_capacity : counts_at_delay) {
+      capacities.emplace_back(aggregate_and_capacity.second);
     }
 
-    double cost = p->delay().count();
-    delays.emplace_back(i, cost);
+    capacities_plot.AddData(nc::StrCat("fraction ", v), capacities);
   }
 
-  nc::viz::LinePlot plot;
-  plot.AddData("original", delays);
-  plot.PlotToDir("dump_aggregate_out");
+  capacities_plot.PlotToDir("capacities_out");
 }

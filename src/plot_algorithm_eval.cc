@@ -216,6 +216,19 @@ static std::unique_ptr<RCSummary> ParseRC(
     const RoutingConfiguration& rc, const nc::net::AllPairShortestPath& sp,
     const std::string* opt) {
   auto out = nc::make_unique<RCSummary>();
+
+  nc::net::GraphLinkMap<double> utilizations = rc.LinkUtilizations();
+  out->utilizations = utilizations;
+
+  nc::net::GraphLinkSet overloaded_links;
+  for (const auto& link_and_utilization : utilizations) {
+    nc::net::GraphLinkIndex link = link_and_utilization.first;
+    double utilization = *(link_and_utilization.second);
+    if (utilization > 1.001) {
+      overloaded_links.insert(link);
+    }
+  }
+
   for (const auto& aggregate_and_routes : rc.routes()) {
     const AggregateId& id = aggregate_and_routes.first;
     const DemandAndFlowCount& demand_and_flow_count =
@@ -233,6 +246,10 @@ static std::unique_ptr<RCSummary> ParseRC(
 
       double path_delay_ms = ToMs(path->delay());
       path_delay_ms = std::max(1.0, path_delay_ms);
+      bool overloaded = path->ContainsAny(overloaded_links);
+      if (overloaded) {
+        path_delay_ms += 10.0;
+      }
 
       double abs_stretch = path_delay_ms - sp_delay_ms;
       double rel_stretch = path_delay_ms / sp_delay_ms;
@@ -251,8 +268,6 @@ static std::unique_ptr<RCSummary> ParseRC(
     out->path_counts.emplace_back(aggregate_and_routes.second.size());
   }
 
-  nc::net::GraphLinkMap<double> utilizations = rc.LinkUtilizations();
-  out->utilizations = utilizations;
   out->opt = opt;
   return out;
 }
@@ -588,7 +603,9 @@ class SingleRCSummaryPlotPack {
             {"Total delay vs link scale", "Link scale", "Total delay"}),
         link_delay_vs_link_utilization_plot_(
             {"Link delay vs link uilization",
-             "Links ranked by propagation delay", "Link utilization"}) {
+             "Links ranked by propagation delay", "Link utilization"}),
+        absolute_path_stretch_plot_(
+            {"Absolute path stretch", "path stretch (ms)", "CDF"}) {
     link_delay_vs_link_utilization_plot_.TurnIntoScatterPlot();
   }
 
@@ -764,8 +781,36 @@ class SingleRCSummaryPlotPack {
     link_delay_vs_link_utilization_plot_.AddData(opt_label, xs, ys);
   }
 
+  void PlotAbsoluteStretch(const std::string& opt_label, const RCSummary& rc) {
+    nc::DiscreteDistribution<uint64_t> dist;
+    for (size_t i = 0; i < rc.abs_stretches.size(); ++i) {
+      double rel_stretch = rc.abs_stretches[i];
+      double flow_count = rc.flow_counts[i];
+      uint64_t value_discrete =
+          static_cast<uint64_t>(kDiscreteMultiplier * rel_stretch);
+      dist.Add(value_discrete, flow_count);
+    }
+
+    std::vector<uint64_t> percentiles = dist.Percentiles(kPercentilesCount);
+    CHECK(percentiles.size() == kPercentilesCount + 1);
+
+    std::vector<std::pair<double, double>> path_stretch_abs_data;
+    for (size_t i = 0; i < percentiles.size(); ++i) {
+      double discrete_value = percentiles[i];
+      double p = discrete_value / kDiscreteMultiplier;
+      path_stretch_abs_data.emplace_back(
+          p, static_cast<double>(i) / kPercentilesCount);
+    }
+
+    absolute_path_stretch_plot_.AddData(opt_label, path_stretch_abs_data);
+  }
+
   const nc::viz::LinePlot& cumulative_demands_plot() const {
     return cumulative_demands_plot_;
+  }
+
+  const nc::viz::LinePlot& cumulative_demands_hop_plot() const {
+    return cumulative_demands_hop_plot_;
   }
 
   const InterestingTable& demand_sizes_interesting() const {
@@ -792,6 +837,10 @@ class SingleRCSummaryPlotPack {
     return link_delay_vs_link_utilization_plot_;
   }
 
+  const nc::viz::LinePlot& absolute_path_stretch_plot() const {
+    return absolute_path_stretch_plot_;
+  }
+
  private:
   // Plots demand sizes for the topology.
   nc::viz::CDFPlot demand_sizes_plot_;
@@ -811,6 +860,10 @@ class SingleRCSummaryPlotPack {
 
   // Plot with one curve per optimizer. X axis is links, Y axis is utilization.
   nc::viz::LinePlot link_delay_vs_link_utilization_plot_;
+
+  // Plot with one curve per optimizer. X axis is per-flow path stretch in
+  // milliseconds.
+  nc::viz::LinePlot absolute_path_stretch_plot_;
 };
 
 // static double FractionOfLinksWithUtilizationMoreThan(
@@ -932,6 +985,7 @@ class DataPlotter {
     for (const auto& opt_and_label : ordered_opt) {
       const RCSummary* rc = nc::FindOrDie(tm->rcs, opt_and_label.first).get();
       plot_pack.PlotDelayVsUtilization(opt_and_label.first, *(rc));
+      plot_pack.PlotAbsoluteStretch(opt_and_label.first, *(rc));
     }
 
     ctemplate::TemplateDictionary dict("plot");
@@ -943,9 +997,13 @@ class DataPlotter {
                          plot_pack.total_delay_at_link_scale_plot(), &dict);
     PlotAndAddToTemplate(root, "cumulative_demands",
                          plot_pack.cumulative_demands_plot(), &dict);
+    PlotAndAddToTemplate(root, "cumulative_demands_hop",
+                         plot_pack.cumulative_demands_hop_plot(), &dict);
     PlotAndAddToTemplate(root, "link_delay_vs_utilization",
                          plot_pack.link_delay_vs_link_utilization_plot(),
                          &dict);
+    PlotAndAddToTemplate(root, "absolute_stretch",
+                         plot_pack.absolute_path_stretch_plot(), &dict);
 
     dict.SetValue(
         "demand_sizes_interesting_table",

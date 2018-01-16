@@ -652,8 +652,6 @@ nc::net::Bandwidth MinLinkCapacity(const nc::net::GraphStorage& graph) {
 
 std::map<AggregateId, double> GetCapacityAtDelay(
     const nc::net::GraphStorage& graph, double fraction) {
-  nc::net::Bandwidth min_lc = MinLinkCapacity(graph);
-
   std::map<AggregateId, double> out;
   nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
@@ -686,6 +684,44 @@ std::map<AggregateId, double> GetCapacityAtDelay(
       //      if (f > 1)
       //      LOG(FATAL) << f;
       out[id] = f;
+    }
+  }
+
+  return out;
+}
+
+static uint64_t GetPathCount(const nc::net::GraphStorage& graph,
+                             const AggregateId& id, nc::net::Delay threshold) {
+  nc::net::DFSConfig dfs_config;
+  dfs_config.max_distance = threshold;
+
+  uint64_t count;
+  nc::net::Paths(id.src(), id.dst(),
+                 [&count](std::unique_ptr<nc::net::Walk> p) { ++count; }, graph,
+                 {}, dfs_config);
+  LOG(INFO) << id.ToString(graph) << " " << count << " paths";
+  return count;
+}
+
+std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
+    const nc::net::GraphStorage& graph, double fraction) {
+  std::map<AggregateId, uint64_t> out;
+
+  nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
+  for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
+    LOG(INFO) << "Processing source " << graph.GetNode(src)->id();
+    for (nc::net::GraphNodeIndex dst : graph.AllNodes()) {
+      if (src == dst) {
+        continue;
+      }
+
+      AggregateId id(src, dst);
+      auto path = sp.GetPath(src, dst);
+      double threshold = path->delay().count() * fraction;
+      nc::net::Delay delay_threshold =
+          nc::net::Delay(static_cast<size_t>(threshold));
+      uint64_t count = GetPathCount(graph, id, delay_threshold);
+      out[id] = count;
     }
   }
 
