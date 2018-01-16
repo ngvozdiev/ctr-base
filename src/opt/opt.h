@@ -147,6 +147,12 @@ class CTRLinkBased : public Optimizer {
   double link_capacity_multiplier_;
 };
 
+// Returns for each of the N (N-1) aggregates the amount of flow that can be
+// sent on paths up to 'fraction' away from the aggregate's shortest path
+// divided by the capacity of its shortest path. Fraction should be >= 1.
+std::map<AggregateId, double> GetCapacityAtDelay(
+    const nc::net::GraphStorage& graph, double fraction);
+
 }  // namespace ctr
 
 #endif

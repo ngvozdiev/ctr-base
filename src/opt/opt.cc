@@ -128,7 +128,9 @@ std::unique_ptr<RoutingConfiguration> CTRLinkBased::Optimize(
   }
 
   std::map<nc::lp::SrcAndDst, std::vector<nc::lp::FlowAndPath>> paths;
-  problem.Solve(&paths);
+  if (problem.Solve(&paths) == std::numeric_limits<double>::max()) {
+    return {};
+  }
 
   return GetRoutingConfig(tm, path_provider_, &paths);
 }
@@ -555,6 +557,136 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
     }
     out->AddRouteAndFraction(aggregate_state.aggregate_id(),
                              routes_for_aggregate);
+  }
+
+  return out;
+}
+
+static nc::net::Bandwidth GetCapacityAtDelay(const nc::net::GraphStorage& graph,
+                                             const AggregateId& id,
+                                             nc::net::Delay threshold,
+                                             nc::net::Bandwidth min,
+                                             nc::net::Bandwidth max,
+                                             nc::net::Bandwidth accuracy) {
+  // Will create a problem with a single aggregate and will increase the
+  // aggregate's demand until a path with delay more than 'threshold' is used.
+  // Will do a binary search.
+  nc::net::Bandwidth candidate_bw = min;
+
+  while (true) {
+    if (max - min < accuracy) {
+      break;
+    }
+    nc::net::Bandwidth bw = min + (max - min) / 2;
+
+    TrafficMatrix tm(&graph);
+    tm.AddDemand(id, DemandAndFlowCount(bw, 1ul));
+
+    PathProvider path_provider(&graph);
+    CTRLinkBased ctr(&path_provider, 1.0);
+    auto result = ctr.Optimize(tm);
+    if (!result) {
+      // Not feasible.
+      max = bw;
+      continue;
+    }
+
+    const std::vector<RouteAndFraction>& routes_for_aggregate =
+        nc::FindOrDieNoPrint(result->routes(), id);
+    bool too_long = false;
+    for (const auto& route_and_fraction : routes_for_aggregate) {
+      if (route_and_fraction.first->delay() > threshold) {
+        too_long = true;
+        break;
+      }
+    }
+
+    if (too_long) {
+      max = bw;
+    } else {
+      min = bw;
+      candidate_bw = std::max(candidate_bw, min);
+    }
+  }
+
+  candidate_bw = std::min(candidate_bw, max);
+  return candidate_bw;
+}
+
+nc::net::Bandwidth PathFlow(const nc::net::Walk& path,
+                            const nc::net::GraphStorage& graph) {
+  nc::net::Bandwidth flow = nc::net::Bandwidth::Max();
+  for (const auto& link : path.links()) {
+    nc::net::Bandwidth bw = graph.GetLink(link)->bandwidth();
+    flow = std::min(flow, bw);
+  }
+
+  return flow;
+}
+
+nc::net::Bandwidth OutgoingFlow(nc::net::GraphNodeIndex node,
+                                const nc::net::GraphStorage& graph) {
+  const nc::net::AdjacencyList& adj_list = graph.AdjacencyList();
+  const std::vector<nc::net::AdjacencyList::LinkInfo>& neighbors =
+      adj_list.GetNeighbors(node);
+
+  nc::net::Bandwidth total = nc::net::Bandwidth::Zero();
+  for (const auto& link_info : neighbors) {
+    nc::net::GraphLinkIndex link_index = link_info.link_index;
+    nc::net::Bandwidth link_bw = graph.GetLink(link_index)->bandwidth();
+    total += link_bw;
+  }
+
+  return total;
+}
+
+nc::net::Bandwidth MinLinkCapacity(const nc::net::GraphStorage& graph) {
+  nc::net::Bandwidth capacity = nc::net::Bandwidth::Max();
+  for (const nc::net::GraphLinkIndex link : graph.AllLinks()) {
+    nc::net::Bandwidth bw = graph.GetLink(link)->bandwidth();
+    capacity = std::min(capacity, bw);
+  }
+
+  return capacity;
+}
+
+std::map<AggregateId, double> GetCapacityAtDelay(
+    const nc::net::GraphStorage& graph, double fraction) {
+  nc::net::Bandwidth min_lc = MinLinkCapacity(graph);
+
+  std::map<AggregateId, double> out;
+  nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
+  for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
+    LOG(INFO) << "Processing source " << graph.GetNode(src)->id();
+
+    nc::net::Bandwidth outgoing_flow = OutgoingFlow(src, graph);
+    for (nc::net::GraphNodeIndex dst : graph.AllNodes()) {
+      if (src == dst) {
+        continue;
+      }
+
+      AggregateId id(src, dst);
+      auto path = sp.GetPath(src, dst);
+      nc::net::Bandwidth sp_path_flow = PathFlow(*path, graph);
+      if (sp_path_flow == outgoing_flow) {
+        out[id] = 1.0;
+        continue;
+      }
+
+      double threshold = path->delay().count() * fraction;
+      nc::net::Delay delay_threshold =
+          nc::net::Delay(static_cast<size_t>(threshold));
+      nc::net::Bandwidth max_flow = GetCapacityAtDelay(
+          graph, id, delay_threshold, sp_path_flow, outgoing_flow,
+          nc::net::Bandwidth::FromMBitsPerSecond(1));
+
+      double f = max_flow / PathFlow(*path, graph);
+      CHECK(f >= 1.0) << max_flow.Mbps() << " vs "
+                      << PathFlow(*path, graph).Mbps();
+      //      if (f > 1)
+      //      LOG(FATAL) << f;
+      out[id] = f;
+    }
   }
 
   return out;
