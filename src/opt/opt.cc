@@ -16,6 +16,7 @@
 #include "ncode/net/net_common.h"
 #include "ncode/net/algorithm.h"
 #include "ncode/perfect_hash.h"
+#include "ncode/thread_runner.h"
 
 namespace ctr {
 
@@ -695,7 +696,7 @@ static uint64_t GetPathCount(const nc::net::GraphStorage& graph,
   nc::net::DFSConfig dfs_config;
   dfs_config.max_distance = threshold;
 
-  uint64_t count;
+  uint64_t count = 0;
   nc::net::Paths(id.src(), id.dst(),
                  [&count](std::unique_ptr<nc::net::Walk> p) { ++count; }, graph,
                  {}, dfs_config);
@@ -704,10 +705,12 @@ static uint64_t GetPathCount(const nc::net::GraphStorage& graph,
 }
 
 std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
-    const nc::net::GraphStorage& graph, double fraction) {
-  std::map<AggregateId, uint64_t> out;
-
+    const nc::net::GraphStorage& graph, double fraction, size_t threads) {
+  using AggregateAndDelay = std::pair<AggregateId, nc::net::Delay>;
+  using AggregateAndPathCount = std::pair<AggregateId, uint64_t>;
   nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
+
+  std::vector<AggregateAndDelay> inputs;
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
     LOG(INFO) << "Processing source " << graph.GetNode(src)->id();
     for (nc::net::GraphNodeIndex dst : graph.AllNodes()) {
@@ -720,9 +723,20 @@ std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
       double threshold = path->delay().count() * fraction;
       nc::net::Delay delay_threshold =
           nc::net::Delay(static_cast<size_t>(threshold));
-      uint64_t count = GetPathCount(graph, id, delay_threshold);
-      out[id] = count;
+      inputs.emplace_back(id, delay_threshold);
     }
+  }
+
+  std::vector<std::unique_ptr<AggregateAndPathCount>> results =
+      nc::RunInParallelWithResult<AggregateAndDelay, AggregateAndPathCount>(
+          inputs, [&graph](const AggregateAndDelay& input) {
+            uint64_t result = GetPathCount(graph, input.first, input.second);
+            return nc::make_unique<AggregateAndPathCount>(input.first, result);
+          }, threads);
+
+  std::map<AggregateId, uint64_t> out;
+  for (const auto& aggregate_and_path_count : results) {
+    out[aggregate_and_path_count->first] = aggregate_and_path_count->second;
   }
 
   return out;

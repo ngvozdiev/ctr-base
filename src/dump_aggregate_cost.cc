@@ -12,6 +12,7 @@
 #include "opt/opt.h"
 
 DEFINE_double(sp_fraction, 1.2, "How far from the SP a path can be");
+DEFINE_uint64(threads, 2, "How many threads to use");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -20,13 +21,15 @@ int main(int argc, char** argv) {
   for (const auto& topology_and_filename : topologies) {
     const nc::net::GraphStorage& graph = *topology_and_filename.graph;
     std::map<ctr::AggregateId, uint64_t> counts_at_delay =
-        ctr::GetPathCountsAtDelay(graph, FLAGS_sp_fraction);
+        ctr::GetPathCountsAtDelay(graph, FLAGS_sp_fraction, FLAGS_threads);
     std::vector<double> path_counts;
     for (const auto& aggregate_and_path_count : counts_at_delay) {
       path_counts.emplace_back(aggregate_and_path_count.second);
     }
 
     std::string label = nc::File::ExtractFileName(topology_and_filename.file);
+    label = nc::StrCat(label, " n", static_cast<uint32_t>(graph.NodeCount()),
+                       " e", static_cast<uint32_t>(graph.LinkCount()));
     path_counts_plot.AddData(label, path_counts);
   }
 

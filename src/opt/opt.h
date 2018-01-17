@@ -154,7 +154,7 @@ std::map<AggregateId, double> GetCapacityAtDelay(
     const nc::net::GraphStorage& graph, double fraction);
 
 std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
-    const nc::net::GraphStorage& graph, double fraction);
+    const nc::net::GraphStorage& graph, double fraction, size_t threads = 1ul);
 
 }  // namespace ctr
 
