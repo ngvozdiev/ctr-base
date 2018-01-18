@@ -151,10 +151,20 @@ class CTRLinkBased : public Optimizer {
 // sent on paths up to 'fraction' away from the aggregate's shortest path
 // divided by the capacity of its shortest path. Fraction should be >= 1.
 std::map<AggregateId, double> GetCapacityAtDelay(
-    const nc::net::GraphStorage& graph, double fraction);
+    const nc::net::GraphStorage& graph, double delay_fraction);
 
-std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
-    const nc::net::GraphStorage& graph, double fraction);
+// Return for each aggregate the fraction of links on the aggregate's shortest
+// path that can be saturated and still route the aggregate on an alternate
+// path.
+std::map<AggregateId, double> GetLinkFractionAtDelay(
+    const nc::net::GraphStorage& graph, double delay_fraction);
+
+// Returns the fraction of pairs for which at least 'link_fraction' of the
+// shortest path links can be routed around, using a path of at most
+// 'delay_fraction' delay away from the shortest.
+double FractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
+                                        double delay_fraction,
+                                        double link_fraction);
 
 }  // namespace ctr
 

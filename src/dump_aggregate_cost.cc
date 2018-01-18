@@ -15,20 +15,22 @@ DEFINE_double(sp_fraction, 1.2, "How far from the SP a path can be");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  nc::viz::CDFPlot path_counts_plot;
+  nc::viz::CDFPlot fraction_plot;
   std::vector<ctr::TopologyAndFilename> topologies = ctr::GetTopologyInputs();
   for (const auto& topology_and_filename : topologies) {
     const nc::net::GraphStorage& graph = *topology_and_filename.graph;
-    std::map<ctr::AggregateId, uint64_t> counts_at_delay =
-        ctr::GetPathCountsAtDelay(graph, FLAGS_sp_fraction);
-    std::vector<double> path_counts;
-    for (const auto& aggregate_and_path_count : counts_at_delay) {
-      path_counts.emplace_back(aggregate_and_path_count.second);
+    std::map<ctr::AggregateId, double> fractions_at_delay =
+        ctr::GetLinkFractionAtDelay(graph, FLAGS_sp_fraction);
+    std::vector<double> fractions;
+    for (const auto& aggregate_and_fraction : fractions_at_delay) {
+      fractions.emplace_back(aggregate_and_fraction.second);
     }
 
     std::string label = nc::File::ExtractFileName(topology_and_filename.file);
-    path_counts_plot.AddData(label, path_counts);
+    label = nc::StrCat(label, " n", static_cast<uint32_t>(graph.NodeCount()),
+                       " e", static_cast<uint32_t>(graph.LinkCount()));
+    fraction_plot.AddData(label, fractions);
   }
 
-  path_counts_plot.PlotToDir("path_counts_out");
+  fraction_plot.PlotToDir("fractions_out");
 }

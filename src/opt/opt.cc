@@ -681,8 +681,6 @@ std::map<AggregateId, double> GetCapacityAtDelay(
       double f = max_flow / PathFlow(*path, graph);
       CHECK(f >= 1.0) << max_flow.Mbps() << " vs "
                       << PathFlow(*path, graph).Mbps();
-      //      if (f > 1)
-      //      LOG(FATAL) << f;
       out[id] = f;
     }
   }
@@ -690,23 +688,56 @@ std::map<AggregateId, double> GetCapacityAtDelay(
   return out;
 }
 
-static uint64_t GetPathCount(const nc::net::GraphStorage& graph,
-                             const AggregateId& id, nc::net::Delay threshold) {
-  nc::net::DFSConfig dfs_config;
-  dfs_config.max_distance = threshold;
+// Returns all links that have capacity less than 'bandwidth'.
+nc::net::GraphLinkSet LinksWithCapacityLessThan(
+    const nc::net::GraphStorage& graph, nc::net::Bandwidth bandwidth) {
+  nc::net::GraphLinkSet out;
+  for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
+    nc::net::Bandwidth link_bw = graph.GetLink(link)->bandwidth();
+    if (link_bw < bandwidth) {
+      out.insert(link);
+    }
+  }
 
-  uint64_t count;
-  nc::net::Paths(id.src(), id.dst(),
-                 [&count](std::unique_ptr<nc::net::Walk> p) { ++count; }, graph,
-                 {}, dfs_config);
-  LOG(INFO) << id.ToString(graph) << " " << count << " paths";
-  return count;
+  return out;
 }
 
-std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
-    const nc::net::GraphStorage& graph, double fraction) {
-  std::map<AggregateId, uint64_t> out;
+// Returns the fraction of links on the aggregate's shortest path that can be
+// removed and still have the entire aggregate be routed along an alternative
+// path.
+static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
+                                     const nc::net::Walk& shortest_path,
+                                     const AggregateId& id,
+                                     nc::net::Delay threshold) {
+  double count = 0;
+  for (nc::net::GraphLinkIndex link : shortest_path.links()) {
+    nc::net::Bandwidth link_bw = graph.GetLink(link)->bandwidth();
+    nc::net::GraphLinkSet to_exclude =
+        LinksWithCapacityLessThan(graph, link_bw);
+    to_exclude.Insert(link);
 
+    nc::net::ConstraintSet constraints;
+    constraints.Exclude().Links(to_exclude);
+
+    auto alternative_path = nc::net::ShortestPathWithConstraints(
+        id.src(), id.dst(), graph, constraints);
+    if (!alternative_path) {
+      continue;
+    }
+
+    if (alternative_path->delay() > threshold) {
+      continue;
+    }
+
+    ++count;
+  }
+
+  return count / shortest_path.links().size();
+}
+
+std::map<AggregateId, double> GetLinkFractionAtDelay(
+    const nc::net::GraphStorage& graph, double delay_fraction) {
+  std::map<AggregateId, double> out;
   nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
     LOG(INFO) << "Processing source " << graph.GetNode(src)->id();
@@ -717,15 +748,32 @@ std::map<AggregateId, uint64_t> GetPathCountsAtDelay(
 
       AggregateId id(src, dst);
       auto path = sp.GetPath(src, dst);
-      double threshold = path->delay().count() * fraction;
+      double threshold = path->delay().count() * delay_fraction;
       nc::net::Delay delay_threshold =
           nc::net::Delay(static_cast<size_t>(threshold));
-      uint64_t count = GetPathCount(graph, id, delay_threshold);
-      out[id] = count;
+
+      double f = GetLinkFractionAtDelay(graph, *path, id, delay_threshold);
+      out[id] = f;
     }
   }
 
   return out;
+}
+
+double FractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
+                                        double delay_fraction,
+                                        double link_fraction) {
+  std::map<AggregateId, double> link_fraction_at_delay =
+      GetLinkFractionAtDelay(graph, delay_fraction);
+  double count = 0;
+  for (const auto& aggregate_and_fraction : link_fraction_at_delay) {
+    double fraction = aggregate_and_fraction.second;
+    if (fraction >= link_fraction) {
+      ++count;
+    }
+  }
+
+  return count / link_fraction_at_delay.size();
 }
 
 }  // namespace ctr

@@ -115,6 +115,7 @@ static void RunOptimizers(const Input& input) {
   MinMaxPathBasedOptimizer minmax_ksp_optimizer(&path_provider, 1.0, true, 10);
   B4Optimizer b4_optimizer(&path_provider, false, 1.0);
   CTRLinkBased ctr_link_based_optimizer(&path_provider, 1.0);
+  ShortestPathOptimizer sp_optimizer(&path_provider);
 
   OptAndRecord(tm_file, *tm, node_order, "CTRNOCACHE", &ctr_optimizer);
   OptAndRecord(tm_file, *tm, node_order, "CTR", &ctr_optimizer);
@@ -124,6 +125,7 @@ static void RunOptimizers(const Input& input) {
                &minmax_low_delay_optimizer);
   OptAndRecord(tm_file, *tm, node_order, "MinMaxK10", &minmax_ksp_optimizer);
   OptAndRecord(tm_file, *tm, node_order, "B4", &b4_optimizer);
+  OptAndRecord(tm_file, *tm, node_order, "SP", &sp_optimizer);
   if (FLAGS_run_ctr_link_based) {
     OptAndRecord(tm_file, *tm, node_order, "CTRLB", &ctr_link_based_optimizer);
   }
