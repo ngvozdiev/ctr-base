@@ -12,6 +12,7 @@
 #include "opt/opt.h"
 
 DEFINE_double(sp_fraction, 1.2, "How far from the SP a path can be");
+DEFINE_uint64(threads, 2, "How many threads to use");
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);

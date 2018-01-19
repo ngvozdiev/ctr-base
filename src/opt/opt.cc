@@ -16,6 +16,7 @@
 #include "ncode/net/net_common.h"
 #include "ncode/net/algorithm.h"
 #include "ncode/perfect_hash.h"
+#include "ncode/thread_runner.h"
 
 namespace ctr {
 
@@ -737,10 +738,10 @@ static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
 
 std::map<AggregateId, double> GetLinkFractionAtDelay(
     const nc::net::GraphStorage& graph, double delay_fraction) {
-  std::map<AggregateId, double> out;
   nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
+
+  std::map<AggregateId, double> out;
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
-    LOG(INFO) << "Processing source " << graph.GetNode(src)->id();
     for (nc::net::GraphNodeIndex dst : graph.AllNodes()) {
       if (src == dst) {
         continue;
