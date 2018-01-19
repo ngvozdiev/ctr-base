@@ -761,9 +761,9 @@ std::map<AggregateId, double> GetLinkFractionAtDelay(
   return out;
 }
 
-double FractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
-                                        double delay_fraction,
-                                        double link_fraction) {
+double GetFractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
+                                           double delay_fraction,
+                                           double link_fraction) {
   std::map<AggregateId, double> link_fraction_at_delay =
       GetLinkFractionAtDelay(graph, delay_fraction);
   double count = 0;

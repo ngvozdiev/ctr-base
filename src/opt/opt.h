@@ -162,9 +162,9 @@ std::map<AggregateId, double> GetLinkFractionAtDelay(
 // Returns the fraction of pairs for which at least 'link_fraction' of the
 // shortest path links can be routed around, using a path of at most
 // 'delay_fraction' delay away from the shortest.
-double FractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
-                                        double delay_fraction,
-                                        double link_fraction);
+double GetFractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
+                                           double delay_fraction,
+                                           double link_fraction);
 
 }  // namespace ctr
 

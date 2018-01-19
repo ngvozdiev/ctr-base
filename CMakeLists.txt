@@ -140,7 +140,7 @@ add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
 target_link_libraries(plot_algorithm_eval ctr_base demand_matrix_input gflags)
 
 add_executable(dump_aggregate_cost src/dump_aggregate_cost.cc)
-target_link_libraries(dump_aggregate_cost ctr_base topology_input gflags)
+target_link_libraries(dump_aggregate_cost ctr_base demand_matrix_input gflags)
 
 add_executable(plot_stability_eval src/plot_stability_eval.cc)
 target_link_libraries(plot_stability_eval metrics_parser gflags)

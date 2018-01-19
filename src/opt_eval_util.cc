@@ -26,6 +26,7 @@ using namespace std::chrono;
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 DEFINE_bool(run_ctr_link_based, false, "Also run a link-based version of CTR");
 DEFINE_bool(run_headroom_vs_delay, true, "Explore headroom vs delay");
+DEFINE_bool(skip_trivial, true, "Skips trivially satisfiable TMs");
 
 struct Input {
   const ctr::DemandMatrixAndFilename* demand_matrix_and_filename;
@@ -140,7 +141,8 @@ int main(int argc, char** argv) {
 
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> matrices;
-  std::tie(topologies, matrices) = ctr::GetDemandMatrixInputs(true);
+  std::tie(topologies, matrices) =
+      ctr::GetDemandMatrixInputs(FLAGS_skip_trivial);
 
   std::map<std::string, const ctr::TopologyAndFilename*> topologies_by_name;
   for (const auto& topology : topologies) {
