@@ -25,6 +25,7 @@ using namespace std::chrono;
 
 DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 DEFINE_bool(run_ctr_link_based, false, "Also run a link-based version of CTR");
+DEFINE_bool(run_headroom_vs_delay, true, "Explore headroom vs delay");
 
 struct Input {
   const ctr::DemandMatrixAndFilename* demand_matrix_and_filename;
@@ -97,7 +98,8 @@ static void RunOptimizers(const Input& input) {
 
   std::unique_ptr<TrafficMatrix> tm =
       TrafficMatrix::DistributeFromDemandMatrix(*demand_matrix);
-  if (!nc::ContainsKey(demand_matrix->properties(), "headroom_vs_delay")) {
+  if (FLAGS_run_headroom_vs_delay &&
+      !nc::ContainsKey(demand_matrix->properties(), "headroom_vs_delay")) {
     std::vector<double> headroom_vs_delay = GetHeadroomVsDelay(*tm);
     std::string to_record = nc::Join(headroom_vs_delay, ",");
 
