@@ -270,8 +270,9 @@ class RoutingConfiguration : public TrafficMatrix {
   // shortest paths sequence of the aggregate.
   std::map<AggregateId, std::vector<size_t>> GetKValues() const;
 
-  // Returns sum of all flows' delay.
-  nc::net::Delay TotalPerFlowDelay() const;
+  // Returns sum of all flows' delay. If the sp argument is true will only add
+  // up the flows' best possible shortest path delay.
+  nc::net::Delay TotalPerFlowDelay(bool sp = false) const;
 
   // Returns a map from a link to its utilization.
   nc::net::GraphLinkMap<double> LinkUtilizations() const;

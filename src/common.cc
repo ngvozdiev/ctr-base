@@ -611,12 +611,18 @@ static void GetRouteCounts(const std::vector<RouteAndFraction>& prev,
   }
 }
 
-nc::net::Delay RoutingConfiguration::TotalPerFlowDelay() const {
+nc::net::Delay RoutingConfiguration::TotalPerFlowDelay(bool sp) const {
   double total = 0;
   for (const auto& aggregate_id_and_routes : configuration_) {
     const AggregateId& aggregate_id = aggregate_id_and_routes.first;
     const DemandAndFlowCount& demand_and_flow_count =
         nc::FindOrDieNoPrint(demands(), aggregate_id);
+
+    if (sp) {
+      nc::net::Delay sp_delay = aggregate_id.GetSPDelay(*graph_);
+      total += sp_delay.count() * demand_and_flow_count.second;
+      continue;
+    }
 
     for (const RouteAndFraction& route_and_fraction :
          aggregate_id_and_routes.second) {
