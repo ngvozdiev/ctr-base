@@ -5,7 +5,8 @@
 #include <ncode/map_util.h>
 #include <ncode/net/net_common.h>
 #include <ncode/strutil.h>
-#include <ncode/viz/grapher.h>
+#include <ncode/substitute.h>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <string>
@@ -23,6 +24,7 @@ DEFINE_double(sp_fraction, 1.2, "How far from the SP a path can be");
 DEFINE_double(link_fraction_limit, 0.8,
               "At least this much of the SP's links can be routed around");
 DEFINE_string(opt, "SP,B4,MinMaxK10,CTR,MinMaxLD", "The optimizers to plot");
+DEFINE_string(output, "", "The file to store data to");
 
 struct RCSummary {
   RCSummary(double change_in_delay, double fraction_congested,
@@ -115,49 +117,23 @@ static std::vector<RCSummary> ParseRcs(const std::string& opt,
   return out;
 }
 
-static void Plot(const std::string& opt, const std::vector<RCSummary>& rcs,
-                 bool capacity) {
-  std::map<double, std::vector<std::pair<double, const RCSummary*>>> data;
+static std::string Dump(const std::string& opt,
+                        const std::vector<RCSummary>& rcs) {
+  std::string out = "";
   for (const auto& rc : rcs) {
-    double datapoint = capacity ? rc.fraction_congested : rc.change_in_delay;
-    data[rc.topology_routability].emplace_back(datapoint, &rc);
+    std::string topology_file = *(rc.topology_file);
+    std::string demand_file = *(rc.demand_file);
+    nc::SubstituteAndAppend(&out, "$0 $1 $2 $3 $4 $5\n", opt,
+                            rc.topology_routability, rc.change_in_delay,
+                            rc.fraction_congested, topology_file, demand_file);
   }
 
-  std::vector<std::pair<double, double>> medians;
-  std::vector<std::pair<double, double>> p90s;
-  for (auto& routability_and_datapoints : data) {
-    double routability = routability_and_datapoints.first;
-    std::vector<std::pair<double, const RCSummary*>>& datapoints =
-        routability_and_datapoints.second;
-
-    std::sort(datapoints.begin(), datapoints.end());
-    double med = datapoints[datapoints.size() / 2].first;
-    medians.emplace_back(routability, med);
-
-    double p90 = datapoints[datapoints.size() * 0.9].first;
-    p90s.emplace_back(routability, p90);
-  }
-
-  std::string x_label =
-      nc::Substitute("Routability ($0% of SP links, $1% of SP delay)",
-                     static_cast<int>(FLAGS_link_fraction_limit * 100),
-                     static_cast<int>(FLAGS_sp_fraction * 100));
-  std::string y_label = capacity
-                            ? "fraction of pairs that cross overloaded links"
-                            : "total float delay / total sp flow delay";
-  nc::viz::LinePlot plot({opt, x_label, y_label});
-
-  std::sort(medians.begin(), medians.end());
-  std::sort(p90s.begin(), p90s.end());
-  plot.AddData("Medians", medians);
-  plot.AddData("P90", p90s);
-
-  std::string suffix = capacity ? "capacity" : "delay";
-  plot.PlotToDir(nc::StrCat("scatter_out_", opt, "_", suffix));
+  return out;
 }
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  CHECK(FLAGS_output != "") << "Need output";
 
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> matrices;
@@ -182,10 +158,12 @@ int main(int argc, char** argv) {
     inputs.push_back({&matrix, topology, routability});
   }
 
+  std::string total = "";
   std::vector<std::string> opts = nc::Split(FLAGS_opt, ",", true);
   for (const std::string& opt : opts) {
     std::vector<RCSummary> rcs = ParseRcs(opt, inputs);
-    Plot(opt, rcs, true);
-    Plot(opt, rcs, false);
+    total += Dump(opt, rcs);
   }
+
+  nc::File::WriteStringToFileOrDie(total, FLAGS_output);
 }
