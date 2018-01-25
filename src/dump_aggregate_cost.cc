@@ -5,7 +5,8 @@
 #include <ncode/map_util.h>
 #include <ncode/net/net_common.h>
 #include <ncode/strutil.h>
-#include <ncode/viz/grapher.h>
+#include <ncode/substitute.h>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <string>
@@ -22,18 +23,49 @@
 DEFINE_double(sp_fraction, 1.2, "How far from the SP a path can be");
 DEFINE_double(link_fraction_limit, 0.8,
               "At least this much of the SP's links can be routed around");
-DEFINE_string(opt, "SP,B4,MinMaxK10,CTR", "The optimizers to plot");
-DEFINE_bool(plot_delay, true, "If true will plot delay, if false capacity");
+DEFINE_string(opt, "SP,B4,MinMaxK10,CTR,MinMaxLD", "The optimizers to plot");
+DEFINE_string(output, "", "The file to store data to");
+
+struct RCSummary {
+  RCSummary(double change_in_delay, double fraction_congested,
+            double routability, const std::string* topology_file,
+            const std::string* demand_file)
+      : change_in_delay(change_in_delay),
+        fraction_congested(fraction_congested),
+        topology_file(topology_file),
+        demand_file(demand_file),
+        topology_routability(routability) {}
+
+  double change_in_delay;
+  double fraction_congested;
+
+  // Link utilizations.
+  nc::net::GraphLinkMap<double> utilizations;
+
+  // The topology/demand matrix.
+  const std::string* topology_file;
+  const std::string* demand_file;
+
+  // The routability metric of the topology.
+  double topology_routability;
+};
+
+struct Input {
+  const ctr::DemandMatrixAndFilename* demand;
+  const ctr::TopologyAndFilename* topology;
+  double routability;
+};
+
+// Will return the change in total delay.
+static double GetDelayDatapointForRC(const ctr::RoutingConfiguration& rc) {
+  nc::net::Delay total = rc.TotalPerFlowDelay(false);
+  nc::net::Delay total_sp = rc.TotalPerFlowDelay(true);
+  double fraction = static_cast<double>(total.count()) / total_sp.count();
+  return fraction;
+}
 
 // Will return the fraction of aggregates that do not fit.
-static double GetDatapointForRC(const ctr::RoutingConfiguration& rc) {
-  if (FLAGS_plot_delay) {
-    nc::net::Delay total = rc.TotalPerFlowDelay(false);
-    nc::net::Delay total_sp = rc.TotalPerFlowDelay(true);
-    double fraction = static_cast<double>(total.count()) / total_sp.count();
-    return fraction;
-  }
-
+static double GetCapacityDatapointForRC(const ctr::RoutingConfiguration& rc) {
   double total_count = rc.demands().size();
   return rc.OverloadedAggregates() / total_count;
 }
@@ -49,20 +81,19 @@ static std::string GetFilename(const std::string& tm_file,
   return nc::StrCat(tm_base, "_", opt_string, ".rc");
 }
 
-static void ParseOpt(
-    const std::string& opt,
-    const std::vector<ctr::DemandMatrixAndFilename>& matrices,
-    const std::map<std::string, const ctr::TopologyAndFilename*>&
-        topologies_by_name,
-    const std::map<std::string, double>& topology_datapoints) {
-  std::map<std::string, std::vector<double>> rc_datapoints;
-  for (const auto& matrix : matrices) {
-    const ctr::TopologyAndFilename* topology_and_filename =
-        nc::FindOrDieNoPrint(topologies_by_name, matrix.topology_file);
+static std::vector<RCSummary> ParseRcs(const std::string& opt,
+                                       const std::vector<Input>& matrices) {
+  std::vector<RCSummary> out;
+  for (const auto& input : matrices) {
+    const nc::lp::DemandMatrix* demand_matrix =
+        input.demand->demand_matrix.get();
+    const nc::net::GraphStorage* graph = demand_matrix->graph();
+    const std::string& topology_file = input.topology->file;
+    const std::string& demand_file = input.demand->file;
+    const std::vector<std::string>& node_order = input.topology->node_order;
 
-    ctr::PathProvider path_provider(topology_and_filename->graph.get());
-    const nc::lp::DemandMatrix* demand_matrix = matrix.demand_matrix.get();
-    std::string rc_filename = GetFilename(matrix.file, opt);
+    ctr::PathProvider path_provider(graph);
+    std::string rc_filename = GetFilename(input.demand->file, opt);
     if (!nc::File::Exists(rc_filename)) {
       LOG(INFO) << "Missing " << rc_filename;
       continue;
@@ -71,84 +102,38 @@ static void ParseOpt(
     std::string rc_serialized = nc::File::ReadFileToStringOrDie(rc_filename);
     std::unique_ptr<ctr::TrafficMatrix> tm =
         ctr::TrafficMatrix::DistributeFromDemandMatrix(*demand_matrix);
-    LOG(INFO) << "Will parse " << matrix.file << " at " << matrix.topology_file
+    LOG(INFO) << "Will parse " << demand_file << " at " << topology_file
               << " opt " << opt;
     auto rc = ctr::RoutingConfiguration::LoadFromSerializedText(
-        *tm, topology_and_filename->node_order, rc_serialized, &path_provider);
-    double datapoint = GetDatapointForRC(*rc);
-    rc_datapoints[matrix.topology_file].emplace_back(datapoint);
+        *tm, node_order, rc_serialized, &path_provider);
+
+    double delay_datapoint = GetDelayDatapointForRC(*rc);
+    double capacity_datapoint = GetCapacityDatapointForRC(*rc);
+
+    out.emplace_back(delay_datapoint, capacity_datapoint, input.routability,
+                     &topology_file, &demand_file);
   }
 
-  // Will only label the top 10.
-  std::vector<std::pair<double, std::string>> topology_values_vector;
-  for (const auto& topology_and_datapoints : rc_datapoints) {
-    const std::string& topology = topology_and_datapoints.first;
-    double value = *std::max_element(topology_and_datapoints.second.begin(),
-                                     topology_and_datapoints.second.end());
-    topology_values_vector.emplace_back(value, topology);
+  return out;
+}
+
+static std::string Dump(const std::string& opt,
+                        const std::vector<RCSummary>& rcs) {
+  std::string out = "";
+  for (const auto& rc : rcs) {
+    std::string topology_file = *(rc.topology_file);
+    std::string demand_file = *(rc.demand_file);
+    nc::SubstituteAndAppend(&out, "$0 $1 $2 $3 $4 $5\n", opt,
+                            rc.topology_routability, rc.change_in_delay,
+                            rc.fraction_congested, topology_file, demand_file);
   }
 
-  std::sort(topology_values_vector.begin(), topology_values_vector.end(),
-            std::greater<std::pair<double, std::string>>());
-  topology_values_vector.resize(std::min(topology_values_vector.size(), 7ul));
-
-  std::set<std::string> topologies_to_label;
-  for (const auto& value_and_topology : topology_values_vector) {
-    topologies_to_label.emplace(value_and_topology.second);
-  }
-
-  std::string x_label = nc::Substitute(
-      "Fraction of pairs with alternative path for at least $0% of SP links, "
-      "$1% of SP delay",
-      static_cast<int>(FLAGS_link_fraction_limit * 100),
-      static_cast<int>(FLAGS_sp_fraction * 100));
-
-  std::string y_label = FLAGS_plot_delay
-                            ? "total float delay / total sp flow delay"
-                            : "fraction of pairs that cross overloaded links";
-  nc::viz::LinePlot plot({"", x_label, y_label});
-
-  plot.TurnIntoScatterPlot();
-  std::vector<std::pair<double, double>> rest;
-  std::vector<std::pair<double, double>> medians;
-  std::vector<std::pair<double, double>> means;
-  for (auto& topology_and_datapoints : rc_datapoints) {
-    double topology_datapoint =
-        nc::FindOrDie(topology_datapoints, topology_and_datapoints.first);
-    const std::string& topology_name = topology_and_datapoints.first;
-    std::string name_stripped = nc::File::ExtractFileName(topology_name);
-
-    std::vector<double>& datapoints = topology_and_datapoints.second;
-    std::sort(datapoints.begin(), datapoints.end());
-    double med = datapoints[datapoints.size() / 2];
-    medians.emplace_back(topology_datapoint, med);
-
-    double mean = std::accumulate(datapoints.begin(), datapoints.end(), 0.0) /
-                  datapoints.size();
-    means.emplace_back(topology_datapoint, mean);
-
-    std::vector<std::pair<double, double>> to_plot;
-    for (double datapoint : datapoints) {
-      to_plot.emplace_back(topology_datapoint, datapoint);
-    }
-
-    if (nc::ContainsKey(topologies_to_label, topology_name)) {
-      plot.AddData(name_stripped, to_plot);
-    } else {
-      rest.insert(rest.end(), to_plot.begin(), to_plot.end());
-    }
-  }
-
-  plot.AddData("Rest", rest);
-  plot.AddData("Medians", medians);
-  plot.AddData("Means", means);
-
-  std::string suffix = FLAGS_plot_delay ? "delay" : "capacity";
-  plot.PlotToDir(nc::StrCat("scatter_out_", opt, "_", suffix));
+  return out;
 }
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  CHECK(FLAGS_output != "") << "Need output";
 
   std::vector<ctr::TopologyAndFilename> topologies;
   std::vector<ctr::DemandMatrixAndFilename> matrices;
@@ -164,8 +149,21 @@ int main(int argc, char** argv) {
     topology_datapoints[topology.file] = datapoint;
   }
 
+  std::vector<Input> inputs;
+  for (const ctr::DemandMatrixAndFilename& matrix : matrices) {
+    const ctr::TopologyAndFilename* topology =
+        nc::FindOrDie(topologies_by_name, matrix.topology_file);
+    double routability =
+        nc::FindOrDie(topology_datapoints, matrix.topology_file);
+    inputs.push_back({&matrix, topology, routability});
+  }
+
+  std::string total = "";
   std::vector<std::string> opts = nc::Split(FLAGS_opt, ",", true);
   for (const std::string& opt : opts) {
-    ParseOpt(opt, matrices, topologies_by_name, topology_datapoints);
+    std::vector<RCSummary> rcs = ParseRcs(opt, inputs);
+    total += Dump(opt, rcs);
   }
+
+  nc::File::WriteStringToFileOrDie(total, FLAGS_output);
 }
