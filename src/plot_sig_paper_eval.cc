@@ -116,4 +116,6 @@ int main(int argc, char** argv) {
   std::string lr_prefix = nc::StrCat(FLAGS_output_prefix, "_lr_");
   PlotStretch(hr_prefix, hr_by_opt);
   PlotStretch(lr_prefix, lr_by_opt);
+  PlotRatio(hr_prefix, hr_by_opt);
+  PlotRatio(lr_prefix, lr_by_opt);
 }

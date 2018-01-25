@@ -22,6 +22,8 @@
 DEFINE_string(optimizers, "MinMaxK10,CTRNFC,B4,MinMaxLD,CTR",
               "Optimizers to parse.");
 DEFINE_bool(skip_trivial, false, "Whether or not to skip trivial matrices.");
+DEFINE_uint64(delay_penalty_ms, 10,
+              "Delay penalty added to all paths that cross congested links.");
 
 static constexpr size_t kDiscreteMultiplier = 10000;
 static constexpr size_t kPercentilesCount = 10000;
@@ -102,7 +104,7 @@ static std::unique_ptr<RCSummary> ParseRC(
       path_delay_ms = std::max(1.0, path_delay_ms);
       bool overloaded = path->ContainsAny(overloaded_links);
       if (overloaded) {
-        path_delay_ms += 10.0;
+        path_delay_ms += FLAGS_delay_penalty_ms;
       }
 
       double abs_stretch = path_delay_ms - sp_delay_ms;
