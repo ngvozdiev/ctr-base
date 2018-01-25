@@ -198,7 +198,8 @@ GetTMSummaries() {
     summaries.emplace_back(std::move(tm_summary));
   }
 
-  return {std::move(topologies), std::move(matrices), std::move(summaries)};
+  return std::make_tuple(std::move(topologies), std::move(matrices),
+                         std::move(summaries));
 }
 
 static std::vector<std::string> Escape(const std::vector<std::string>& row) {
