@@ -73,6 +73,9 @@ target_link_libraries(ctr_base ncode gflags_nothreads metrics ${FFTW_LIBRARIES} 
 add_library(sfml_utils src/sfml/manual_network.cc src/sfml/sfml.cc)
 target_link_libraries(sfml_utils ctr_base)
 
+add_library(alg_eval_tools src/plot_algorithm_eval_tools.cc)
+target_link_libraries(alg_eval_tools ctr_base demand_matrix_input gflags)
+
 add_executable(stability_eval src/opt/stability_eval.cc)
 target_link_libraries(stability_eval ctr_base)
 
@@ -137,7 +140,7 @@ add_executable(plot_queue_size_dist src/plot_queue_size_dist.cc)
 target_link_libraries(plot_queue_size_dist metrics_parser ctr_base gflags)
 
 add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
-target_link_libraries(plot_algorithm_eval ctr_base demand_matrix_input gflags)
+target_link_libraries(plot_algorithm_eval alg_eval_tools)
 
 add_executable(plot_link_utilizations src/plot_link_utilizations.cc)
 target_link_libraries(plot_link_utilizations ctr_base demand_matrix_input gflags)
