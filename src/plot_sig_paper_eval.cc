@@ -71,6 +71,21 @@ void PlotStretch(
       nc::StrCat(prefix, "max_stretch"));
 }
 
+void PlotRatio(
+    const std::string& prefix,
+    const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
+  MultiRCSummaryPlotPack plot_pack;
+  for (const auto& opt_and_summaries : summaries) {
+    const std::string& opt = opt_and_summaries.first;
+    const std::vector<const RCSummary*>& summaries_for_opt =
+        opt_and_summaries.second;
+
+    plot_pack.PlotPathRatios(opt, summaries_for_opt);
+  }
+
+  plot_pack.ratios_plot().PlotToDir(nc::StrCat(prefix, "delay_ratio"));
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
