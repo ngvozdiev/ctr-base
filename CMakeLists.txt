@@ -142,6 +142,9 @@ target_link_libraries(plot_queue_size_dist metrics_parser ctr_base gflags)
 add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
 target_link_libraries(plot_algorithm_eval alg_eval_tools)
 
+add_executable(plot_sig_paper_eval src/plot_sig_paper_eval.cc)
+target_link_libraries(plot_sig_paper_eval alg_eval_tools)
+
 add_executable(plot_link_utilizations src/plot_link_utilizations.cc)
 target_link_libraries(plot_link_utilizations ctr_base demand_matrix_input gflags)
 

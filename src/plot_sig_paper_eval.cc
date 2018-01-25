@@ -48,7 +48,7 @@ std::map<std::string, std::vector<const RCSummary*>> GroupByOpt(
     }
 
     for (const auto& opt_and_summary : tm_summary->rcs) {
-      out[opt_and_summary.first] = opt_and_summary.second.get();
+      out[opt_and_summary.first].emplace_back(opt_and_summary.second.get());
     }
   }
 
