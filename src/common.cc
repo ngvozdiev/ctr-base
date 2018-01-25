@@ -121,6 +121,20 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::DistributeFromDemandMatrix(
                                         demands_and_counts);
 }
 
+std::unique_ptr<TrafficMatrix> TrafficMatrix::ConstantFromDemandMatrix(
+    const nc::lp::DemandMatrix& demand_matrix, size_t common_flow_count) {
+  std::map<AggregateId, DemandAndFlowCount> demands_and_counts;
+  for (const auto& element : demand_matrix.elements()) {
+    size_t flow_count = std::max(1ul, common_flow_count);
+
+    AggregateId id(element.src, element.dst);
+    demands_and_counts[id] = {element.demand, flow_count};
+  }
+
+  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
+                                        demands_and_counts);
+}
+
 std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
   std::vector<nc::lp::DemandMatrixElement> elements;
   for (const auto& aggregate_and_demand : demands_) {
@@ -258,6 +272,29 @@ const std::vector<RouteAndFraction>& RoutingConfiguration::FindRoutesOrDie(
   return nc::FindOrDieNoPrint(configuration_, aggregate_id);
 }
 
+std::unique_ptr<RoutingConfiguration> RoutingConfiguration::ExcludeAggregates(
+    const std::set<AggregateId>& aggregates) const {
+  std::map<AggregateId, DemandAndFlowCount> new_demands;
+  for (const auto& aggregate_and_demand : demands()) {
+    if (nc::ContainsKey(aggregates, aggregate_and_demand.first)) {
+      continue;
+    }
+    new_demands.insert(aggregate_and_demand);
+  }
+
+  TrafficMatrix new_tm(graph_, new_demands);
+  auto new_rc = nc::make_unique<RoutingConfiguration>(new_tm);
+  for (const auto& aggregate_and_paths : configuration_) {
+    if (nc::ContainsKey(aggregates, aggregate_and_paths.first)) {
+      continue;
+    }
+
+    new_rc->AddRouteAndFraction(aggregate_and_paths.first,
+                                aggregate_and_paths.second);
+  }
+  return new_rc;
+}
+
 std::string RoutingConfiguration::ToString() const {
   std::string base_to_string = TrafficMatrix::ToString();
   std::vector<std::string> out;
@@ -329,11 +366,7 @@ std::map<AggregateId, std::vector<size_t>> RoutingConfiguration::GetKValues()
 
 void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
   using namespace std::chrono;
-
-  OverSubModel model(*this);
-  const nc::net::GraphLinkMap<double>& link_to_load = model.link_to_load();
-  const std::map<const nc::net::Walk*, nc::net::Bandwidth> path_to_bw =
-      model.per_flow_bandwidth_map();
+  const nc::net::GraphLinkMap<double>& link_to_load = LinkUtilizations();
 
   // Relates each link with the aggregates and paths that cross it. For each
   // path also records the number of flows.
@@ -371,6 +404,7 @@ void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
     }
   }
 
+  double max_utilization = MaxLinkUtilization();
   std::vector<nc::viz::EdgeData> edges;
   for (const auto& link_and_load : link_to_load) {
     nc::net::GraphLinkIndex link = link_and_load.first;
@@ -395,21 +429,27 @@ void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
       for (const auto& path_and_flows : aggregate_id_and_paths.second) {
         const nc::net::Walk* path = path_and_flows.first;
         uint32_t flow_count = path_and_flows.second;
-        nc::net::Bandwidth per_flow_bw = nc::FindOrDie(path_to_bw, path);
-        nc::net::Bandwidth total_bw = per_flow_bw * flow_count;
 
         nc::StrAppend(&tooltip, "&nbsp;&nbsp;&nbsp;&nbsp;",
                       path->ToStringIdsOnly(*graph_), " ", flow_count,
-                      nc::StrCat(" flows ", total_bw.Mbps(), "Mbps<br>"));
+                      " flows<br>");
       }
     }
 
-    std::vector<double> loads = {load};
+    double overload = 0;
+    if (load > 1) {
+      overload += (load - 1) / (max_utilization - 1);
+    }
+
+    std::vector<double> loads = {load, overload};
     edges.emplace_back(link, loads, tooltip, delay_ms);
   }
 
-  nc::viz::DisplayMode display_mode("default");
-  nc::viz::GraphToHTML(edges, paths, {display_mode}, *graph_, out);
+  nc::viz::DisplayMode display_mode_default("default");
+  nc::viz::DisplayMode display_mode_overload("overload");
+  nc::viz::GraphToHTML(edges, paths,
+                       {display_mode_default, display_mode_overload}, *graph_,
+                       out);
 }
 
 std::string TrafficMatrix::ToString() const {
@@ -670,10 +710,19 @@ nc::net::GraphLinkMap<double> RoutingConfiguration::LinkUtilizations() const {
     out[link_index] = utilization;
   }
 
+  for (nc::net::GraphLinkIndex link : graph_->AllLinks()) {
+    if (out.HasValue(link)) {
+      continue;
+    }
+
+    out[link] = 0;
+  }
+
   return out;
 }
 
-size_t RoutingConfiguration::OverloadedAggregates() const {
+std::vector<std::pair<double, AggregateId>>
+RoutingConfiguration::OverloadedAggregates() const {
   std::map<nc::net::GraphLinkIndex, nc::net::Bandwidth> link_to_total_load;
   nc::net::GraphLinkMap<std::set<AggregateId>> link_to_aggregate;
   for (const auto& aggregate_and_aggregate_output : configuration_) {
@@ -696,7 +745,7 @@ size_t RoutingConfiguration::OverloadedAggregates() const {
     }
   }
 
-  std::set<AggregateId> overloaded_aggregates;
+  std::map<AggregateId, double> overloaded_aggregates;
   for (const auto& link_and_total_load : link_to_total_load) {
     nc::net::GraphLinkIndex link_index = link_and_total_load.first;
     const nc::net::GraphLink* link = graph_->GetLink(link_index);
@@ -706,12 +755,21 @@ size_t RoutingConfiguration::OverloadedAggregates() const {
     if (utilization > 1) {
       const std::set<AggregateId>& aggregates_crossing_link =
           link_to_aggregate.GetValueOrDie(link_index);
-      overloaded_aggregates.insert(aggregates_crossing_link.begin(),
-                                   aggregates_crossing_link.end());
+      for (AggregateId id : aggregates_crossing_link) {
+        double& v = overloaded_aggregates[id];
+        v = std::max(utilization, v);
+      }
     }
   }
 
-  return overloaded_aggregates.size();
+  std::vector<std::pair<double, AggregateId>> aggregates_by_overload;
+  for (const auto& aggregate_and_overlad : overloaded_aggregates) {
+    aggregates_by_overload.emplace_back(aggregate_and_overlad.second,
+                                        aggregate_and_overlad.first);
+  }
+
+  std::sort(aggregates_by_overload.begin(), aggregates_by_overload.end());
+  return aggregates_by_overload;
 }
 
 double RoutingConfiguration::MaxLinkUtilization() const {
@@ -814,6 +872,18 @@ std::tuple<size_t, size_t, size_t> RoutingConfigurationDelta::TotalRoutes()
   return std::make_tuple(total_added, total_removed, total_updated);
 }
 
+std::set<AggregateId> RoutingConfigurationDelta::SameAggregates() const {
+  std::set<AggregateId> out;
+  for (const auto& aggregate_and_delta : aggregates) {
+    const AggregateDelta& delta = aggregate_and_delta.second;
+    if (delta.FractionDelta() == 0) {
+      out.emplace(aggregate_and_delta.first);
+    }
+  }
+
+  return out;
+}
+
 std::string RoutingConfigurationDelta::ToString(
     const nc::net::GraphStorage& graph) const {
   using namespace std::chrono;
@@ -828,19 +898,30 @@ std::string RoutingConfigurationDelta::ToString(
       total_per_flow_delay_delta,
       duration_cast<milliseconds>(total_per_flow_delay_delta_absolute).count());
 
-  nc::StrAppend(&out, "Aggregates with change:\n");
+  size_t changed_count = 0;
   for (const auto& aggregate_and_delta : aggregates) {
-    const AggregateId& aggregate = aggregate_and_delta.first;
     const AggregateDelta& delta = aggregate_and_delta.second;
     if (delta.FractionDelta() == 0) {
       continue;
     }
 
-    nc::SubstituteAndAppend(
-        &out, "$0: fraction delta: $1, fraction on longer path: $2\n",
-        aggregate.ToString(graph), delta.FractionDelta(),
-        delta.FractionOnLongerPath());
+    ++changed_count;
   }
+
+  nc::SubstituteAndAppend(&out, "Aggregates with change ($0/$1):\n",
+                          changed_count, aggregates.size());
+  //  for (const auto& aggregate_and_delta : aggregates) {
+  //    const AggregateId& aggregate = aggregate_and_delta.first;
+  //    const AggregateDelta& delta = aggregate_and_delta.second;
+  //    if (delta.FractionDelta() == 0) {
+  //      continue;
+  //    }
+  //
+  //    nc::SubstituteAndAppend(
+  //        &out, "$0: fraction delta: $1, fraction on longer path: $2\n",
+  //        aggregate.ToString(graph), delta.FractionDelta(),
+  //        delta.FractionOnLongerPath());
+  //  }
 
   return out;
 }

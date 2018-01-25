@@ -139,6 +139,12 @@ target_link_libraries(plot_queue_size_dist metrics_parser ctr_base gflags)
 add_executable(plot_algorithm_eval src/plot_algorithm_eval.cc)
 target_link_libraries(plot_algorithm_eval ctr_base demand_matrix_input gflags)
 
+add_executable(plot_link_utilizations src/plot_link_utilizations.cc)
+target_link_libraries(plot_link_utilizations ctr_base demand_matrix_input gflags)
+
+add_executable(plot_difference src/plot_difference.cc)
+target_link_libraries(plot_difference ctr_base demand_matrix_input gflags)
+
 add_executable(dump_aggregate_cost src/dump_aggregate_cost.cc)
 target_link_libraries(dump_aggregate_cost ctr_base demand_matrix_input gflags)
 

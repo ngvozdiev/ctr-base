@@ -81,6 +81,10 @@ class TrafficMatrix {
       const nc::lp::DemandMatrix& demand_matrix,
       size_t total_flow_count = 10000);
 
+  // Sets all flow counts to be the same.
+  static std::unique_ptr<TrafficMatrix> ConstantFromDemandMatrix(
+      const nc::lp::DemandMatrix& demand_matrix, size_t flow_count = 1000);
+
   // Constructs an empty traffic matrix, or optionally let the caller
   // pre-populate it with demands and flow counts.
   explicit TrafficMatrix(
@@ -206,6 +210,10 @@ struct RoutingConfigurationDelta {
   // Returns the number of routed added, removed and updated
   std::tuple<size_t, size_t, size_t> TotalRoutes() const;
 
+  // Returns the set of aggregates that are the same (have same paths and same
+  // fraction on each path).
+  std::set<AggregateId> SameAggregates() const;
+
   std::string ToString(const nc::net::GraphStorage& graph) const;
 };
 
@@ -236,6 +244,10 @@ class RoutingConfiguration : public TrafficMatrix {
   const std::map<AggregateId, std::vector<RouteAndFraction>>& routes() const {
     return configuration_;
   }
+
+  // Returns a new RC, with a set of aggregates excluded.
+  std::unique_ptr<RoutingConfiguration> ExcludeAggregates(
+      const std::set<AggregateId>& aggregates) const;
 
   std::string ToString() const;
 
@@ -277,8 +289,9 @@ class RoutingConfiguration : public TrafficMatrix {
   // Returns a map from a link to its utilization.
   nc::net::GraphLinkMap<double> LinkUtilizations() const;
 
-  // Number of aggregates that cross links with utilization > 1.
-  size_t OverloadedAggregates() const;
+  // Aggregates that cross links with utilization > 1. The first number for each
+  // aggregate is the max overloaded link it crosses.
+  std::vector<std::pair<double, AggregateId>> OverloadedAggregates() const;
 
   // Returns the max link utilization.
   double MaxLinkUtilization() const;

@@ -1,5 +1,6 @@
 #include "opt.h"
 
+#include <gflags/gflags.h>
 #include <stddef.h>
 #include <initializer_list>
 #include <limits>
@@ -17,6 +18,10 @@
 #include "ncode/net/algorithm.h"
 #include "ncode/perfect_hash.h"
 #include "ncode/thread_runner.h"
+
+DEFINE_bool(
+    b4_break_on_congestion, false,
+    "If true will cause B4 to stop as soon as an aggregate does not fit.");
 
 namespace ctr {
 
@@ -502,6 +507,7 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
     }
     current_fair_share = fair_share_of_next_event;
 
+    bool to_break = false;
     if (link_to_congest != nullptr) {
       // Will advance fair share to the congesting point. All aggregates that go
       // over the link will need new paths.
@@ -513,6 +519,16 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
         const nc::net::Walk* path =
             path_provider_->AvoidingPathOrNull(aggregate_id, to_avoid);
         if (path == nullptr) {
+          if (FLAGS_b4_break_on_congestion && !aggregate_state->frozen()) {
+            LOG(INFO) << "Will break B4 on link "
+                      << graph_->GetLink(link_to_congest->link())
+                             ->ToStringNoPorts()
+                      << " aggregate " << aggregate_id.ToString(*graph_);
+
+            to_break = true;
+            break;
+          }
+
           aggregate_state->freeze();
           continue;
         }
@@ -523,6 +539,10 @@ std::unique_ptr<RoutingConfiguration> B4Optimizer::Optimize(
           link_state.AddAggregate(aggregate_state);
         }
       }
+    }
+
+    if (to_break) {
+      break;
     }
 
     for (B4AggregateState* aggregate_to_satisfy : aggregates_to_satisfy) {

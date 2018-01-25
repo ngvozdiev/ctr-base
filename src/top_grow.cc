@@ -285,8 +285,8 @@ static void RecordOverloadAndTotal(const DemandMatrixAndFilename& input,
                                    const RoutingConfiguration& routing,
                                    const RoutingConfiguration& new_routing,
                                    const std::string& opt, bool new_link) {
-  size_t overloaded_before = routing.OverloadedAggregates();
-  size_t overloaded_after = routing.OverloadedAggregates();
+  size_t overloaded_before = routing.OverloadedAggregates().size();
+  size_t overloaded_after = routing.OverloadedAggregates().size();
   double net_overload = overloaded_after - overloaded_before;
   double overload_fraction = net_overload / routing.demands().size();
   increasing_overload_delta->GetHandle(input.topology_file, input.file, opt,

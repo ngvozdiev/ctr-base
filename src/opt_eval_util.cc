@@ -27,6 +27,7 @@ DEFINE_uint64(threads, 4, "Number of parallel threads to run");
 DEFINE_bool(run_ctr_link_based, false, "Also run a link-based version of CTR");
 DEFINE_bool(run_headroom_vs_delay, true, "Explore headroom vs delay");
 DEFINE_bool(skip_trivial, true, "Skips trivially satisfiable TMs");
+DEFINE_bool(force, false, "Will regenerate existing solutions.");
 
 struct Input {
   const ctr::DemandMatrixAndFilename* demand_matrix_and_filename;
@@ -79,7 +80,7 @@ static void OptAndRecord(const std::string& tm_file,
                          const std::vector<std::string>& node_order,
                          const std::string opt_string, Optimizer* opt) {
   std::string out = GetFilename(tm_file, opt_string);
-  if (nc::File::Exists(out)) {
+  if (!FLAGS_force && nc::File::Exists(out)) {
     LOG(INFO) << "File exists " << out << ", will skip";
     return;
   }

@@ -67,7 +67,7 @@ static double GetDelayDatapointForRC(const ctr::RoutingConfiguration& rc) {
 // Will return the fraction of aggregates that do not fit.
 static double GetCapacityDatapointForRC(const ctr::RoutingConfiguration& rc) {
   double total_count = rc.demands().size();
-  return rc.OverloadedAggregates() / total_count;
+  return rc.OverloadedAggregates().size() / total_count;
 }
 
 static double GetDatapointForTopology(const nc::net::GraphStorage& graph) {
