@@ -30,6 +30,7 @@ struct RCSummary {
   std::vector<double> abs_stretches;
   std::vector<double> rel_stretches;
   std::vector<double> flow_counts;
+  std::vector<bool> overloaded;
 
   // One value per aggregate.
   std::vector<double> path_counts;

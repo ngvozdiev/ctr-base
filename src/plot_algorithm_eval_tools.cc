@@ -117,6 +117,7 @@ static std::unique_ptr<RCSummary> ParseRC(
       out->abs_stretches.emplace_back(abs_stretch);
       out->rel_stretches.emplace_back(rel_stretch);
       out->flow_counts.emplace_back(flow_count);
+      out->overloaded.emplace_back(overloaded);
       out->total_sp_delay += sp_delay_ms * flow_count;
       out->total_delay += (sp_delay_ms + abs_stretch) * flow_count;
     }

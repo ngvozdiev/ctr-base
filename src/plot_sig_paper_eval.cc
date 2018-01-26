@@ -76,9 +76,18 @@ void PlotStretch(
     std::map<size_t, std::vector<double>> values;
     for (const RCSummary* rc : rcs) {
       std::vector<double> stretches = rc->rel_stretches;
+      std::vector<bool> overloaded = rc->overloaded;
       std::sort(stretches.begin(), stretches.end());
 
-      std::vector<double> p = nc::Percentiles(&stretches);
+      std::vector<double> stretches_excluding_overloaded;
+      CHECK(stretches.size() == overloaded.size());
+      for (size_t i = 0; i < stretches.size(); ++i) {
+        if (!overloaded[i]) {
+          stretches_excluding_overloaded.emplace_back(stretches[i]);
+        }
+      }
+
+      std::vector<double> p = nc::Percentiles(&stretches_excluding_overloaded);
       for (size_t i = 50; i <= 100; i += 10) {
         values[i].emplace_back(p[i]);
       }
