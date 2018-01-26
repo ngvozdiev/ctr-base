@@ -79,15 +79,19 @@ void PlotStretch(
       std::vector<bool> overloaded = rc->overloaded;
       std::sort(stretches.begin(), stretches.end());
 
-      std::vector<double> stretches_excluding_overloaded;
+      bool any_overloaded = false;
       CHECK(stretches.size() == overloaded.size());
-      for (size_t i = 0; i < stretches.size(); ++i) {
-        if (!overloaded[i]) {
-          stretches_excluding_overloaded.emplace_back(stretches[i]);
+      for (size_t i = 0; i < overloaded.size(); ++i) {
+        if (overloaded[i]) {
+          any_overloaded = true;
         }
       }
 
-      std::vector<double> p = nc::Percentiles(&stretches_excluding_overloaded);
+      if (any_overloaded) {
+        continue;
+      }
+
+      std::vector<double> p = nc::Percentiles(&stretches);
       for (size_t i = 50; i <= 100; i += 10) {
         values[i].emplace_back(p[i]);
       }
