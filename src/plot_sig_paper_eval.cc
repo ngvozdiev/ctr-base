@@ -137,7 +137,7 @@ static void DumpMaxStretch(
     const std::vector<const RCSummary*>& summaries_for_opt =
         opt_and_summaries.second;
     double median = MedianMaxStretch(summaries_for_opt);
-    medians.emplace_back(nc::StrCat("(", opt, ",", median, ")"));
+    medians.emplace_back(nc::StrCat("('", opt, "',", median, ")"));
   }
 
   std::string out = nc::StrCat("[", nc::Join(medians, ","), "]");
