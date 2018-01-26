@@ -124,6 +124,9 @@ target_link_libraries(tm_util ctr_base gflags)
 add_executable(tm_gen_util src/tm_gen_util.cc)
 target_link_libraries(tm_gen_util topology_input ctr_base gflags)
 
+add_executable(plot_routability_all_pairs src/plot_routability_all_pairs.cc)
+target_link_libraries(plot_routability_all_pairs topology_input ctr_base gflags)
+
 add_executable(tm_group_stat src/tm_group_stat.cc)
 target_link_libraries(tm_group_stat demand_matrix_input ncode gflags)
 
