@@ -62,7 +62,7 @@ void PlotStretch(
     const std::string& prefix,
     const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
   std::map<size_t, nc::viz::CDFPlot> plots;
-  for (uint32_t i = 50; i <= 100; i += 10) {
+  for (uint32_t i = 50; i <= 100; i += 5) {
     plots[i] = nc::viz::CDFPlot(
         {nc::Substitute("Distribution of the $0th percentile of flow stretch",
                         i),
@@ -92,7 +92,7 @@ void PlotStretch(
       }
 
       std::vector<double> p = nc::Percentiles(&stretches);
-      for (size_t i = 50; i <= 100; i += 10) {
+      for (size_t i = 50; i <= 100; i += 5) {
         values[i].emplace_back(p[i]);
       }
     }
