@@ -97,6 +97,7 @@ static double MedianMaxStretch(const std::vector<const RCSummary*>& rcs) {
       double rel_stretch = rc->rel_stretches[i];
       max = std::max(rel_stretch, max);
     }
+    maxs.emplace_back(max);
   }
 
   std::sort(maxs.begin(), maxs.end());

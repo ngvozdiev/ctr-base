@@ -43,6 +43,9 @@ struct RCSummary {
   // The parent.
   const TMSummary* parent = nullptr;
 
+  // How long optimization took.
+  double runtime_ms = 0;
+
   DISALLOW_COPY_AND_ASSIGN(RCSummary);
 };
 

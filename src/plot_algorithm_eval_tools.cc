@@ -125,6 +125,7 @@ static std::unique_ptr<RCSummary> ParseRC(
   }
 
   out->opt = opt;
+  out->runtime_ms = rc.time_to_compute().count();
   return out;
 }
 
