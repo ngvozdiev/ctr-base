@@ -61,17 +61,54 @@ std::map<std::string, std::vector<const RCSummary*>> GroupByOpt(
 void PlotStretch(
     const std::string& prefix,
     const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
-  MultiRCSummaryPlotPack plot_pack;
-  for (const auto& opt_and_summaries : summaries) {
-    const std::string& opt = opt_and_summaries.first;
-    const std::vector<const RCSummary*>& summaries_for_opt =
-        opt_and_summaries.second;
-
-    plot_pack.PlotStretchDistribution(opt, summaries_for_opt);
+  std::map<size_t, nc::viz::CDFPlot> plots;
+  for (uint32_t i = 50; i <= 100; i += 5) {
+    plots[i] = nc::viz::CDFPlot(
+        {nc::Substitute("Distribution of the $0th percentile of flow stretch",
+                        i),
+         "times greater than shortest path"});
   }
 
-  plot_pack.path_stretch_max_rel_plot().PlotToDir(
-      nc::StrCat(prefix, "max_stretch"));
+  for (const auto& opt_and_summaries : summaries) {
+    const std::string& opt = opt_and_summaries.first;
+    const std::vector<const RCSummary*>& rcs = opt_and_summaries.second;
+
+    std::map<size_t, std::vector<double>> values;
+    for (const RCSummary* rc : rcs) {
+      std::vector<double> stretches = rc->rel_stretches;
+      std::vector<bool> overloaded = rc->overloaded;
+      std::sort(stretches.begin(), stretches.end());
+
+      bool any_overloaded = false;
+      CHECK(stretches.size() == overloaded.size());
+      for (size_t i = 0; i < overloaded.size(); ++i) {
+        if (overloaded[i]) {
+          any_overloaded = true;
+        }
+      }
+
+      if (any_overloaded) {
+        continue;
+      }
+
+      std::vector<double> p = nc::Percentiles(&stretches);
+      for (size_t i = 50; i <= 100; i += 5) {
+        values[i].emplace_back(p[i]);
+      }
+    }
+
+    for (const auto& percentile_and_values : values) {
+      size_t percentile = percentile_and_values.first;
+      const std::vector<double>& values = percentile_and_values.second;
+      plots[percentile].AddData(opt, values);
+    }
+  }
+
+  for (const auto& percentile_and_plot : plots) {
+    uint32_t percentile = percentile_and_plot.first;
+    const nc::viz::CDFPlot& plot = percentile_and_plot.second;
+    plot.PlotToDir(nc::StrCat(prefix, "_p", percentile, "_stretch"));
+  }
 }
 
 void PlotRatio(
@@ -113,7 +150,7 @@ static void DumpMaxStretch(
     const std::vector<const RCSummary*>& summaries_for_opt =
         opt_and_summaries.second;
     double median = MedianMaxStretch(summaries_for_opt);
-    medians.emplace_back(nc::StrCat("(", opt, ",", median, ")"));
+    medians.emplace_back(nc::StrCat("('", opt, "',", median, ")"));
   }
 
   std::string out = nc::StrCat("[", nc::Join(medians, ","), "]");

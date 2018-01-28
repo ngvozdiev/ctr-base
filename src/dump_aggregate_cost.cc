@@ -20,8 +20,8 @@
 #include "opt/path_provider.h"
 #include "topology_input.h"
 
-DEFINE_double(sp_fraction, 1.2, "How far from the SP a path can be");
-DEFINE_double(link_fraction_limit, 0.8,
+DEFINE_double(sp_fraction, 1.4, "How far from the SP a path can be");
+DEFINE_double(link_fraction_limit, 0.7,
               "At least this much of the SP's links can be routed around");
 DEFINE_string(opt, "SP,B4,MinMaxK10,CTR,MinMaxLD", "The optimizers to plot");
 DEFINE_string(output, "", "The file to store data to");

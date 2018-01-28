@@ -111,13 +111,13 @@ static std::unique_ptr<RCSummary> ParseRC(
       double rel_stretch = path_delay_ms / sp_delay_ms;
       CHECK(abs_stretch >= 0);
       CHECK(rel_stretch >= 0);
-      CHECK(rel_stretch < 1000);
 
       size_t flow_count = aggregate_flow_count * fraction;
       flow_count = std::max(1ul, flow_count);
       out->abs_stretches.emplace_back(abs_stretch);
       out->rel_stretches.emplace_back(rel_stretch);
       out->flow_counts.emplace_back(flow_count);
+      out->overloaded.emplace_back(overloaded);
       out->total_sp_delay += sp_delay_ms * flow_count;
       out->total_delay += (sp_delay_ms + abs_stretch) * flow_count;
     }
