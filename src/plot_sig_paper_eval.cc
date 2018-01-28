@@ -84,6 +84,7 @@ void PlotStretch(
       for (size_t i = 0; i < overloaded.size(); ++i) {
         if (overloaded[i]) {
           any_overloaded = true;
+          break;
         }
       }
 
@@ -111,6 +112,25 @@ void PlotStretch(
   }
 }
 
+static void PlotRuntime(
+    const std::string& prefix,
+    const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
+  nc::viz::CDFPlot runtime_plot = nc::viz::CDFPlot({"Runtime", "time (ms)"});
+
+  for (const auto& opt_and_summaries : summaries) {
+    const std::string& opt = opt_and_summaries.first;
+    const std::vector<const RCSummary*>& rcs = opt_and_summaries.second;
+
+    std::vector<double> values;
+    for (const RCSummary* rc : rcs) {
+      values.emplace_back(rc->runtime_ms);
+    }
+    runtime_plot.AddData(opt, values);
+  }
+
+  runtime_plot.PlotToDir(nc::StrCat(prefix, "_runtime"));
+}
+
 void PlotRatio(
     const std::string& prefix,
     const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
@@ -126,30 +146,47 @@ void PlotRatio(
   plot_pack.ratios_plot().PlotToDir(nc::StrCat(prefix, "delay_ratio"));
 }
 
-static double MedianMaxStretch(const std::vector<const RCSummary*>& rcs) {
-  std::vector<double> maxs;
+static double MedianOfPercentileStretch(
+    const std::vector<const RCSummary*>& rcs, size_t p) {
+  CHECK(p < 101);
+  std::vector<double> values;
   for (const RCSummary* rc : rcs) {
-    double max = 0;
-    for (size_t i = 0; i < rc->rel_stretches.size(); ++i) {
-      double rel_stretch = rc->rel_stretches[i];
-      max = std::max(rel_stretch, max);
+    std::vector<double> stretches = rc->rel_stretches;
+    std::vector<bool> overloaded = rc->overloaded;
+    std::sort(stretches.begin(), stretches.end());
+
+    bool any_overloaded = false;
+    CHECK(stretches.size() == overloaded.size());
+    for (size_t i = 0; i < overloaded.size(); ++i) {
+      if (overloaded[i]) {
+        any_overloaded = true;
+        break;
+      }
     }
-    maxs.emplace_back(max);
+
+    if (any_overloaded) {
+      values.emplace_back(std::numeric_limits<double>::max());
+      continue;
+    }
+
+    std::vector<double> stretches_p = nc::Percentiles(&stretches);
+    values.emplace_back(stretches_p[p]);
   }
 
-  std::sort(maxs.begin(), maxs.end());
-  CHECK(!maxs.empty());
-  return maxs[maxs.size() / 2];
+  std::sort(values.begin(), values.end());
+  CHECK(!values.empty());
+  return values[values.size() / 2];
 }
 
-static void DumpMaxStretch(
-    const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
+static void DumpMeidanOfPercentileStretch(
+    const std::map<std::string, std::vector<const RCSummary*>>& summaries,
+    size_t p) {
   std::vector<std::string> medians;
   for (const auto& opt_and_summaries : summaries) {
     const std::string& opt = opt_and_summaries.first;
     const std::vector<const RCSummary*>& summaries_for_opt =
         opt_and_summaries.second;
-    double median = MedianMaxStretch(summaries_for_opt);
+    double median = MedianOfPercentileStretch(summaries_for_opt, p);
     medians.emplace_back(nc::StrCat("('", opt, "',", median, ")"));
   }
 
@@ -184,7 +221,7 @@ int main(int argc, char** argv) {
   auto lr_by_opt = GroupByOpt(low_routability_graphs, summaries);
 
   if (FLAGS_dump_median_max_stretch) {
-    DumpMaxStretch(hr_by_opt);
+    DumpMeidanOfPercentileStretch(hr_by_opt, 95);
     return 0;
   }
 
@@ -192,6 +229,8 @@ int main(int argc, char** argv) {
   std::string lr_prefix = nc::StrCat(FLAGS_output_prefix, "_lr_");
   PlotStretch(hr_prefix, hr_by_opt);
   PlotStretch(lr_prefix, lr_by_opt);
+  PlotRuntime(hr_prefix, hr_by_opt);
+  PlotRuntime(lr_prefix, lr_by_opt);
   PlotRatio(hr_prefix, hr_by_opt);
   PlotRatio(lr_prefix, lr_by_opt);
 }
