@@ -366,7 +366,7 @@ std::map<AggregateId, std::vector<size_t>> RoutingConfiguration::GetKValues()
 
 void RoutingConfiguration::ToHTML(nc::viz::HtmlPage* out) const {
   using namespace std::chrono;
-  const nc::net::GraphLinkMap<double>& link_to_load = LinkUtilizations();
+  nc::net::GraphLinkMap<double> link_to_load = LinkUtilizations();
 
   // Relates each link with the aggregates and paths that cross it. For each
   // path also records the number of flows.

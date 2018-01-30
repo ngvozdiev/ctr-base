@@ -353,6 +353,11 @@ class B4AggregateState {
     return path_to_capacity_;
   }
 
+  bool CurrentPathContainsLink(const nc::net::GraphLinkIndex link_index) const {
+    CHECK(current_path_ != nullptr);
+    return current_path_->Contains(link_index);
+  }
+
  private:
   // Identifies the aggregate.
   AggregateId aggregate_id_;
@@ -384,6 +389,10 @@ double B4LinkState::FairShareToCongest() {
       continue;
     }
 
+    if (!aggregate->CurrentPathContainsLink(link_)) {
+      continue;
+    }
+
     sum += aggregate->fair_share_ratio();
   }
 
@@ -392,8 +401,12 @@ double B4LinkState::FairShareToCongest() {
 
 void B4LinkState::AdvanceByFairShare(double fair_share) {
   double sum = 0;  // sum of capacities.
-  for (B4AggregateState* aggregate : aggregates_over_link_) {
+  for (const B4AggregateState* aggregate : aggregates_over_link_) {
     if (aggregate->frozen()) {
+      continue;
+    }
+
+    if (!aggregate->CurrentPathContainsLink(link_)) {
       continue;
     }
 

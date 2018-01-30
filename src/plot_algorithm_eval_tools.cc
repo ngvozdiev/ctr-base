@@ -24,6 +24,7 @@ DEFINE_string(optimizers, "MinMaxK10,CTRNFC,B4,MinMaxLD,CTR",
 DEFINE_bool(skip_trivial, false, "Whether or not to skip trivial matrices.");
 DEFINE_uint64(delay_penalty_ms, 10,
               "Delay penalty added to all paths that cross congested links.");
+DEFINE_double(link_capacity_multiplier, 1.0, "Link capacity multiplier.");
 
 static constexpr size_t kDiscreteMultiplier = 10000;
 static constexpr size_t kPercentilesCount = 10000;
@@ -41,7 +42,12 @@ static double ToMs(nc::net::Delay delay) {
 static std::string GetFilename(const std::string& tm_file,
                                const std::string opt_string) {
   std::string tm_base = nc::StringReplace(tm_file, ".demands", "", true);
-  return nc::StrCat(tm_base, "_", opt_string, ".rc");
+  std::string link_capacity_str =
+      FLAGS_link_capacity_multiplier == 1.0
+          ? ""
+          : nc::StrCat("_lm_", nc::ToStringMaxDecimals(
+                                   FLAGS_link_capacity_multiplier, 2));
+  return nc::StrCat(tm_base, link_capacity_str, "_", opt_string, ".rc");
 }
 
 static std::unique_ptr<TMSummary> ParseTM(

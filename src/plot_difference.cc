@@ -17,7 +17,7 @@
 #include "topology_input.h"
 
 DEFINE_string(from, "CTR", "Difference from");
-DEFINE_string(to, "B4", "Difference to");
+DEFINE_string(to, "MinMaxLD", "Difference to");
 
 static std::string GetFilename(const std::string& tm_file,
                                const std::string opt_string) {
@@ -58,6 +58,66 @@ static void OverloadedLinks(const ctr::RoutingConfiguration& rc) {
   }
 }
 
+static void DumpMaxKAggregate(const ctr::RoutingConfiguration& rc) {
+  nc::net::Delay max_abs_delay = nc::net::Delay::zero();
+  const ctr::AggregateId* max_abs_delay_id = nullptr;
+  double max_rel_delay = 0.0;
+  const ctr::AggregateId* max_rel_delay_id = nullptr;
+  double max_hc = std::numeric_limits<double>::min();
+  const ctr::AggregateId* max_hc_id = nullptr;
+
+  const nc::net::GraphStorage* graph = rc.graph();
+  const std::map<ctr::AggregateId, std::vector<ctr::RouteAndFraction>>&
+      aggregates = rc.routes();
+  for (const auto& id_and_routes : aggregates) {
+    const ctr::AggregateId& id = id_and_routes.first;
+    const std::vector<ctr::RouteAndFraction>& routes = id_and_routes.second;
+
+    nc::net::Delay sp_delay = id.GetSPDelay(*graph);
+    double sp_hc = id.GetSP(*graph)->links().size();
+    for (const auto& route : routes) {
+      nc::net::Delay delay = route.first->delay();
+      nc::net::Delay abs_delay = delay - sp_delay;
+      double hc = route.first->links().size();
+
+      if (abs_delay > max_abs_delay) {
+        max_abs_delay = abs_delay;
+        max_abs_delay_id = &id;
+      }
+
+      double rel_delay = static_cast<double>(delay.count()) / sp_delay.count();
+      if (rel_delay > max_rel_delay) {
+        max_rel_delay = rel_delay;
+        max_rel_delay_id = &id;
+      }
+
+      double hc_delta = hc - sp_hc;
+      if (sp_hc == 1.0 && hc_delta > max_hc) {
+        max_hc = hc_delta;
+        max_hc_id = &id;
+      }
+    }
+  }
+
+  if (max_abs_delay_id != nullptr) {
+    LOG(INFO) << "Max abs "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     max_abs_delay)
+                     .count()
+              << " aggregate " << max_abs_delay_id->ToString(*rc.graph());
+  }
+
+  if (max_rel_delay_id != nullptr) {
+    LOG(INFO) << "Max rel " << max_rel_delay << " aggregate "
+              << max_rel_delay_id->ToString(*rc.graph());
+  }
+
+  if (max_hc_id != nullptr) {
+    LOG(INFO) << "Max hc " << max_hc << " aggregate "
+              << max_hc_id->ToString(*rc.graph());
+  }
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
@@ -73,17 +133,12 @@ int main(int argc, char** argv) {
   ctr::PathProvider path_provider(graph);
   auto from_rc = GetRC(topologies[0], matrices[0], FLAGS_from, &path_provider);
   auto to_rc = GetRC(topologies[0], matrices[0], FLAGS_to, &path_provider);
+  DumpMaxKAggregate(*to_rc);
 
   ctr::RoutingConfigurationDelta delta = from_rc->GetDifference(*to_rc);
   LOG(INFO) << delta.ToString(*graph);
   LOG(INFO) << "overloaded from " << from_rc->OverloadedAggregates().size()
             << " to " << to_rc->OverloadedAggregates().size();
-  OverloadedLinks(*to_rc);
-
-  ctr::AggregateId most_overloaded =
-      to_rc->OverloadedAggregates().back().second;
-  LOG(INFO) << from_rc->AggregateToString(most_overloaded);
-  LOG(INFO) << to_rc->AggregateToString(most_overloaded);
 
   nc::viz::HtmlPage from_out;
   from_rc->ToHTML(&from_out);
@@ -92,10 +147,4 @@ int main(int argc, char** argv) {
   nc::viz::HtmlPage to_out;
   to_rc->ToHTML(&to_out);
   nc::File::WriteStringToFileOrDie(to_out.Construct(), "to_out.html");
-
-  std::set<ctr::AggregateId> same_aggregates = delta.SameAggregates();
-  from_rc = from_rc->ExcludeAggregates(same_aggregates);
-  to_rc = to_rc->ExcludeAggregates(same_aggregates);
-  LOG(INFO) << "overloaded from " << from_rc->OverloadedAggregates().size()
-            << " to " << to_rc->OverloadedAggregates().size();
 }
