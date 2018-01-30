@@ -121,6 +121,9 @@ target_link_libraries(metrics_explore metrics_parser gflags)
 add_executable(tm_util src/tm_util.cc)
 target_link_libraries(tm_util ctr_base gflags)
 
+add_executable(llpd_grow src/llpd_grow.cc)
+target_link_libraries(llpd_grow ctr_base geo_lib gflags)
+
 add_executable(tm_gen_util src/tm_gen_util.cc)
 target_link_libraries(tm_gen_util topology_input ctr_base gflags)
 
