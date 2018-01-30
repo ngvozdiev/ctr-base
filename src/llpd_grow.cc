@@ -181,8 +181,16 @@ int main(int argc, char** argv) {
       city_data[id] = GetCityData(id, &localizer);
     }
 
-    for (size_t i = 0; i < 1; ++i) {
+    size_t links_to_add =
+        std::ceil(graph->LinkCount() * FLAGS_fraction_links_to_add);
+    for (size_t i = 0; i < links_to_add; ++i) {
       graph = GrowTopology(*graph, MedianLinkCapacity(*graph), city_data);
     }
+
+    nc::net::GraphBuilder new_builder = graph->ToBuilder();
+    std::string serialized = new_builder.ToRepetita(node_order);
+    std::string name = nc::File::ExtractFileName(topology_file);
+    nc::File::WriteStringToFileOrDie(serialized,
+                                     nc::StrCat("llpd_grow/", name));
   }
 }
