@@ -17,7 +17,7 @@
 #include "topology_input.h"
 
 DEFINE_string(from, "CTR", "Difference from");
-DEFINE_string(to, "B4", "Difference to");
+DEFINE_string(to, "MinMaxLD", "Difference to");
 
 static std::string GetFilename(const std::string& tm_file,
                                const std::string opt_string) {
@@ -99,19 +99,23 @@ static void DumpMaxKAggregate(const ctr::RoutingConfiguration& rc) {
     }
   }
 
-  CHECK(max_abs_delay_id != nullptr);
-  CHECK(max_rel_delay_id != nullptr);
-  CHECK(max_hc_id != nullptr);
+  if (max_abs_delay_id != nullptr) {
+    LOG(INFO) << "Max abs "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     max_abs_delay)
+                     .count()
+              << " aggregate " << max_abs_delay_id->ToString(*rc.graph());
+  }
 
-  LOG(INFO) << "Max abs "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(
-                   max_abs_delay)
-                   .count()
-            << " aggregate " << max_abs_delay_id->ToString(*rc.graph());
-  LOG(INFO) << "Max rel " << max_rel_delay << " aggregate "
-            << max_rel_delay_id->ToString(*rc.graph());
-  LOG(INFO) << "Max hc " << max_hc << " aggregate "
-            << max_hc_id->ToString(*rc.graph());
+  if (max_rel_delay_id != nullptr) {
+    LOG(INFO) << "Max rel " << max_rel_delay << " aggregate "
+              << max_rel_delay_id->ToString(*rc.graph());
+  }
+
+  if (max_hc_id != nullptr) {
+    LOG(INFO) << "Max hc " << max_hc << " aggregate "
+              << max_hc_id->ToString(*rc.graph());
+  }
 }
 
 int main(int argc, char** argv) {
@@ -135,10 +139,10 @@ int main(int argc, char** argv) {
   LOG(INFO) << delta.ToString(*graph);
   LOG(INFO) << "overloaded from " << from_rc->OverloadedAggregates().size()
             << " to " << to_rc->OverloadedAggregates().size();
-  //
-  //  nc::viz::HtmlPage from_out;
-  //  from_rc->ToHTML(&from_out);
-  //  nc::File::WriteStringToFileOrDie(from_out.Construct(), "from_out.html");
+
+  nc::viz::HtmlPage from_out;
+  from_rc->ToHTML(&from_out);
+  nc::File::WriteStringToFileOrDie(from_out.Construct(), "from_out.html");
 
   nc::viz::HtmlPage to_out;
   to_rc->ToHTML(&to_out);

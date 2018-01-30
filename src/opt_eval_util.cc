@@ -28,6 +28,7 @@ DEFINE_bool(run_ctr_link_based, false, "Also run a link-based version of CTR");
 DEFINE_bool(run_headroom_vs_delay, true, "Explore headroom vs delay");
 DEFINE_bool(skip_trivial, true, "Skips trivially satisfiable TMs");
 DEFINE_bool(force, false, "Will regenerate existing solutions.");
+DEFINE_double(link_capacity_multiplier, 1.0, "Link capacity multiplier.");
 
 struct Input {
   const ctr::DemandMatrixAndFilename* demand_matrix_and_filename;
@@ -64,7 +65,12 @@ static std::vector<double> GetHeadroomVsDelay(const TrafficMatrix& tm) {
 static std::string GetFilename(const std::string& tm_file,
                                const std::string opt_string) {
   std::string tm_base = nc::StringReplace(tm_file, ".demands", "", true);
-  return nc::StrCat(tm_base, "_", opt_string, ".rc");
+  std::string link_capacity_str =
+      FLAGS_link_capacity_multiplier == 1.0
+          ? ""
+          : nc::StrCat("_lm_", nc::ToStringMaxDecimals(
+                                   FLAGS_link_capacity_multiplier, 2));
+  return nc::StrCat(tm_base, link_capacity_str, "_", opt_string, ".rc");
 }
 
 static void RecordRoutingConfig(const std::string& out,
@@ -113,12 +119,18 @@ static void RunOptimizers(const Input& input) {
   }
 
   PathProvider path_provider(graph);
-  CTROptimizer ctr_optimizer(&path_provider, 1.0, false, false);
-  CTROptimizer ctr_optimizer_no_flow_counts(&path_provider, 1.0, false, true);
-  MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
-  MinMaxPathBasedOptimizer minmax_ksp_optimizer(&path_provider, 1.0, true, 10);
-  B4Optimizer b4_optimizer(&path_provider, false, 1.0);
-  CTRLinkBased ctr_link_based_optimizer(&path_provider, 1.0);
+  CTROptimizer ctr_optimizer(&path_provider, FLAGS_link_capacity_multiplier,
+                             false, false);
+  CTROptimizer ctr_optimizer_no_flow_counts(
+      &path_provider, FLAGS_link_capacity_multiplier, false, true);
+  MinMaxOptimizer minmax_low_delay_optimizer(
+      &path_provider, FLAGS_link_capacity_multiplier, true);
+  MinMaxPathBasedOptimizer minmax_ksp_optimizer(
+      &path_provider, FLAGS_link_capacity_multiplier, true, 10);
+  B4Optimizer b4_optimizer(&path_provider, false,
+                           FLAGS_link_capacity_multiplier);
+  CTRLinkBased ctr_link_based_optimizer(&path_provider,
+                                        FLAGS_link_capacity_multiplier);
   ShortestPathOptimizer sp_optimizer(&path_provider);
 
   OptAndRecord(tm_file, *tm, node_order, "CTRNOCACHE", &ctr_optimizer);

@@ -53,8 +53,9 @@ static std::string FindTopologyFileForDemandFileOrDie(
 
     if (nc::HasPrefixString(demand_base, top_base) ||
         nc::HasSuffixString(demand_base, top_base)) {
-      CHECK(to_return == "") << "Multiple topologies for file " << demand_file;
-      to_return = file;
+      if (to_return.size() < file.size()) {
+        to_return = file;
+      }
     }
   }
 
