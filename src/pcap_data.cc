@@ -1147,90 +1147,12 @@ std::unique_ptr<BinSequence> PcapTraceFitStore::GetBinSequence(
   return to_return;
 }
 
-static constexpr size_t kExtraPadding = 1000;
-
-// Performs binary search to pick a offset as large as possible into
-// traces_and_slices.
-static void PickRecursive(
-    const std::vector<BinSequence::TraceAndSlice>& traces_and_slices,
-    std::chrono::microseconds initial_window, nc::net::Bandwidth target_rate,
-    size_t from, size_t to, std::unique_ptr<BinSequence>* out,
-    nc::net::Bandwidth* out_rate, PcapDataBinCache* cache) {
-  size_t delta = (to - from) / 2;
-  if (delta == 0) {
-    return;
-  }
-
-  size_t offset = from + delta;
-  std::unique_ptr<BinSequence> new_sequence;
-  if (offset > kExtraPadding) {
-    size_t delta = offset - kExtraPadding;
-    new_sequence = nc::make_unique<BinSequence>(
-        traces_and_slices.begin(), std::next(traces_and_slices.begin(), delta));
-  } else {
-    double fraction = static_cast<double>(offset) / kExtraPadding;
-    auto tmp_sequence = nc::make_unique<BinSequence>(
-        traces_and_slices.begin(), std::next(traces_and_slices.begin(), 1));
-    new_sequence = std::move(tmp_sequence->PreciseSplitOrDie({fraction})[0]);
-  }
-
-  std::unique_ptr<BinSequence> bin_sequence =
-      new_sequence->CutFromStart(initial_window);
-  std::chrono::milliseconds max_queue_size =
-      bin_sequence->SimulateQueue(target_rate, cache);
-
-  if (max_queue_size > std::chrono::milliseconds(10)) {
-    //    LOG(ERROR) << "Offset " << offset << " max queue size "
-    //               << max_queue_size.count() << "ms";
-    PickRecursive(traces_and_slices, initial_window, target_rate, from, offset,
-                  out, out_rate, cache);
-  } else {
-    nc::net::Bandwidth mean_rate = bin_sequence->MeanRate(cache);
-    if (*out_rate < mean_rate) {
-      *out_rate = mean_rate;
-      *out = std::move(bin_sequence);
-    }
-
-    //    LOG(ERROR) << "Offset " << offset << " max queue size "
-    //               << max_queue_size.count() << "ms mean " << mean_rate.Mbps()
-    //               << "Mbps";
-    PickRecursive(traces_and_slices, initial_window, target_rate, offset, to,
-                  out, out_rate, cache);
-  }
-}
-
-static std::unique_ptr<BinSequence> PickOrDie(
-    const std::vector<BinSequence::TraceAndSlice>& traces_and_slices,
-    std::chrono::microseconds initial_window, nc::net::Bandwidth target_rate,
-    PcapDataBinCache* cache) {
-  nc::net::Bandwidth rate = nc::net::Bandwidth::Zero();
-  std::unique_ptr<BinSequence> out;
-  PickRecursive(traces_and_slices, initial_window, target_rate, 0,
-                kExtraPadding + traces_and_slices.size(), &out, &rate, cache);
-  if (!out) {
-    // Even the smallest fraction of the first trace was not enough to make the
-    // aggregate fit, will use that anyway.
-    out = nc::make_unique<BinSequence>(traces_and_slices.begin(),
-                                       std::next(traces_and_slices.begin(), 1));
-    out = std::move(out->PreciseSplitOrDie({1.0 / kExtraPadding})[0]);
-    out = out->CutFromStart(initial_window);
-  }
-
-  CHECK(out);
-
-  return out;
-}
-
 BinSequenceGenerator::BinSequenceGenerator(
     const std::vector<const PcapDataTrace*>& all_traces,
     const std::vector<std::chrono::milliseconds>& offsets) {
   for (const PcapDataTrace* trace : all_traces) {
     for (std::chrono::milliseconds offset : offsets) {
-      std::vector<BinSequence::TraceAndSlice> traces_and_slices =
-          trace->TracesAndSlices(trace->AllSlices(), offset);
-      all_traces_and_slices_.insert(all_traces_and_slices_.end(),
-                                    traces_and_slices.begin(),
-                                    traces_and_slices.end());
+      all_traces_.emplace_back(trace, offset);
     }
   }
 }
@@ -1238,12 +1160,22 @@ BinSequenceGenerator::BinSequenceGenerator(
 std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
     nc::net::Bandwidth target_rate, std::chrono::microseconds init_window,
     PcapDataBinCache* cache, std::mt19937* rnd) const {
-  std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_cpy =
-      all_traces_and_slices_;
-  std::shuffle(all_traces_and_slices_cpy.begin(),
-               all_traces_and_slices_cpy.end(), *rnd);
+  std::uniform_int_distribution<size_t> distribution(0, all_traces_.size());
+  size_t index = distribution(*rnd);
 
-  return PickOrDie(all_traces_and_slices_cpy, init_window, target_rate, cache);
+  const PcapDataTrace* trace;
+  std::chrono::milliseconds offset;
+  std::tie(trace, offset) = all_traces_[index];
+
+  std::vector<BinSequence::TraceAndSlice> traces_and_slices =
+      trace->TracesAndSlices(trace->AllSlices(), offset);
+
+  auto bin_sequence = nc::make_unique<BinSequence>(traces_and_slices);
+  auto partial_bin_sequence = bin_sequence->CutFromStart(init_window);
+  nc::net::Bandwidth bw = partial_bin_sequence->MeanRate(cache);
+  double scale = target_rate / bw;
+
+  return std::move(bin_sequence->PreciseSplitOrDie({scale})[0]);
 }
 
 }  // namespace e2e

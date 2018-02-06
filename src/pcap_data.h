@@ -490,7 +490,10 @@ class BinSequenceGenerator {
                                     std::mt19937* rnd) const;
 
  private:
-  std::vector<BinSequence::TraceAndSlice> all_traces_and_slices_;
+  using TraceAndOffset =
+      std::pair<const PcapDataTrace*, std::chrono::milliseconds>;
+
+  std::vector<TraceAndOffset> all_traces_;
 };
 
 }  // namespace e2e
