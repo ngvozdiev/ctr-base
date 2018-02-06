@@ -1176,7 +1176,7 @@ std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
   nc::net::Bandwidth bw = partial_bin_sequence->MeanRate(cache);
   double scale = target_rate / bw;
 
-  return std::move(bin_sequence->PreciseSplitOrDie({scale})[0]);
+  return std::move(partial_bin_sequence->PreciseSplitOrDie({scale})[0]);
 }
 
 }  // namespace e2e
