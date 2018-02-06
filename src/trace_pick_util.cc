@@ -46,30 +46,12 @@ static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
   std::tie(demand, i, bin_cache, sequence_generator) = input;
 
   LOG(INFO) << "Looking for traces to match " << demand.Mbps() << "Mbps";
-  std::unique_ptr<ctr::BinSequence> bin_sequence;
-
-  // Will generate FLAGS_passes different bin sequences, and then pick the one
-  // with the highest mean.
-  nc::net::Bandwidth top_mean = nc::net::Bandwidth::Zero();
 
   // The RNG.
   std::mt19937 rnd(FLAGS_seed + i);
 
-  for (size_t pass_num = 0; pass_num < FLAGS_passes; ++pass_num) {
-    LOG(INFO) << "Pass " << pass_num;
-    std::unique_ptr<ctr::BinSequence> bin_sequence_candidate =
-        sequence_generator->Next(demand, milliseconds(FLAGS_period_duration_ms),
-                                 bin_cache, &rnd);
-    if (!bin_sequence_candidate) {
-      continue;
-    }
-
-    nc::net::Bandwidth mean_rate = bin_sequence_candidate->MeanRate(bin_cache);
-    if (mean_rate > top_mean) {
-      top_mean = mean_rate;
-      bin_sequence = std::move(bin_sequence_candidate);
-    }
-  }
+  std::unique_ptr<ctr::BinSequence> bin_sequence = sequence_generator->Next(
+      demand, milliseconds(FLAGS_period_duration_ms), bin_cache, &rnd);
 
   CHECK(bin_sequence);
   return bin_sequence;
