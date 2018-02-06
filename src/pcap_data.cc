@@ -1160,7 +1160,8 @@ BinSequenceGenerator::BinSequenceGenerator(
 std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
     nc::net::Bandwidth target_rate, std::chrono::microseconds init_window,
     PcapDataBinCache* cache, std::mt19937* rnd) const {
-  std::uniform_int_distribution<size_t> distribution(0, all_traces_.size());
+  CHECK(!all_traces_.empty());
+  std::uniform_int_distribution<size_t> distribution(0, all_traces_.size() - 1);
   size_t index = distribution(*rnd);
 
   const PcapDataTrace* trace;
