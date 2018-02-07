@@ -1041,18 +1041,13 @@ std::unique_ptr<BinSequence> PcapTraceStore::ExtendBinSequence(
   return nc::make_unique<BinSequence>(extended);
 }
 
-void PcapTraceFitStore::AddToStore(nc::net::Bandwidth rate,
-                                   const BinSequence& bin_sequence,
+void PcapTraceFitStore::AddToStore(const BinSequence& bin_sequence,
                                    const std::string& output_file,
                                    PcapDataBinCache* cache) {
-  std::chrono::milliseconds queue_size =
-      bin_sequence.SimulateQueue(rate, cache);
   nc::net::Bandwidth mean_rate = bin_sequence.MeanRate(cache);
 
   PBTracesToFitRate traces_to_fit_rate_pb;
   *traces_to_fit_rate_pb.mutable_bin_sequence() = bin_sequence.ToProtobuf();
-  traces_to_fit_rate_pb.set_max_queue_size_ms(queue_size.count());
-  traces_to_fit_rate_pb.set_rate_mbps(rate.Mbps());
   traces_to_fit_rate_pb.set_mean_rate_mbps(mean_rate.Mbps());
 
   // LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
@@ -1079,7 +1074,7 @@ PcapTraceFitStore::PcapTraceFitStore(const std::string& file,
 
     PcapDataBinCache cache;
     nc::net::Bandwidth rate = nc::net::Bandwidth::FromMBitsPerSecond(
-        traces_to_fit_rate_pb.rate_mbps());
+        traces_to_fit_rate_pb.mean_rate_mbps());
     std::unique_ptr<BinSequence> bin_sequence =
         store_->BinSequenceFromProtobufOrDie(
             traces_to_fit_rate_pb.bin_sequence());

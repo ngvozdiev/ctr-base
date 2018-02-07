@@ -125,19 +125,10 @@ message PBBinSequence {
   repeated PBTraceAndSlice traces_and_slices = 1;
 };
 
-// A set of slices that fit a rate. Fit is defined as being able to
-// squeeze through a queue of that rate, experiencing small queueing
-// and at the same time having mean rate close to the rate.
+// A set of slices that have a mean rate.
 message PBTracesToFitRate {
   PBBinSequence bin_sequence = 1;
 
-  // The rate.
-  double rate_MBps = 2;
-
-  // Max queue size that one can expect from running the traces
-  // through a queue of rate 'rate_Mbps'.
-  uint64 max_queue_size_ms = 3;
-
   // Mean rate of the rates.
-  double mean_rate_Mbps = 4;
+  double mean_rate_Mbps = 2;
 }

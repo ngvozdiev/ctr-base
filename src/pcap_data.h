@@ -362,8 +362,7 @@ class PcapTraceStore {
 // Stores information about what combination of traces fit a given rate.
 class PcapTraceFitStore {
  public:
-  static void AddToStore(nc::net::Bandwidth rate,
-                         const BinSequence& bin_sequence,
+  static void AddToStore(const BinSequence& bin_sequence,
                          const std::string& output_file,
                          PcapDataBinCache* cache);
 

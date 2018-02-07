@@ -51,7 +51,8 @@ static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
   std::unique_ptr<ctr::BinSequence> bin_sequence = sequence_generator->Next(
       demand, milliseconds(FLAGS_period_duration_ms), bin_cache, &rnd);
 
-  LOG(INFO) << "Looking for traces to match " << demand.Mbps() << "Mbps got " << bin_sequence->MeanRate(bin_cache).Mbps();
+  LOG(INFO) << "Looking for traces to match " << demand.Mbps() << "Mbps got "
+            << bin_sequence->MeanRate(bin_cache).Mbps();
 
   CHECK(bin_sequence);
   return bin_sequence;
@@ -123,8 +124,7 @@ int main(int argc, char** argv) {
           1);
 
   for (size_t i = 0; i < demand_matrix->elements().size(); ++i) {
-    nc::net::Bandwidth demand = std::get<0>(inputs[i]);
-    ctr::PcapTraceFitStore::AddToStore(demand, *results[i], out, &bin_cache);
+    ctr::PcapTraceFitStore::AddToStore(*results[i], out, &bin_cache);
   }
 
   return 0;
