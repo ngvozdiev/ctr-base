@@ -191,6 +191,6 @@ int main(int argc, char** argv) {
     std::string serialized = new_builder.ToRepetita(node_order);
     std::string name = nc::File::ExtractFileName(topology_file);
     nc::File::WriteStringToFileOrDie(serialized,
-                                     nc::StrCat("llpd_grow/", name));
+                                     nc::StrCat("llpd_grow_output/", name));
   }
 }

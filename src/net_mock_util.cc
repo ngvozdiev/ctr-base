@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
   builder.RemoveMultipleLinks();
   builder.ScaleCapacity(FLAGS_link_capacity_scale);
   builder.ScaleDelay(FLAGS_link_delay_scale);
-  nc::net::GraphStorage graph(builder);
+  nc::net::GraphStorage graph(builder, node_order);
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaFileOrDie(FLAGS_traffic_matrix,

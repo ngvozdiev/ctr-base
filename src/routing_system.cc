@@ -23,6 +23,9 @@ namespace ctr {
 DEFINE_bool(pin_mean, false,
             "If true will always use the mean aggregate level.");
 
+DEFINE_bool(dump_input_to_optimizer, false,
+            "If true will dump the inputs to the optimizer.");
+
 static auto* per_aggregate_mean_input =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string>(
@@ -238,6 +241,17 @@ RoutingSystemUpdateResult RoutingSystem::Update(
   size_t i_count = 0;
   while (true) {
     TrafficMatrix tm(graph_, input);
+
+    if (FLAGS_dump_input_to_optimizer) {
+      auto demand_matrix = tm.ToDemandMatrix();
+
+      std::string dump_filename =
+          nc::Substitute("dump_pass_{}.demands", i_count);
+      demand_matrix->ToRepetitaFileOrDie(graph_->NodeOrderOrDie(),
+                                         dump_filename);
+      LOG(INFO) << "Stored TM for pass " << i_count << " at " << dump_filename;
+    }
+
     output = optimizer_->Optimize(tm);
     CHECK(output->demands().size() == tm.demands().size());
     ++i_count;
