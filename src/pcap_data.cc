@@ -1050,8 +1050,8 @@ void PcapTraceFitStore::AddToStore(const BinSequence& bin_sequence,
   *traces_to_fit_rate_pb.mutable_bin_sequence() = bin_sequence.ToProtobuf();
   traces_to_fit_rate_pb.set_mean_rate_mbps(mean_rate.Mbps());
 
-  LOG(FATAL) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
-             << output_file;
+//  LOG(FATAL) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
+//             << output_file;
 
   auto output_stream = GetOutputStream(output_file, true);
   CHECK(WriteDelimitedTo(traces_to_fit_rate_pb, output_stream.get()));
