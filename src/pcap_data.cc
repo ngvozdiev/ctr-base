@@ -1084,7 +1084,7 @@ PcapTraceFitStore::PcapTraceFitStore(const std::string& file,
         store_->BinSequenceFromProtobufOrDie(
             traces_to_fit_rate_pb.bin_sequence());
     LOG(FATAL) << "Loaded traces that fit " << rate.Mbps() << " true rate "
-               << bin_sequence->MeanRate(&cache);
+               << bin_sequence->MeanRate(&cache).Mbps();
 
     rate_to_bin_sequence_[rate].emplace_back(std::move(bin_sequence));
   }
