@@ -46,7 +46,8 @@ DEFINE_string(pcap_trace_fit_store, "",
 DEFINE_uint64(period_duration_ms, 60000, "Length of the period");
 DEFINE_uint64(history_bin_size_ms, 100, "How big each history bin is");
 DEFINE_double(decay_factor, 0.0, "How quickly to decay prediction");
-DEFINE_double(estimator_headroom, 1.1, "Fixed headroom for the estimator");
+DEFINE_double(link_capacity_multiplier, 0.9,
+              "Link capacity multiplier during optimization");
 DEFINE_double(link_capacity_scale, 1.0,
               "By how much to scale all links' bandwidth");
 DEFINE_double(link_delay_scale, 1.3, "By how much to scale all links' delay");
@@ -195,6 +196,9 @@ int main(int argc, char** argv) {
         trace_fit_store.GetBinSequence(matrix_element.demand);
     CHECK(bin_sequence);
 
+    ctr::PcapDataBinCache cache;
+    LOG(INFO) << "MR " << bin_sequence->MeanRate(&cache).Mbps();
+
     std::unique_ptr<ctr::BinSequence> bin_sequence_extended =
         trace_store.ExtendBinSequence(*bin_sequence);
 
@@ -211,17 +215,15 @@ int main(int argc, char** argv) {
   if (FLAGS_sp_opt) {
     opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
   } else {
-    double link_cap_multiplier = 2 - FLAGS_estimator_headroom;
-    CHECK(link_cap_multiplier > 0);
-    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider,
-                                             link_cap_multiplier, true, false);
+    opt = nc::make_unique<ctr::CTROptimizer>(
+        &path_provider, FLAGS_link_capacity_multiplier, true, false);
   }
 
   ctr::ProbModelConfig prob_model_config;
   prob_model_config.exceed_probability = FLAGS_exceed_probability;
 
   ctr::MeanScaleEstimatorFactory estimator_factory(
-      {FLAGS_estimator_headroom, FLAGS_decay_factor, FLAGS_decay_factor, 10});
+      {1.0, FLAGS_decay_factor, FLAGS_decay_factor, 10});
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.prob_model_config = prob_model_config;
   routing_system_config.store_to_metrics = false;
