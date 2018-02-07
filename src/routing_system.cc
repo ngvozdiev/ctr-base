@@ -246,7 +246,7 @@ RoutingSystemUpdateResult RoutingSystem::Update(
       auto demand_matrix = tm.ToDemandMatrix();
 
       std::string dump_filename =
-          nc::Substitute("dump_pass_{}.demands", i_count);
+          nc::Substitute("dump_pass_$0.demands", i_count);
       demand_matrix->ToRepetitaFileOrDie(graph_->NodeOrderOrDie(),
                                          dump_filename);
       LOG(INFO) << "Stored TM for pass " << i_count << " at " << dump_filename;
