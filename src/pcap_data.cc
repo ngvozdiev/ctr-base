@@ -869,7 +869,7 @@ std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBins(
 }
 
 nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
-  uint32_t total_bytes = 0;
+  double total_bytes = 0;
   size_t count = bin_count();
   for (const TraceAndSlice& trace_and_slice : traces_) {
     const PcapDataTrace* trace = trace_and_slice.trace;
@@ -883,7 +883,7 @@ nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
         cache->Bins(trace, slice, trace_and_slice.start_bin, end_bin);
 
     while (from != to) {
-      uint32_t bytes_in_bin = from->bytes;
+      double bytes_in_bin = from->bytes;
       total_bytes += bytes_in_bin * fraction;
       ++from;
     }
@@ -1149,7 +1149,8 @@ std::unique_ptr<BinSequence> BinSequenceGenerator::Next(
   nc::net::Bandwidth bw = partial_bin_sequence->MeanRate(cache);
   double scale = target_rate / bw;
 
-  return std::move(partial_bin_sequence->PreciseSplitOrDie({scale})[0]);
+  auto out = std::move(partial_bin_sequence->PreciseSplitOrDie({scale})[0]);
+  return std::move(out);
 }
 
 }  // namespace e2e

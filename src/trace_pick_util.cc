@@ -45,13 +45,13 @@ static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
   const ctr::BinSequenceGenerator* sequence_generator;
   std::tie(demand, i, bin_cache, sequence_generator) = input;
 
-  LOG(INFO) << "Looking for traces to match " << demand.Mbps() << "Mbps";
-
   // The RNG.
   std::mt19937 rnd(FLAGS_seed + i);
 
   std::unique_ptr<ctr::BinSequence> bin_sequence = sequence_generator->Next(
       demand, milliseconds(FLAGS_period_duration_ms), bin_cache, &rnd);
+
+  LOG(INFO) << "Looking for traces to match " << demand.Mbps() << "Mbps got " << bin_sequence->MeanRate(bin_cache).Mbps();
 
   CHECK(bin_sequence);
   return bin_sequence;
