@@ -1055,7 +1055,7 @@ void PcapTraceFitStore::AddToStore(nc::net::Bandwidth rate,
   traces_to_fit_rate_pb.set_rate_mbps(rate.Mbps());
   traces_to_fit_rate_pb.set_mean_rate_mbps(mean_rate.Mbps());
 
-  //LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
+  // LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
   //          << output_file;
 
   auto output_stream = GetOutputStream(output_file, true);
@@ -1077,12 +1077,15 @@ PcapTraceFitStore::PcapTraceFitStore(const std::string& file,
       break;
     }
 
+    PcapDataBinCache cache;
     nc::net::Bandwidth rate = nc::net::Bandwidth::FromMBitsPerSecond(
         traces_to_fit_rate_pb.rate_mbps());
-    LOG(INFO) << "Loaded traces that fit " << rate.Mbps();
     std::unique_ptr<BinSequence> bin_sequence =
         store_->BinSequenceFromProtobufOrDie(
             traces_to_fit_rate_pb.bin_sequence());
+    LOG(FATAL) << "Loaded traces that fit " << rate.Mbps() << " true rate "
+               << bin_sequence->MeanRate(&cache);
+
     rate_to_bin_sequence_[rate].emplace_back(std::move(bin_sequence));
   }
 }
