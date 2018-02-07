@@ -808,32 +808,6 @@ AggregateHistory BinSequence::GenerateHistory(
   return {bins_for_history, history_bin_size, flow_count};
 }
 
-std::vector<std::unique_ptr<BinSequence>> BinSequence::SplitOrDie(
-    const std::vector<double>& fractions) const {
-  double total = std::accumulate(fractions.begin(), fractions.end(), 0.0);
-  CHECK(total <= 1);
-  std::vector<std::unique_ptr<BinSequence>> out;
-
-  double cumulative = 0;
-  size_t i = 0;
-  for (double fraction : fractions) {
-    std::vector<TraceAndSlice> new_traces;
-    cumulative += fraction;
-
-    for (; i < cumulative * traces_.size(); ++i) {
-      new_traces.emplace_back(traces_[i]);
-    }
-
-    if (new_traces.empty()) {
-      out.emplace_back();
-    } else {
-      out.emplace_back(nc::make_unique<BinSequence>(new_traces));
-    }
-  }
-
-  return out;
-}
-
 std::vector<std::unique_ptr<BinSequence>> BinSequence::PreciseSplitOrDie(
     const std::vector<double>& fractions) const {
   std::vector<std::unique_ptr<BinSequence>> out;
@@ -1045,7 +1019,6 @@ std::unique_ptr<BinSequence> PcapTraceStore::BinSequenceFromProtobufOrDie(
     CHECK(from <= to);
     CHECK(to <= trace_ptr->ToProtobuf().bin_count())
         << to << " vs " << trace_ptr->ToProtobuf().bin_count();
-    CHECK(fraction <= 1);
     CHECK(fraction > 0);
 
     traces_and_slices.emplace_back(trace_ptr, slice, from, to, fraction);
@@ -1082,8 +1055,8 @@ void PcapTraceFitStore::AddToStore(nc::net::Bandwidth rate,
   traces_to_fit_rate_pb.set_rate_mbps(rate.Mbps());
   traces_to_fit_rate_pb.set_mean_rate_mbps(mean_rate.Mbps());
 
-  LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
-            << output_file;
+  //LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
+  //          << output_file;
 
   auto output_stream = GetOutputStream(output_file, true);
   CHECK(WriteDelimitedTo(traces_to_fit_rate_pb, output_stream.get()));

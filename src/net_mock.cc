@@ -15,8 +15,6 @@
 
 namespace ctr {
 
-DEFINE_bool(precise_splits, false, "If true all splits will be precise");
-
 void MockSimDevice::HandleStateUpdate(
     const nc::htsim::SSCPAddOrUpdate& update) {
   nc::htsim::MatchRule* rule = update.MutableRule();
@@ -41,11 +39,7 @@ void MockSimDevice::HandleStateUpdate(
   }
 
   std::vector<std::unique_ptr<BinSequence>> sub_sequences;
-  if (FLAGS_precise_splits) {
-    sub_sequences = state->initial_bin_sequence->PreciseSplitOrDie(fractions);
-  } else {
-    sub_sequences = state->initial_bin_sequence->SplitOrDie(fractions);
-  }
+  sub_sequences = state->initial_bin_sequence->PreciseSplitOrDie(fractions);
   CHECK(sub_sequences.size() == fractions.size());
 
   // Each action in the rule is a separate path.
