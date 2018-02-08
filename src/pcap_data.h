@@ -172,6 +172,10 @@ class BinSequence {
   std::chrono::milliseconds SimulateQueue(nc::net::Bandwidth rate,
                                           PcapDataBinCache* cache) const;
 
+  // Same as SimulateQueue, but returns the queue occupancy at each bin.
+  std::vector<double> Residuals(nc::net::Bandwidth rate,
+                                PcapDataBinCache* cache) const;
+
   // Generates an AggregateHistory from the entire range of this BinSequence.
   // Each of the history's bins will combine 'history_bin_size' bins from this
   // BinSequence.
@@ -190,6 +194,9 @@ class BinSequence {
 
   // Offsets both the start and the end bin of this sequence.
   std::unique_ptr<BinSequence> Offset(size_t bin_count) const;
+
+  // Copies this BinSequence.
+  std::unique_ptr<BinSequence> Duplicate() const;
 
   // Optionally rebins the trace and returns the bins. If 'bin_size' is equal to
   // this trace's base bin size (returned by bin_size()) no rebinning will

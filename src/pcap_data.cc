@@ -772,25 +772,34 @@ const std::chrono::microseconds BinSequence::bin_size() const {
 std::chrono::milliseconds BinSequence::SimulateQueue(
     nc::net::Bandwidth rate, PcapDataBinCache* cache) const {
   double rate_Bps = rate.bps() / 8.0;
-  double bins_in_second =
-      1.0 / std::chrono::duration<double>(bin_size()).count();
-  double bytes_per_bin = rate_Bps / bins_in_second;
-
-  double max_queue_size_bytes = 0;
-  std::vector<TrimmedPcapDataTraceBin> bins = AccumulateBinsPrivate(1, cache);
-  double queue_size_bytes = 0;
-  for (size_t i = 0; i < bins.size(); ++i) {
-    max_queue_size_bytes = std::max(max_queue_size_bytes, queue_size_bytes);
-
-    queue_size_bytes += bins[i].bytes;
-    queue_size_bytes -= bytes_per_bin;
-
-    queue_size_bytes = std::max(queue_size_bytes, 0.0);
-  }
+  std::vector<double> residuals = Residuals(rate, cache);
+  CHECK(!residuals.empty());
+  double max_queue_size_bytes =
+      *std::max_element(residuals.begin(), residuals.end());
 
   double max_queue_size_sec = max_queue_size_bytes / rate_Bps;
   return std::chrono::milliseconds(
       static_cast<uint64_t>(max_queue_size_sec * 1000));
+}
+
+std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate,
+                                           PcapDataBinCache* cache) const {
+  double rate_Bps = rate.bps() / 8.0;
+  double bins_in_second =
+      1.0 / std::chrono::duration<double>(bin_size()).count();
+  double bytes_per_bin = rate_Bps / bins_in_second;
+
+  std::vector<double> out;
+  std::vector<TrimmedPcapDataTraceBin> bins = AccumulateBinsPrivate(1, cache);
+  double queue_size_bytes = 0;
+  for (size_t i = 0; i < bins.size(); ++i) {
+    queue_size_bytes += bins[i].bytes;
+    queue_size_bytes -= bytes_per_bin;
+    queue_size_bytes = std::max(queue_size_bytes, 0.0);
+    out.emplace_back(queue_size_bytes);
+  }
+
+  return out;
 }
 
 AggregateHistory BinSequence::GenerateHistory(
@@ -806,6 +815,10 @@ AggregateHistory BinSequence::GenerateHistory(
   }
 
   return {bins_for_history, history_bin_size, flow_count};
+}
+
+std::unique_ptr<BinSequence> BinSequence::Duplicate() const {
+  return nc::make_unique<BinSequence>(traces_);
 }
 
 std::vector<std::unique_ptr<BinSequence>> BinSequence::SplitOrDie(
