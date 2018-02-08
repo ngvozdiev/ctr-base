@@ -113,7 +113,6 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < demand_matrix->elements().size(); ++i) {
     nc::net::Bandwidth demand = demand_matrix->elements()[i].demand;
     inputs.emplace_back(demand, i, &bin_cache, &bin_sequence_generator);
-    break;
   }
 
   // It is tricky to get good-performance thread-safe code in pcap_data.cc
@@ -126,7 +125,6 @@ int main(int argc, char** argv) {
 
   for (size_t i = 0; i < demand_matrix->elements().size(); ++i) {
     ctr::PcapTraceFitStore::AddToStore(*results[i], out, &bin_cache);
-    break;
   }
 
   return 0;
