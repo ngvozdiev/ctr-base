@@ -1085,15 +1085,12 @@ PcapTraceFitStore::PcapTraceFitStore(const std::string& file,
       break;
     }
 
-    PcapDataBinCache cache;
     nc::net::Bandwidth rate = nc::net::Bandwidth::FromMBitsPerSecond(
         traces_to_fit_rate_pb.mean_rate_mbps());
     std::unique_ptr<BinSequence> bin_sequence =
         store_->BinSequenceFromProtobufOrDie(
             traces_to_fit_rate_pb.bin_sequence());
-    LOG(FATAL) << "Loaded traces that fit " << rate.Mbps() << " true rate "
-               << bin_sequence->MeanRate(&cache).Mbps() << " "
-               << traces_to_fit_rate_pb.DebugString();
+    LOG(INFO) << "Loaded traces that fit " << rate.Mbps();
 
     rate_to_bin_sequence_[rate].emplace_back(std::move(bin_sequence));
   }
