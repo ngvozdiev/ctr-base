@@ -911,8 +911,11 @@ nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
 std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
     size_t bin_size_multiplier, PcapDataBinCache* cache) const {
   size_t count = bin_count();
+  using namespace std::chrono;
 
   std::vector<TrimmedPcapDataTraceBin> out(count);
+  auto t1 = high_resolution_clock::now();
+  std::chrono::duration<int64_t, std::nano> inner_time;
   for (const TraceAndSlice& trace_and_slice : traces_) {
     const PcapDataTrace* trace = trace_and_slice.trace;
     TraceSliceIndex slice = trace_and_slice.slice;
@@ -922,7 +925,11 @@ std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
 
     std::vector<TrimmedPcapDataTraceBin>::const_iterator from;
     std::vector<TrimmedPcapDataTraceBin>::const_iterator to;
+
+    auto t2 = high_resolution_clock::now();
     std::tie(from, to) = cache->Bins(trace, slice, start_bin, end_bin);
+    auto t3 = high_resolution_clock::now();
+    inner_time += (t3 - t2);
     CHECK(std::distance(from, to) == static_cast<ssize_t>(count));
 
     if (fraction == 1) {
@@ -935,6 +942,9 @@ std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBinsPrivate(
       }
     }
   }
+  auto t4 = high_resolution_clock::now();
+  LOG(INFO) << "T1 " << duration_cast<milliseconds>(t4 - t1).count() << "ms";
+  LOG(INFO) << "T2 " << duration_cast<milliseconds>(inner_time).count() << "ms";
 
   if (bin_size_multiplier == 1) {
     return out;
