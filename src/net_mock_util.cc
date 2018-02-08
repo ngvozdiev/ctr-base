@@ -196,9 +196,6 @@ int main(int argc, char** argv) {
         trace_fit_store.GetBinSequence(matrix_element.demand);
     CHECK(bin_sequence);
 
-    ctr::PcapDataBinCache cache;
-    LOG(INFO) << "MR " << bin_sequence->MeanRate(&cache).Mbps();
-
     std::unique_ptr<ctr::BinSequence> bin_sequence_extended =
         trace_store.ExtendBinSequence(*bin_sequence);
 
