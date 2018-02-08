@@ -158,12 +158,7 @@ class BinSequence {
 
   // Splits this sequence into a number of smaller sequences. Each will have the
   // same number of bins, but will only carry a part of this sequence's
-  // sub-sequences. Fill die if there are more elements in 'fractions' than
-  // there are sub-sequences. The sum of 'fractions' should be 1. Splitting is
-  // deterministic and depends on the order of traces_.
-  std::vector<std::unique_ptr<BinSequence>> SplitOrDie(
-      const std::vector<double>& fractions) const;
-
+  // sub-sequences.
   std::vector<std::unique_ptr<BinSequence>> PreciseSplitOrDie(
       const std::vector<double>& fractions) const;
 
@@ -374,8 +369,7 @@ class PcapTraceStore {
 // Stores information about what combination of traces fit a given rate.
 class PcapTraceFitStore {
  public:
-  static void AddToStore(nc::net::Bandwidth rate,
-                         const BinSequence& bin_sequence,
+  static void AddToStore(const BinSequence& bin_sequence,
                          const std::string& output_file,
                          PcapDataBinCache* cache);
 

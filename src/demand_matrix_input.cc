@@ -158,8 +158,16 @@ GetDemandMatrixInputs(bool skip_trivial) {
       if (skip_trivial) {
         const std::map<std::string, std::string>& props =
             demand_matrix->properties();
-        const std::string& trivial = nc::FindOrDie(props, "trivial");
-        if (trivial == "true") {
+
+        bool trivial;
+        if (nc::ContainsKey(props, "trivial")) {
+          const std::string& trivial_str = nc::FindOrDie(props, "trivial");
+          trivial = trivial_str == "true";
+        } else {
+          trivial = demand_matrix->IsTriviallySatisfiable();
+        }
+
+        if (trivial) {
           LOG(INFO) << "Skipping " << demand_file << " trivially satisfiable";
           continue;
         }

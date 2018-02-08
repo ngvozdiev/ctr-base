@@ -821,32 +821,6 @@ std::unique_ptr<BinSequence> BinSequence::Duplicate() const {
   return nc::make_unique<BinSequence>(traces_);
 }
 
-std::vector<std::unique_ptr<BinSequence>> BinSequence::SplitOrDie(
-    const std::vector<double>& fractions) const {
-  double total = std::accumulate(fractions.begin(), fractions.end(), 0.0);
-  CHECK(total <= 1);
-  std::vector<std::unique_ptr<BinSequence>> out;
-
-  double cumulative = 0;
-  size_t i = 0;
-  for (double fraction : fractions) {
-    std::vector<TraceAndSlice> new_traces;
-    cumulative += fraction;
-
-    for (; i < cumulative * traces_.size(); ++i) {
-      new_traces.emplace_back(traces_[i]);
-    }
-
-    if (new_traces.empty()) {
-      out.emplace_back();
-    } else {
-      out.emplace_back(nc::make_unique<BinSequence>(new_traces));
-    }
-  }
-
-  return out;
-}
-
 std::vector<std::unique_ptr<BinSequence>> BinSequence::PreciseSplitOrDie(
     const std::vector<double>& fractions) const {
   std::vector<std::unique_ptr<BinSequence>> out;
@@ -908,7 +882,7 @@ std::vector<TrimmedPcapDataTraceBin> BinSequence::AccumulateBins(
 }
 
 nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
-  uint32_t total_bytes = 0;
+  double total_bytes = 0;
   size_t count = bin_count();
   for (const TraceAndSlice& trace_and_slice : traces_) {
     const PcapDataTrace* trace = trace_and_slice.trace;
@@ -922,7 +896,7 @@ nc::net::Bandwidth BinSequence::MeanRate(PcapDataBinCache* cache) const {
         cache->Bins(trace, slice, trace_and_slice.start_bin, end_bin);
 
     while (from != to) {
-      uint32_t bytes_in_bin = from->bytes;
+      double bytes_in_bin = from->bytes;
       total_bytes += bytes_in_bin * fraction;
       ++from;
     }
@@ -1058,7 +1032,6 @@ std::unique_ptr<BinSequence> PcapTraceStore::BinSequenceFromProtobufOrDie(
     CHECK(from <= to);
     CHECK(to <= trace_ptr->ToProtobuf().bin_count())
         << to << " vs " << trace_ptr->ToProtobuf().bin_count();
-    CHECK(fraction <= 1);
     CHECK(fraction > 0);
 
     traces_and_slices.emplace_back(trace_ptr, slice, from, to, fraction);
@@ -1081,22 +1054,17 @@ std::unique_ptr<BinSequence> PcapTraceStore::ExtendBinSequence(
   return nc::make_unique<BinSequence>(extended);
 }
 
-void PcapTraceFitStore::AddToStore(nc::net::Bandwidth rate,
-                                   const BinSequence& bin_sequence,
+void PcapTraceFitStore::AddToStore(const BinSequence& bin_sequence,
                                    const std::string& output_file,
                                    PcapDataBinCache* cache) {
-  std::chrono::milliseconds queue_size =
-      bin_sequence.SimulateQueue(rate, cache);
   nc::net::Bandwidth mean_rate = bin_sequence.MeanRate(cache);
 
   PBTracesToFitRate traces_to_fit_rate_pb;
   *traces_to_fit_rate_pb.mutable_bin_sequence() = bin_sequence.ToProtobuf();
-  traces_to_fit_rate_pb.set_max_queue_size_ms(queue_size.count());
-  traces_to_fit_rate_pb.set_rate_mbps(rate.Mbps());
   traces_to_fit_rate_pb.set_mean_rate_mbps(mean_rate.Mbps());
 
-  LOG(INFO) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
-            << output_file;
+  //  LOG(FATAL) << "Adding " << traces_to_fit_rate_pb.DebugString() << " to "
+  //             << output_file;
 
   auto output_stream = GetOutputStream(output_file, true);
   CHECK(WriteDelimitedTo(traces_to_fit_rate_pb, output_stream.get()));
@@ -1117,12 +1085,16 @@ PcapTraceFitStore::PcapTraceFitStore(const std::string& file,
       break;
     }
 
+    PcapDataBinCache cache;
     nc::net::Bandwidth rate = nc::net::Bandwidth::FromMBitsPerSecond(
-        traces_to_fit_rate_pb.rate_mbps());
-    LOG(INFO) << "Loaded traces that fit " << rate.Mbps();
+        traces_to_fit_rate_pb.mean_rate_mbps());
     std::unique_ptr<BinSequence> bin_sequence =
         store_->BinSequenceFromProtobufOrDie(
             traces_to_fit_rate_pb.bin_sequence());
+    LOG(FATAL) << "Loaded traces that fit " << rate.Mbps() << " true rate "
+               << bin_sequence->MeanRate(&cache).Mbps() << " "
+               << traces_to_fit_rate_pb.DebugString();
+
     rate_to_bin_sequence_[rate].emplace_back(std::move(bin_sequence));
   }
 }
