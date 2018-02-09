@@ -12,6 +12,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <ncode/lru_cache.h>
 
 #include "ncode/event_queue.h"
 #include "ncode/htsim/match.h"
@@ -130,9 +131,26 @@ class BinSequence {
 
     // Will assume all bins are from 'trace' * precise_split.
     double precise_split;
+
+    friend bool operator<(const TraceAndSlice& a, const TraceAndSlice& b) {
+      return std::tie(a.trace, a.slice, a.start_bin, a.end_bin,
+                      a.precise_split) < std::tie(b.trace, b.slice, b.start_bin,
+                                                  b.end_bin, b.precise_split);
+    }
+
+    friend bool operator==(const TraceAndSlice& a, const TraceAndSlice& b) {
+      return std::tie(a.trace, a.slice, a.start_bin, a.end_bin,
+                      a.precise_split) == std::tie(b.trace, b.slice,
+                                                   b.start_bin, b.end_bin,
+                                                   b.precise_split);
+    }
   };
 
   BinSequence(const std::vector<TraceAndSlice>& traces);
+
+  BinSequence(std::set<TraceAndSlice>&& traces) : traces_(std::move(traces)) {}
+
+  BinSequence(const std::set<TraceAndSlice>& traces) : traces_(traces) {}
 
   BinSequence(std::vector<TraceAndSlice>::const_iterator from,
               std::vector<TraceAndSlice>::const_iterator to);
@@ -208,7 +226,7 @@ class BinSequence {
   // Serializes this BinSequence.
   PBBinSequence ToProtobuf() const;
 
-  const std::vector<TraceAndSlice>& traces() const { return traces_; }
+  const std::set<TraceAndSlice>& traces() const { return traces_; }
 
  private:
   // Combines every 'bin_size_multiplier' bins into a PcapDataTraceBin and
@@ -216,7 +234,7 @@ class BinSequence {
   std::vector<TrimmedPcapDataTraceBin> AccumulateBinsPrivate(
       size_t bin_size_multiplier, PcapDataBinCache* cache) const;
 
-  std::vector<TraceAndSlice> traces_;
+  std::set<TraceAndSlice> traces_;
 
   DISALLOW_COPY_AND_ASSIGN(BinSequence);
 };
@@ -288,16 +306,77 @@ class PcapDataTrace {
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };
 
+inline void hash_combine(std::size_t& seed) { nc::Unused(seed); }
+
+template <typename T, typename... Rest>
+inline void hash_combine(std::size_t& seed, const T& v, Rest... rest) {
+  std::hash<T> hasher;
+  seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  hash_combine(seed, rest...);
+}
+
+}  // namespace ctr
+
+#define MAKE_HASHABLE(type, ...)                  \
+  namespace std {                                 \
+  template <>                                     \
+  struct hash<type> {                             \
+    std::size_t operator()(const type& t) const { \
+      std::size_t ret = 0;                        \
+      ctr::hash_combine(ret, __VA_ARGS__);        \
+      return ret;                                 \
+    }                                             \
+  };                                              \
+  }
+
+MAKE_HASHABLE(ctr::BinSequence::TraceAndSlice, t.trace, t.slice, t.start_bin,
+              t.end_bin, t.precise_split)
+
+namespace std {
+
+template <>
+struct hash<std::set<ctr::BinSequence::TraceAndSlice>> {
+  typedef std::set<ctr::BinSequence::TraceAndSlice> argument_type;
+  typedef size_t result_type;
+
+  result_type operator()(const argument_type& a) const {
+    hash<ctr::BinSequence::TraceAndSlice> hasher;
+    result_type h = 0;
+
+    for (const ctr::BinSequence::TraceAndSlice& element : a) {
+      h = h * 31 + hasher(element);
+    }
+    return h;
+  }
+};
+
+template <>
+struct hash<ctr::TraceSliceIndex> {
+  typedef ctr::TraceSliceIndex argument_type;
+  typedef size_t result_type;
+
+  result_type operator()(const argument_type& a) const {
+    std::size_t v = a;
+    return hash<std::size_t>()(v);
+  }
+};
+}  // namespace std.
+
+namespace ctr {
+
 // Caches bins.
 class PcapDataBinCache {
  public:
-  PcapDataBinCache() {}
+  PcapDataBinCache() : cached_accumulated_bins_(1000) {}
 
   // Returns the bins from a given slice.
   std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
             std::vector<TrimmedPcapDataTraceBin>::const_iterator>
   Bins(const PcapDataTrace* trace, TraceSliceIndex slice, size_t start_bin,
        size_t end_bin);
+
+  const std::vector<TrimmedPcapDataTraceBin>& AccumulateBins(
+      const std::set<BinSequence::TraceAndSlice>& traces_and_slices);
 
   std::string CacheStats() const;
 
@@ -312,6 +391,10 @@ class PcapDataBinCache {
 
   // The cached data.
   std::map<const PcapDataTrace*, TraceSliceMap<CachedTrace>> cached_bins_;
+
+  // A cache for accumulated bins.
+  nc::LRUCache<std::set<BinSequence::TraceAndSlice>,
+               std::vector<TrimmedPcapDataTraceBin>> cached_accumulated_bins_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataBinCache);
 };
@@ -497,6 +580,6 @@ class BinSequenceGenerator {
   std::vector<TraceAndOffset> all_traces_;
 };
 
-}  // namespace e2e
+}  // namespace ctr
 
 #endif
