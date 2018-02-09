@@ -192,6 +192,7 @@ class NetMock {
   NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
           std::chrono::milliseconds period_duration,
           std::chrono::milliseconds history_bin_size,
+          std::chrono::milliseconds total_duration,
           RoutingSystem* routing_system);
 
   void Run(PcapDataBinCache* cache);

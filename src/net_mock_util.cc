@@ -177,10 +177,11 @@ static void HandleApproximate(
     ctr::RoutingSystem* routing_system) {
   milliseconds round_duration(FLAGS_period_duration_ms);
   milliseconds poll_period(FLAGS_history_bin_size_ms);
+  milliseconds total_duration(FLAGS_duration_ms);
 
   ctr::PcapDataBinCache cache;
   ctr::NetMock net_mock(std::move(initial_sequences), round_duration,
-                        poll_period, routing_system);
+                        poll_period, total_duration, routing_system);
   net_mock.Run(&cache);
 }
 

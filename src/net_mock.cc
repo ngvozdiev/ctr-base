@@ -212,6 +212,7 @@ uint64_t GetFlowCountFromSyns(const std::vector<uint64_t>& syns) {
 NetMock::NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
                  std::chrono::milliseconds period_duration,
                  std::chrono::milliseconds history_bin_size,
+                 std::chrono::milliseconds total_duration,
                  RoutingSystem* routing_system)
     : history_bin_size_(history_bin_size),
       initial_sequences_(std::move(initial_sequences)),
@@ -236,6 +237,10 @@ NetMock::NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
   period_duration_bins_ = period_duration.count() / bin_size.count();
   CHECK(period_duration_bins_ > 0);
   period_count_ = min_bin_count / period_duration_bins_;
+
+  period_count_ = std::min(
+      period_count_,
+      static_cast<size_t>(total_duration.count() / period_duration.count()));
 }
 
 // Generates the input to the system.
