@@ -890,8 +890,7 @@ std::unique_ptr<BinSequence> BinSequence::CutFromStart(
   std::set<TraceAndSlice> new_traces;
   for (const auto& trace_and_slice : traces_) {
     TraceAndSlice new_trace_and_slice = trace_and_slice;
-    new_trace_and_slice.end_bin *=
-        trace_and_slice.start_bin + offset_from_start;
+    new_trace_and_slice.end_bin = trace_and_slice.start_bin + offset_from_start;
     new_traces.emplace(new_trace_and_slice);
   }
 
