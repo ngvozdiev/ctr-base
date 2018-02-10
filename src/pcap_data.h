@@ -97,6 +97,9 @@ struct __attribute__((packed)) TrimmedPcapDataTraceBin {
   // Like above, but does not take a fraction.
   void Combine(const TrimmedPcapDataTraceBin& other);
 
+  // Combines with a protobuf.
+  void Combine(const PBBin& bin);
+
   uint32_t bytes;
   uint32_t flows_enter;
 };
@@ -306,76 +309,12 @@ class PcapDataTrace {
   DISALLOW_COPY_AND_ASSIGN(PcapDataTrace);
 };
 
-inline void hash_combine(std::size_t& seed) { nc::Unused(seed); }
-
-template <typename T, typename... Rest>
-inline void hash_combine(std::size_t& seed, const T& v, Rest... rest) {
-  std::hash<T> hasher;
-  seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  hash_combine(seed, rest...);
-}
-
-}  // namespace ctr
-
-#define MAKE_HASHABLE(type, ...)                  \
-  namespace std {                                 \
-  template <>                                     \
-  struct hash<type> {                             \
-    std::size_t operator()(const type& t) const { \
-      std::size_t ret = 0;                        \
-      ctr::hash_combine(ret, __VA_ARGS__);        \
-      return ret;                                 \
-    }                                             \
-  };                                              \
-  }
-
-MAKE_HASHABLE(ctr::BinSequence::TraceAndSlice, t.trace, t.slice, t.start_bin,
-              t.end_bin, t.precise_split)
-
-namespace std {
-
-template <>
-struct hash<std::set<ctr::BinSequence::TraceAndSlice>> {
-  typedef std::set<ctr::BinSequence::TraceAndSlice> argument_type;
-  typedef size_t result_type;
-
-  result_type operator()(const argument_type& a) const {
-    hash<ctr::BinSequence::TraceAndSlice> hasher;
-    result_type h = 0;
-
-    for (const ctr::BinSequence::TraceAndSlice& element : a) {
-      h = h * 31 + hasher(element);
-    }
-    return h;
-  }
-};
-
-template <>
-struct hash<ctr::TraceSliceIndex> {
-  typedef ctr::TraceSliceIndex argument_type;
-  typedef size_t result_type;
-
-  result_type operator()(const argument_type& a) const {
-    std::size_t v = a;
-    return hash<std::size_t>()(v);
-  }
-};
-}  // namespace std.
-
-namespace ctr {
-
 // Caches bins.
 class PcapDataBinCache {
  public:
-  PcapDataBinCache() : cached_accumulated_bins_(1000) {}
+  PcapDataBinCache() {}
 
-  // Returns the bins from a given slice.
-  std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
-            std::vector<TrimmedPcapDataTraceBin>::const_iterator>
-  Bins(const PcapDataTrace* trace, TraceSliceIndex slice, size_t start_bin,
-       size_t end_bin);
-
-  const std::vector<TrimmedPcapDataTraceBin>& AccumulateBins(
+  std::vector<TrimmedPcapDataTraceBin> AccumulateBins(
       const std::set<BinSequence::TraceAndSlice>& traces_and_slices);
 
   std::string CacheStats() const;
@@ -389,12 +328,24 @@ class PcapDataBinCache {
     std::vector<TrimmedPcapDataTraceBin> bins;
   };
 
-  // The cached data.
-  std::map<const PcapDataTrace*, TraceSliceMap<CachedTrace>> cached_bins_;
+  struct CacheKey {
+    const PcapDataTrace* trace;
+    TraceSliceSet slices;
+  };
 
-  // A cache for accumulated bins.
-  nc::LRUCache<std::set<BinSequence::TraceAndSlice>,
-               std::vector<TrimmedPcapDataTraceBin>> cached_accumulated_bins_;
+  // Returns the bins from a given slice.
+  std::pair<std::vector<TrimmedPcapDataTraceBin>::const_iterator,
+            std::vector<TrimmedPcapDataTraceBin>::const_iterator>
+  Bins(size_t key_index, size_t start_bin, size_t end_bin);
+
+  size_t FindOrInsertKey(const PcapDataTrace* trace,
+                         const TraceSliceSet& slices);
+
+  // The cached data. The key is an index into keys_.
+  std::map<size_t, CachedTrace> cached_bins_;
+
+  // The keys.
+  std::vector<CacheKey> keys_;
 
   DISALLOW_COPY_AND_ASSIGN(PcapDataBinCache);
 };
