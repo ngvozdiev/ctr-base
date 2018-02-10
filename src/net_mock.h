@@ -209,7 +209,7 @@ class NetMock {
 
   // For each link returns what the residuals will be for an optimization
   // output.
-  nc::net::GraphLinkMap<std::vector<double>> CheckOutput(
+  nc::net::GraphLinkMap<std::vector<std::pair<double, double>>> CheckOutput(
       const std::map<AggregateId, BinSequence>& period_sequences,
       const RoutingConfiguration& configuration, PcapDataBinCache* cache) const;
 

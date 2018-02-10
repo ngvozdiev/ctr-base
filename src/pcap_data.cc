@@ -843,31 +843,34 @@ const std::chrono::microseconds BinSequence::bin_size() const {
 std::chrono::milliseconds BinSequence::SimulateQueue(
     nc::net::Bandwidth rate, PcapDataBinCache* cache) const {
   double rate_Bps = rate.bps() / 8.0;
-  std::vector<double> residuals = Residuals(rate, cache);
-  CHECK(!residuals.empty());
-  double max_queue_size_bytes =
-      *std::max_element(residuals.begin(), residuals.end());
+  std::vector<std::pair<double, double>> bins_and_residuals =
+      Residuals(rate, cache);
+  double max_queue_size_bytes = 0;
+  for (const auto& bin_and_residual : bins_and_residuals) {
+    max_queue_size_bytes =
+        std::max(max_queue_size_bytes, bin_and_residual.second);
+  }
 
   double max_queue_size_sec = max_queue_size_bytes / rate_Bps;
   return std::chrono::milliseconds(
       static_cast<uint64_t>(max_queue_size_sec * 1000));
 }
 
-std::vector<double> BinSequence::Residuals(nc::net::Bandwidth rate,
-                                           PcapDataBinCache* cache) const {
+std::vector<std::pair<double, double>> BinSequence::Residuals(
+    nc::net::Bandwidth rate, PcapDataBinCache* cache) const {
   double rate_Bps = rate.bps() / 8.0;
   double bins_in_second =
       1.0 / std::chrono::duration<double>(bin_size()).count();
   double bytes_per_bin = rate_Bps / bins_in_second;
 
-  std::vector<double> out;
+  std::vector<std::pair<double, double>> out;
   std::vector<TrimmedPcapDataTraceBin> bins = AccumulateBinsPrivate(1, cache);
   double queue_size_bytes = 0;
   for (size_t i = 0; i < bins.size(); ++i) {
     queue_size_bytes += bins[i].bytes;
     queue_size_bytes -= bytes_per_bin;
     queue_size_bytes = std::max(queue_size_bytes, 0.0);
-    out.emplace_back(queue_size_bytes);
+    out.emplace_back(bins[i].bytes, queue_size_bytes);
   }
 
   return out;

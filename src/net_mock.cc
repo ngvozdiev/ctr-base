@@ -20,8 +20,14 @@ DEFINE_bool(precise_splits, false, "If true all splits will be precise");
 static auto* link_utilization_metric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string>(
-            "link_utilization", "Records per-link utilization", "Link source",
-            "Link destination");
+            "link_utilization (bytes per bin)", "Records per-link utilization",
+            "Link source", "Link destination");
+
+static auto* queue_size_metric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "queue size (in bytes)", "Records per-link queue size",
+            "Link source", "Link destination");
 
 void MockSimDevice::HandleStateUpdate(
     const nc::htsim::SSCPAddOrUpdate& update) {
@@ -260,9 +266,10 @@ std::map<AggregateId, AggregateHistory> NetMock::GenerateInput(
   return input;
 }
 
-nc::net::GraphLinkMap<std::vector<double>> NetMock::CheckOutput(
-    const std::map<AggregateId, BinSequence>& period_sequences,
-    const RoutingConfiguration& configuration, PcapDataBinCache* cache) const {
+nc::net::GraphLinkMap<std::vector<std::pair<double, double>>>
+NetMock::CheckOutput(const std::map<AggregateId, BinSequence>& period_sequences,
+                     const RoutingConfiguration& configuration,
+                     PcapDataBinCache* cache) const {
   nc::net::GraphLinkMap<std::unique_ptr<BinSequence>> link_to_bins;
 
   // First need to figure out which paths cross each link. Will also build a
@@ -294,7 +301,7 @@ nc::net::GraphLinkMap<std::vector<double>> NetMock::CheckOutput(
     }
   }
 
-  nc::net::GraphLinkMap<std::vector<double>> out;
+  nc::net::GraphLinkMap<std::vector<std::pair<double, double>>> out;
   for (const auto& link_and_bins : link_to_bins) {
     nc::net::GraphLinkIndex link = link_and_bins.first;
     nc::net::Bandwidth rate = graph_->GetLink(link)->bandwidth();
@@ -331,11 +338,11 @@ std::unique_ptr<RoutingConfiguration> NetMock::InitialOutput(
   return routing_system_->Update(input).routing;
 }
 
-static size_t CheckSameSize(
-    const nc::net::GraphLinkMap<std::vector<double>>& values) {
+static size_t CheckSameSize(const nc::net::GraphLinkMap<
+                            std::vector<std::pair<double, double>>>& values) {
   size_t i = 0;
   for (const auto& link_and_values : values) {
-    const std::vector<double>& v = *link_and_values.second;
+    const auto& v = *link_and_values.second;
     CHECK(v.size() > 0);
     if (i == 0) {
       i = v.size();
@@ -354,20 +361,27 @@ void NetMock::Run(PcapDataBinCache* cache) {
     LOG(ERROR) << "Period " << i;
 
     std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(i);
-    nc::net::GraphLinkMap<std::vector<double>> per_link_residuals =
-        CheckOutput(period_sequences, *output, cache);
+    nc::net::GraphLinkMap<std::vector<std::pair<double, double>>>
+        per_link_residuals = CheckOutput(period_sequences, *output, cache);
     size_t num_residuals = CheckSameSize(per_link_residuals);
 
-    for (auto link_and_residuals : per_link_residuals) {
+    for (const auto& link_and_residuals : per_link_residuals) {
       nc::net::GraphLinkIndex link = link_and_residuals.first;
-      std::vector<double>& residuals = *link_and_residuals.second;
+      const std::vector<std::pair<double, double>>& bins_and_residuals =
+          *link_and_residuals.second;
 
       const nc::net::GraphLink* link_ptr = graph_->GetLink(link);
-      auto* handle = link_utilization_metric->GetHandle(link_ptr->src_id(),
-                                                        link_ptr->dst_id());
+      auto* link_utilization_handle = link_utilization_metric->GetHandle(
+          link_ptr->src_id(), link_ptr->dst_id());
+      auto* link_queue_size_handle =
+          queue_size_metric->GetHandle(link_ptr->src_id(), link_ptr->dst_id());
+
       size_t t = timestamp;
-      for (double v : residuals) {
-        handle->AddValueWithTimestamp(t++, v);
+      for (size_t i = 0; i < bins_and_residuals.size(); ++i) {
+        link_utilization_handle->AddValueWithTimestamp(
+            t, bins_and_residuals[i].first);
+        link_queue_size_handle->AddValueWithTimestamp(
+            t++, bins_and_residuals[i].second);
       }
     }
 

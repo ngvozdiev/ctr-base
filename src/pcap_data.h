@@ -188,9 +188,10 @@ class BinSequence {
   std::chrono::milliseconds SimulateQueue(nc::net::Bandwidth rate,
                                           PcapDataBinCache* cache) const;
 
-  // Same as SimulateQueue, but returns the queue occupancy at each bin.
-  std::vector<double> Residuals(nc::net::Bandwidth rate,
-                                PcapDataBinCache* cache) const;
+  // Same as SimulateQueue, but returns the bytes in bin and queue occupancy at
+  // each bin.
+  std::vector<std::pair<double, double>> Residuals(
+      nc::net::Bandwidth rate, PcapDataBinCache* cache) const;
 
   // Generates an AggregateHistory from the entire range of this BinSequence.
   // Each of the history's bins will combine 'history_bin_size' bins from this
