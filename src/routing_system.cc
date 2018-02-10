@@ -261,6 +261,8 @@ RoutingSystemUpdateResult RoutingSystem::Update(
     std::set<AggregateId> aggregates_no_fit;
     std::tie(aggregates_no_fit, competing_aggregates) =
         CheckWithProbModel(*output, next_history);
+    LOG(INFO) << aggregates_no_fit.size() << " aggregates do not fit at pass "
+              << i_count;
     if (aggregates_no_fit.empty()) {
       break;
     }
