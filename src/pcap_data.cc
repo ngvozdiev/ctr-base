@@ -609,6 +609,9 @@ PcapDataBinCache::Bins(size_t key_index, size_t start_bin, size_t end_bin) {
   bins.reserve(to_bring_in);
 
   size_t to_bring_in_end = std::min(start_bin + to_bring_in, bin_count);
+  LOG(INFO) << "Will cache " << key.slices.Count() << " slices from "
+            << trace->id().ToString() << " between " << start_bin << " and "
+            << to_bring_in_end;
   for (TraceSliceIndex slice : key.slices) {
     size_t i = 0;
     trace->BinsFromDisk(slice, start_bin, to_bring_in_end,
