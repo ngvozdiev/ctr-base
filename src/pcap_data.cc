@@ -617,7 +617,7 @@ PcapDataBinCache::Bins(size_t key_index, size_t start_bin, size_t end_bin) {
     trace->BinsFromDisk(slice, start_bin, to_bring_in_end,
                         [&bins, &i](const PBBin& bin) {
                           bins.resize(std::max(bins.size(), i + 1));
-                          bins[i].Combine(bin);
+                          bins[i++].Combine(bin);
                         });
   }
 
