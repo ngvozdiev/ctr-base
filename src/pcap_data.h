@@ -83,7 +83,7 @@ struct PcapDataTraceBin {
 
 // A variant of the struct above that only keeps track of bytes and flows
 // entered.
-struct __attribute__((packed)) TrimmedPcapDataTraceBin {
+struct TrimmedPcapDataTraceBin {
   TrimmedPcapDataTraceBin() : bytes(0), flows_enter(0) {}
 
   TrimmedPcapDataTraceBin(const PBBin& bin_pb)
