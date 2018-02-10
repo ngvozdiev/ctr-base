@@ -20,13 +20,13 @@ DEFINE_bool(precise_splits, false, "If true all splits will be precise");
 static auto* link_utilization_metric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string>(
-            "link_utilization (bytes per bin)", "Records per-link utilization",
+            "link_utilization", "Records per-link utilization (bytes per bin)",
             "Link source", "Link destination");
 
 static auto* queue_size_metric =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string>(
-            "queue size (in bytes)", "Records per-link queue size",
+            "queue_size", "Records per-link queue size (in bytes)",
             "Link source", "Link destination");
 
 void MockSimDevice::HandleStateUpdate(
