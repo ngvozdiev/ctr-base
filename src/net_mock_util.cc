@@ -263,6 +263,8 @@ int main(int argc, char** argv) {
   ctr::RoutingSystemConfig routing_system_config;
   routing_system_config.prob_model_config = prob_model_config;
   routing_system_config.store_to_metrics = false;
+  routing_system_config.link_capacity_multiplier =
+      FLAGS_link_capacity_multiplier;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 

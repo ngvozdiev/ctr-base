@@ -354,7 +354,8 @@ RoutingSystem::CheckWithProbModel(
     queries.emplace_back();
     ProbModelQuery& query = queries.back();
     query.type = ProbModelQuery::BOTH;
-    query.rate = graph_->GetLink(link)->bandwidth();
+    query.rate =
+        graph_->GetLink(link)->bandwidth() * config_.link_capacity_multiplier;
     query.aggregates = aggregates_and_fractions;
   }
 
@@ -477,6 +478,9 @@ bool RoutingSystem::ScaleUpAggregates(
     const AggregateHistory& history = aggregate_and_history.second;
     nc::net::Bandwidth mean_rate = history.mean_rate();
     nc::net::Bandwidth max_rate = history.max_rate();
+    if (mean_rate == nc::net::Bandwidth::Zero()) {
+      continue;
+    }
 
     const double range_mbps = max_rate.Mbps() - mean_rate.Mbps();
     if (range_mbps == 0) {

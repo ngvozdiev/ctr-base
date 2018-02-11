@@ -17,6 +17,10 @@ struct RoutingSystemConfig {
   // If true will store information about the routing system to metrics.
   bool store_to_metrics = true;
 
+  // When performing variability tests each link's rate will be multiplied by
+  // this number.
+  double link_capacity_multiplier = 1.0;
+
   ProbModelConfig prob_model_config;
 };
 

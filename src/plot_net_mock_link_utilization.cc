@@ -41,16 +41,17 @@ static std::chrono::milliseconds GetBinSize() {
   return std::chrono::milliseconds(static_cast<uint64_t>(values[0]));
 }
 
-static nc::net::Bandwidth GetLinkRate(const StrPair& link_src_and_dst) {
+static nc::net::Bandwidth GetLinkRate(const std::string& link_src_and_dst) {
+  LOG(INFO) << link_src_and_dst;
   std::map<StrPair, std::vector<double>> data =
       SimpleParseNumericDataNoTimestamps(FLAGS_input, kLinkRateMetric, ".*");
-  const std::vector<double>& values =
-      nc::FindOrDieNoPrint(data, link_src_and_dst);
+  const std::vector<double>& values = nc::FindOrDieNoPrint(
+      data, std::make_pair(kLinkRateMetric, link_src_and_dst));
   CHECK(values.size() == 1);
   return nc::net::Bandwidth::FromMBitsPerSecond(values[0]);
 }
 
-static double GetAverageUtilization(const StrPair& link_src_and_dst,
+static double GetAverageUtilization(const std::string& link_src_and_dst,
                                     const NumDataVector& link_utilization,
                                     std::chrono::milliseconds bin_size) {
   nc::net::Bandwidth link_rate = GetLinkRate(link_src_and_dst);
@@ -69,7 +70,7 @@ static double GetAverageUtilization(const StrPair& link_src_and_dst,
   return total_bytes / total_link_bytes;
 }
 
-static void PlotLink(const StrPair& link_src_and_dst,
+static void PlotLink(const std::string& link_src_and_dst,
                      const NumDataVector& link_utilization,
                      const std::string& output,
                      std::chrono::milliseconds bin_size) {
@@ -103,7 +104,7 @@ static void PlotTopNLinks(size_t n) {
                              std::numeric_limits<uint64_t>::max(), 0);
   std::map<double, std::map<StrPair, NumDataVector>::const_iterator> top_links;
   for (auto it = data.cbegin(); it != data.cend(); ++it) {
-    const StrPair& src_and_dst = it->first;
+    const std::string& src_and_dst = it->first.second;
     const NumDataVector& data_vector = it->second;
 
     double avg_utilization =
@@ -115,7 +116,7 @@ static void PlotTopNLinks(size_t n) {
   for (auto rit = top_links.rbegin(); rit != top_links.rend(); ++rit) {
     double avg_utilization = rit->first;
     auto data_it = rit->second;
-    const StrPair& src_and_dst = data_it->first;
+    const std::string& src_and_dst = data_it->first.second;
     const NumDataVector& data_vector = data_it->second;
 
     std::string out = nc::StrCat("link_top_", top_n);
