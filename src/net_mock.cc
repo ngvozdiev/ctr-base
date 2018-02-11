@@ -29,6 +29,16 @@ static auto* queue_size_metric =
             "queue_size", "Records per-link queue size (in bytes)",
             "Link source", "Link destination");
 
+static auto* link_rate_metric =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<double, std::string, std::string>(
+            "link_rate_Mbps", "Records per-link rate, only contains one value",
+            "Link source", "Link destination");
+
+static auto* bin_size_metric =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
+        "bin_size_ms", "Records how long (in milliseconds) is each bin");
+
 void MockSimDevice::HandleStateUpdate(
     const nc::htsim::SSCPAddOrUpdate& update) {
   nc::htsim::MatchRule* rule = update.MutableRule();
@@ -247,6 +257,13 @@ NetMock::NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
   period_count_ = std::min(
       period_count_,
       static_cast<size_t>(total_duration.count() / period_duration.count()));
+
+  bin_size_metric->GetHandle()->AddValue(bin_size.count());
+  for (nc::net::GraphLinkIndex link : graph_->AllLinks()) {
+    const nc::net::GraphLink* link_ptr = graph_->GetLink(link);
+    link_rate_metric->GetHandle(link_ptr->src_id(), link_ptr->dst_id())
+        ->AddValue(link_ptr->bandwidth().Mbps());
+  }
 }
 
 // Generates the input to the system.

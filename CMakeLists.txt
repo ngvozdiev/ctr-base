@@ -154,6 +154,9 @@ target_link_libraries(plot_sig_paper_eval alg_eval_tools)
 add_executable(plot_link_utilizations src/plot_link_utilizations.cc)
 target_link_libraries(plot_link_utilizations ctr_base demand_matrix_input gflags)
 
+add_executable(plot_net_mock_link_utilization src/plot_net_mock_link_utilization.cc)
+target_link_libraries(plot_net_mock_link_utilization metrics_parser gflags)
+
 add_executable(plot_difference src/plot_difference.cc)
 target_link_libraries(plot_difference ctr_base demand_matrix_input gflags)
 
