@@ -77,8 +77,8 @@ static std::unique_ptr<ctr::BinSequence> ThinSequence(
   double scale = target_rate / bw;
   auto out = std::move(thinned->PreciseSplitOrDie({scale})[0]);
 
-  nc::net::Bandwidth rate_after_thinning = bin_sequence.MeanRate(cache);
-  nc::net::Bandwidth max_rate_after_thinning = bin_sequence.MaxRate(cache);
+  nc::net::Bandwidth rate_after_thinning = out->MeanRate(cache);
+  nc::net::Bandwidth max_rate_after_thinning = out->MaxRate(cache);
 
   LOG(INFO) << "Will thin aggregate with rate " << target_rate.Mbps() << " max "
             << max_rate.Mbps() << " to rate " << rate_after_thinning.Mbps()
