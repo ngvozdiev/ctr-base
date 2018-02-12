@@ -50,7 +50,8 @@ class RoutingSystem {
   virtual ~RoutingSystem() {}
 
   RoutingSystemUpdateResult Update(
-      const std::map<AggregateId, AggregateHistory>& history);
+      const std::map<AggregateId, AggregateHistory>& history,
+      const std::map<AggregateId, nc::net::Bandwidth>& mean_hints = {});
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 

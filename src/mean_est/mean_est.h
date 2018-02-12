@@ -29,6 +29,12 @@ class PerAggregateMeanEstimatorFactory {
 // previous minutes.
 class MeanEstimator {
  public:
+  // Scales aggregates so that they have a new mean by shifting the bins up or
+  // down.
+  static std::map<AggregateId, AggregateHistory> ScaleMeans(
+      const std::map<AggregateId, AggregateHistory>& current,
+      const std::map<AggregateId, nc::net::Bandwidth>& new_means);
+
   MeanEstimator(PerAggregateMeanEstimatorFactory* estimator_factory)
       : estimator_factory_(estimator_factory) {}
 

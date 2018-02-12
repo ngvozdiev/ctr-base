@@ -217,11 +217,16 @@ static void RecordPathSplitsAndTotalDelay(
 }
 
 RoutingSystemUpdateResult RoutingSystem::Update(
-    const std::map<AggregateId, AggregateHistory>& history) {
+    const std::map<AggregateId, AggregateHistory>& history,
+    const std::map<AggregateId, nc::net::Bandwidth>& mean_hints) {
   // First we will predict what the history is expected to be on the next
   // timestep.
-  std::map<AggregateId, AggregateHistory> next_history =
-      estimator_.EstimateNext(history);
+  std::map<AggregateId, AggregateHistory> next_history;
+  if (mean_hints.empty()) {
+    next_history = estimator_.EstimateNext(history);
+  } else {
+    next_history = MeanEstimator::ScaleMeans(history, mean_hints);
+  }
   CHECK(next_history.size() == history.size());
 
   // The initial input will assign all aggregates to their mean level.

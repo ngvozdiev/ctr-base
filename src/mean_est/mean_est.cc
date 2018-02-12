@@ -9,9 +9,41 @@
 
 namespace ctr {
 
+std::map<AggregateId, AggregateHistory> MeanEstimator::ScaleMeans(
+    const std::map<AggregateId, AggregateHistory>& current,
+    const std::map<AggregateId, nc::net::Bandwidth>& new_means) {
+  std::map<AggregateId, AggregateHistory> out;
+  for (const auto& aggregate_and_history : current) {
+    const AggregateId& aggregate_id = aggregate_and_history.first;
+    const AggregateHistory& history = aggregate_and_history.second;
+
+    double rate_mbps = history.mean_rate().Mbps();
+    double next_mbps = nc::FindOrDieNoPrint(new_means, aggregate_id).Mbps();
+
+    // Need to scale the AggregateHistory so that its mean is not at
+    // rate_mbps, but at next_mbps.
+    double delta_mbps = next_mbps - rate_mbps;
+
+    if (delta_mbps > 0) {
+      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
+                  std::make_tuple(history.AddRate(
+                      nc::net::Bandwidth::FromMBitsPerSecond(delta_mbps))));
+    } else if (delta_mbps < 0) {
+      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
+                  std::make_tuple(history.SubtractRate(
+                      nc::net::Bandwidth::FromMBitsPerSecond(-delta_mbps))));
+    } else {
+      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
+                  std::make_tuple(history));
+    }
+  }
+
+  return out;
+}
+
 std::map<AggregateId, AggregateHistory> MeanEstimator::EstimateNext(
     const std::map<AggregateId, AggregateHistory>& current) {
-  std::map<AggregateId, AggregateHistory> out;
+  std::map<AggregateId, nc::net::Bandwidth> new_means;
   for (const auto& aggregate_and_history : current) {
     const AggregateId& aggregate_id = aggregate_and_history.first;
     const AggregateHistory& history = aggregate_and_history.second;
@@ -34,25 +66,10 @@ std::map<AggregateId, AggregateHistory> MeanEstimator::EstimateNext(
         state.previous_values, state.previous_estimates);
     CHECK(next_mbps >= 0);
     state.previous_estimates.emplace_back(next_mbps);
-
-    // Need to scale the AggregateHistory so that its mean is not at
-    // rate_mbps, but at next_mbps.
-    double delta_mbps = next_mbps - rate_mbps;
-
-    if (delta_mbps > 0) {
-      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
-                  std::make_tuple(history.AddRate(
-                      nc::net::Bandwidth::FromMBitsPerSecond(delta_mbps))));
-    } else if (delta_mbps < 0) {
-      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
-                  std::make_tuple(history.SubtractRate(
-                      nc::net::Bandwidth::FromMBitsPerSecond(-delta_mbps))));
-    } else {
-      out.emplace(std::piecewise_construct, std::make_tuple(aggregate_id),
-                  std::make_tuple(history));
-    }
+    new_means[aggregate_id] = nc::net::Bandwidth::FromMBitsPerSecond(next_mbps);
   }
-  return out;
+
+  return MeanEstimator::ScaleMeans(current, new_means);
 }
 
 MeanScaleEstimatorConfig::MeanScaleEstimatorConfig(double fixed_headroom,

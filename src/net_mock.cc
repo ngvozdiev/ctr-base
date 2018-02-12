@@ -15,7 +15,9 @@
 
 namespace ctr {
 
-DEFINE_bool(precise_splits, false, "If true all splits will be precise");
+DEFINE_bool(
+    mean_hints, false,
+    "If true each period's aggregate mean level will be set to the ideal one.");
 
 static auto* link_utilization_metric =
     nc::metrics::DefaultMetricManager()
@@ -371,6 +373,23 @@ static size_t CheckSameSize(const nc::net::GraphLinkMap<
   return i;
 }
 
+std::map<AggregateId, nc::net::Bandwidth> NetMock::GetMeansForNthPeriod(
+    size_t n, PcapDataBinCache* cache) const {
+  std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(n);
+  std::map<AggregateId, nc::net::Bandwidth> out;
+  for (const auto& id_and_sequence : period_sequences) {
+    const AggregateId& id = id_and_sequence.first;
+    nc::net::Bandwidth mean_level = id_and_sequence.second.MeanRate(cache);
+    if (mean_level == nc::net::Bandwidth::Zero()) {
+      mean_level = nc::net::Bandwidth::FromBitsPerSecond(10);
+    }
+
+    out[id] = mean_level;
+  }
+
+  return out;
+}
+
 void NetMock::Run(PcapDataBinCache* cache) {
   std::unique_ptr<RoutingConfiguration> output = InitialOutput(cache);
   size_t timestamp = 0;
@@ -405,7 +424,16 @@ void NetMock::Run(PcapDataBinCache* cache) {
     timestamp += num_residuals;
     std::map<AggregateId, AggregateHistory> input =
         GenerateInput(period_sequences, cache);
-    output = std::move(routing_system_->Update(input).routing);
+    if (FLAGS_mean_hints) {
+      std::map<AggregateId, nc::net::Bandwidth> next_period_means =
+          GetMeansForNthPeriod(i + 1, cache);
+      RoutingSystemUpdateResult result =
+          routing_system_->Update(input, next_period_means);
+      output = std::move(result.routing);
+    } else {
+      RoutingSystemUpdateResult result = routing_system_->Update(input);
+      output = std::move(result.routing);
+    }
   }
 }
 

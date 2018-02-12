@@ -215,6 +215,9 @@ class NetMock {
 
   std::map<AggregateId, BinSequence> GetNthPeriod(size_t n) const;
 
+  std::map<AggregateId, nc::net::Bandwidth> GetMeansForNthPeriod(
+      size_t n, PcapDataBinCache* cache) const;
+
   std::unique_ptr<RoutingConfiguration> InitialOutput(
       PcapDataBinCache* cache) const;
 
