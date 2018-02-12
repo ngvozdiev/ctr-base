@@ -230,6 +230,9 @@ class BinSequence {
   // Serializes this BinSequence.
   PBBinSequence ToProtobuf() const;
 
+  // Removes a fraction of this trace's slices.
+  std::unique_ptr<BinSequence> Thin(double fraction) const;
+
   const std::set<TraceAndSlice>& traces() const { return traces_; }
 
  private:

@@ -26,6 +26,7 @@ DEFINE_uint64(n, 10, "Will plot the top N links");
 static constexpr char kLinkUtilizationMetric[] = "link_utilization";
 static constexpr char kLinkRateMetric[] = "link_rate_Mbps";
 static constexpr char kBinSizeMetric[] = "bin_size_ms";
+static constexpr char kQueueSizeMetric[] = "queue_size";
 
 using namespace nc;
 using namespace nc::metrics::parser;
@@ -68,6 +69,21 @@ static double GetAverageUtilization(const std::string& link_src_and_dst,
   size_t bin_count = link_utilization.size();
   double total_link_bytes = bytes_per_bin * bin_count;
   return total_bytes / total_link_bytes;
+}
+
+static std::chrono::milliseconds GetMaxQueueSize(
+    const std::string& link_src_and_dst,
+    const NumDataVector& link_queue_sizes) {
+  double max_queue_size_bytes = 0;
+  for (const auto& queue_sizes : link_queue_sizes) {
+    max_queue_size_bytes = std::max(queue_sizes.second, max_queue_size_bytes);
+  }
+
+  nc::net::Bandwidth link_rate = GetLinkRate(link_src_and_dst);
+  double bytes_per_sec = link_rate.bps() / 8.0;
+  double queue_size_sec = max_queue_size_bytes / bytes_per_sec;
+  return std::chrono::milliseconds(
+      static_cast<uint64_t>(queue_size_sec * 1000));
 }
 
 static void PlotLink(const std::string& link_src_and_dst,
@@ -137,7 +153,7 @@ static void PlotTopNLinks(size_t n) {
   utilization_cdf.PlotToDir("all_utilizations");
 }
 
-static void PlotLinkUtilizationDeltas() {
+static std::vector<std::string> PlotLinkUtilizationDeltas() {
   std::chrono::milliseconds bin_size = GetBinSize();
 
   std::map<StrPair, NumDataVector> data =
@@ -147,7 +163,7 @@ static void PlotLinkUtilizationDeltas() {
       SimpleParseNumericData(FLAGS_input_pinned, kLinkUtilizationMetric, ".*",
                              0, std::numeric_limits<uint64_t>::max(), 0);
 
-  std::vector<std::pair<double, bool>> deltas;
+  std::vector<std::tuple<double, double, std::string>> deltas;
   for (const auto& id_and_rest : data) {
     const StrPair& id = id_and_rest.first;
     const NumDataVector& data_vector = id_and_rest.second;
@@ -158,33 +174,68 @@ static void PlotLinkUtilizationDeltas() {
         GetAverageUtilization(id.second, data_vector, bin_size);
     double avg_utilization_pinned =
         GetAverageUtilization(id.second, data_vector_pinned, bin_size);
-    double delta = avg_utilization - avg_utilization_pinned;
-    bool top_utilization = avg_utilization_pinned > 0.999;
-    deltas.emplace_back(delta, top_utilization);
+    deltas.emplace_back(avg_utilization_pinned, avg_utilization, id.second);
   }
 
   std::sort(deltas.begin(), deltas.end());
 
   std::vector<std::pair<double, double>> to_plot;
-  std::vector<std::pair<double, double>> to_plot_top_utilization;
-  for (size_t i = 0; i < deltas.size(); ++i) {
-    double delta;
-    bool top_utilization;
-    std::tie(delta, top_utilization) = deltas[i];
+  std::vector<std::pair<double, double>> to_plot_pinned;
 
-    if (top_utilization) {
-      to_plot_top_utilization.emplace_back(delta, i);
-    } else {
-      to_plot.emplace_back(delta, i);
-    }
+  std::vector<std::string> out;
+  for (size_t i = 0; i < deltas.size(); ++i) {
+    double avg_utilization;
+    double avg_utilization_pinned;
+    std::string link;
+    std::tie(avg_utilization_pinned, avg_utilization, link) = deltas[i];
+
+    to_plot.emplace_back(avg_utilization, i);
+    to_plot_pinned.emplace_back(avg_utilization_pinned, i);
+    out.emplace_back(link);
   }
 
   nc::viz::LinePlot scatter_plot(
-      {"Delta link utilization", "utilization - utilization pinned", "link"});
+      {"Link utilization", "utilization", "link (ranked)"});
   scatter_plot.TurnIntoScatterPlot();
-  scatter_plot.AddData("other", to_plot);
-  scatter_plot.AddData("top_utilization", to_plot_top_utilization);
+  scatter_plot.AddData("regular", to_plot);
+  scatter_plot.AddData("pinned", to_plot_pinned);
   scatter_plot.PlotToDir("utilization_deltas");
+
+  return out;
+}
+
+static void PlotMaxQueueSizeDeltas(const std::vector<std::string>& link_order) {
+  std::map<StrPair, NumDataVector> data =
+      SimpleParseNumericData(FLAGS_input, kQueueSizeMetric, ".*", 0,
+                             std::numeric_limits<uint64_t>::max(), 0);
+  std::map<StrPair, NumDataVector> data_pinned =
+      SimpleParseNumericData(FLAGS_input_pinned, kQueueSizeMetric, ".*", 0,
+                             std::numeric_limits<uint64_t>::max(), 0);
+
+  std::vector<std::pair<double, double>> to_plot;
+  std::vector<std::pair<double, double>> to_plot_pinned;
+  for (size_t y = 0; y < link_order.size(); ++y) {
+    const std::string& link = link_order[y];
+
+    const NumDataVector& data_vector =
+        nc::FindOrDieNoPrint(data, std::make_pair(kQueueSizeMetric, link));
+    const NumDataVector& data_vector_pinned = nc::FindOrDieNoPrint(
+        data_pinned, std::make_pair(kQueueSizeMetric, link));
+
+    std::chrono::milliseconds queue_size = GetMaxQueueSize(link, data_vector);
+    std::chrono::milliseconds queue_size_pinned =
+        GetMaxQueueSize(link, data_vector_pinned);
+
+    to_plot.emplace_back(queue_size.count(), y);
+    to_plot_pinned.emplace_back(queue_size_pinned.count(), y);
+  }
+
+  nc::viz::LinePlot scatter_plot(
+      {"Queue sizes", "queue size (ms)", "link (ranked by delta utilization)"});
+  scatter_plot.TurnIntoScatterPlot();
+  scatter_plot.AddData("regular", to_plot);
+  scatter_plot.AddData("pinned", to_plot_pinned);
+  scatter_plot.PlotToDir("queue_sizes");
 }
 
 int main(int argc, char** argv) {
@@ -193,7 +244,8 @@ int main(int argc, char** argv) {
 
   PlotTopNLinks(FLAGS_n);
   if (!FLAGS_input_pinned.empty()) {
-    PlotLinkUtilizationDeltas();
+    std::vector<std::string> link_order = PlotLinkUtilizationDeltas();
+    PlotMaxQueueSizeDeltas(link_order);
   }
   return 0;
 }

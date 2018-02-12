@@ -835,6 +835,23 @@ PBBinSequence BinSequence::ToProtobuf() const {
   return out;
 }
 
+std::unique_ptr<BinSequence> BinSequence::Thin(double fraction) const {
+  CHECK(fraction <= 1);
+  CHECK(fraction >= 0);
+  size_t new_size = traces_.size() * fraction;
+
+  std::vector<TraceAndSlice> new_traces;
+  for (const auto& trace_and_slice : traces_) {
+    if (new_traces.size() == new_size) {
+      break;
+    }
+
+    new_traces.emplace_back(trace_and_slice);
+  }
+
+  return nc::make_unique<BinSequence>(new_traces);
+}
+
 const std::chrono::microseconds BinSequence::bin_size() const {
   CHECK(!traces_.empty());
   return traces_.begin()->trace->base_bin_size();

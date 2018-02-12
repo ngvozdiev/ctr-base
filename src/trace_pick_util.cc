@@ -33,6 +33,10 @@ DEFINE_uint64(passes, 10, "Number of passes to perform for each rate");
 DEFINE_string(to_exclude,
               "equinix-sanjose_A_12_19_2013,equinix-chicago_A_11_21_2013",
               "Traces to exclude");
+DEFINE_double(thin_fraction, 0.0, "Fraction of aggregates to thin");
+DEFINE_double(
+    thin_magnitude, 0.1,
+    "What fraction of slices to keep for aggregates that are thinned");
 
 using Input = std::tuple<nc::net::Bandwidth, size_t, ctr::PcapDataBinCache*,
                          const ctr::BinSequenceGenerator*>;
@@ -61,6 +65,16 @@ static std::unique_ptr<ctr::BinSequence> HandleMatrixElement(
 static std::string StripExtension(const std::string& filename) {
   std::size_t found = filename.find_last_of(".");
   return filename.substr(0, found);
+}
+
+static std::unique_ptr<ctr::BinSequence> ThinSequence(
+    const ctr::BinSequence& bin_sequence, ctr::PcapDataBinCache* cache) {
+  nc::net::Bandwidth target_rate = bin_sequence.MeanRate(cache);
+
+  auto thinned = bin_sequence.Thin(FLAGS_thin_fraction);
+  nc::net::Bandwidth bw = thinned->MeanRate(cache);
+  double scale = target_rate / bw;
+  return std::move(thinned->PreciseSplitOrDie({scale})[0]);
 }
 
 int main(int argc, char** argv) {
@@ -122,6 +136,17 @@ int main(int argc, char** argv) {
       nc::RunInParallelWithResult<Input, ctr::BinSequence>(
           inputs, [](const Input& input) { return HandleMatrixElement(input); },
           1);
+
+  // Will now thin aggregates if needed.
+  std::mt19937 rnd(FLAGS_seed);
+  std::shuffle(results.begin(), results.end(), rnd);
+  CHECK(FLAGS_thin_fraction <= 1.0);
+  CHECK(FLAGS_thin_fraction >= 0.0);
+
+  size_t thin_limit = FLAGS_thin_fraction * results.size();
+  for (size_t i = 0; i <= thin_limit; ++i) {
+    results[i] = ThinSequence(*results[i], &bin_cache);
+  }
 
   for (size_t i = 0; i < demand_matrix->elements().size(); ++i) {
     ctr::PcapTraceFitStore::AddToStore(*results[i], out, &bin_cache);
