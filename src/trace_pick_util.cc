@@ -80,6 +80,10 @@ static std::unique_ptr<ctr::BinSequence> ThinSequence(
   nc::net::Bandwidth rate_after_thinning = out->MeanRate(cache);
   nc::net::Bandwidth max_rate_after_thinning = out->MaxRate(cache);
 
+  if (rate_after_thinning == nc::net::Bandwidth::Zero()) {
+    return bin_sequence.Duplicate();
+  }
+
   LOG(INFO) << "Will thin aggregate with rate " << target_rate.Mbps() << " max "
             << max_rate.Mbps() << " to rate " << rate_after_thinning.Mbps()
             << " max " << max_rate_after_thinning.Mbps();
