@@ -70,11 +70,20 @@ static std::string StripExtension(const std::string& filename) {
 static std::unique_ptr<ctr::BinSequence> ThinSequence(
     const ctr::BinSequence& bin_sequence, ctr::PcapDataBinCache* cache) {
   nc::net::Bandwidth target_rate = bin_sequence.MeanRate(cache);
+  nc::net::Bandwidth max_rate = bin_sequence.MaxRate(cache);
 
   auto thinned = bin_sequence.Thin(FLAGS_thin_fraction);
   nc::net::Bandwidth bw = thinned->MeanRate(cache);
   double scale = target_rate / bw;
-  return std::move(thinned->PreciseSplitOrDie({scale})[0]);
+  auto out = std::move(thinned->PreciseSplitOrDie({scale})[0]);
+
+  nc::net::Bandwidth rate_after_thinning = bin_sequence.MeanRate(cache);
+  nc::net::Bandwidth max_rate_after_thinning = bin_sequence.MaxRate(cache);
+
+  LOG(INFO) << "Will thin aggregate with rate " << target_rate.Mbps() << " max "
+            << max_rate.Mbps() << " to rate " << rate_after_thinning.Mbps()
+            << " max " << max_rate_after_thinning.Mbps();
+  return out;
 }
 
 int main(int argc, char** argv) {
