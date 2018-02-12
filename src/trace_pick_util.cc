@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
   CHECK(FLAGS_thin_fraction >= 0.0);
 
   size_t thin_limit = FLAGS_thin_fraction * results.size();
-  for (size_t i = 0; i <= thin_limit; ++i) {
+  for (size_t i = 0; i < thin_limit; ++i) {
     results[i] = ThinSequence(*results[i], &bin_cache);
   }
 
