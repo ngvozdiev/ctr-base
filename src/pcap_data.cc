@@ -808,7 +808,7 @@ std::pair<uint64_t, uint64_t> BinSequence::TotalBytesAndPackets() const {
 nc::net::Bandwidth BinSequence::MaxRate(PcapDataBinCache* cache) const {
   using namespace std::chrono;
 
-  uint32_t max_bytes = 0;
+  double max_bytes = 0;
   std::vector<TrimmedPcapDataTraceBin> bins = cache->AccumulateBins(traces_);
   for (const TrimmedPcapDataTraceBin& bin : bins) {
     max_bytes = std::max(max_bytes, bin.bytes);

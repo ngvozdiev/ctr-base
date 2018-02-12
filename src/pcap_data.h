@@ -100,7 +100,7 @@ struct TrimmedPcapDataTraceBin {
   // Combines with a protobuf.
   void Combine(const PBBin& bin);
 
-  uint32_t bytes;
+  double bytes;
   uint32_t flows_enter;
 };
 
