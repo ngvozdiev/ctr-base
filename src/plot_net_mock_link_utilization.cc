@@ -17,10 +17,11 @@
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(input, "", "The metrics file.");
+DEFINE_string(input_pinned, "", "The metrics file for a run with pinned means");
 DEFINE_uint64(line_plot_bin_size, 1,
               "Will bin every N values based on "
               "timestamp and plot the means in each bin.");
-DEFINE_uint64(n, 5, "Will plot the top N links");
+DEFINE_uint64(n, 10, "Will plot the top N links");
 
 static constexpr char kLinkUtilizationMetric[] = "link_utilization";
 static constexpr char kLinkRateMetric[] = "link_rate_Mbps";
@@ -42,7 +43,6 @@ static std::chrono::milliseconds GetBinSize() {
 }
 
 static nc::net::Bandwidth GetLinkRate(const std::string& link_src_and_dst) {
-  LOG(INFO) << link_src_and_dst;
   std::map<StrPair, std::vector<double>> data =
       SimpleParseNumericDataNoTimestamps(FLAGS_input, kLinkRateMetric, ".*");
   const std::vector<double>& values = nc::FindOrDieNoPrint(
@@ -76,7 +76,7 @@ static void PlotLink(const std::string& link_src_and_dst,
                      std::chrono::milliseconds bin_size) {
   nc::net::Bandwidth link_rate = GetLinkRate(link_src_and_dst);
 
-  viz::PlotParameters2D plot_params;
+  viz::PlotParameters2D plot_params(link_src_and_dst, "time", "rate (Mbps)");
   plot_params.x_bin_size = FLAGS_line_plot_bin_size;
   viz::LinePlot plot(plot_params);
 
@@ -103,12 +103,14 @@ static void PlotTopNLinks(size_t n) {
       SimpleParseNumericData(FLAGS_input, kLinkUtilizationMetric, ".*", 0,
                              std::numeric_limits<uint64_t>::max(), 0);
   std::map<double, std::map<StrPair, NumDataVector>::const_iterator> top_links;
+  std::vector<double> all_utilizations;
   for (auto it = data.cbegin(); it != data.cend(); ++it) {
     const std::string& src_and_dst = it->first.second;
     const NumDataVector& data_vector = it->second;
 
     double avg_utilization =
         GetAverageUtilization(src_and_dst, data_vector, bin_size);
+    all_utilizations.emplace_back(avg_utilization);
     top_links.emplace(avg_utilization, it);
   }
 
@@ -120,6 +122,8 @@ static void PlotTopNLinks(size_t n) {
     const NumDataVector& data_vector = data_it->second;
 
     std::string out = nc::StrCat("link_top_", top_n);
+
+    LOG(INFO) << src_and_dst << " " << avg_utilization;
     PlotLink(src_and_dst, data_vector, out, bin_size);
 
     ++top_n;
@@ -127,6 +131,60 @@ static void PlotTopNLinks(size_t n) {
       break;
     }
   }
+
+  nc::viz::CDFPlot utilization_cdf;
+  utilization_cdf.AddData("", all_utilizations);
+  utilization_cdf.PlotToDir("all_utilizations");
+}
+
+static void PlotLinkUtilizationDeltas() {
+  std::chrono::milliseconds bin_size = GetBinSize();
+
+  std::map<StrPair, NumDataVector> data =
+      SimpleParseNumericData(FLAGS_input, kLinkUtilizationMetric, ".*", 0,
+                             std::numeric_limits<uint64_t>::max(), 0);
+  std::map<StrPair, NumDataVector> data_pinned =
+      SimpleParseNumericData(FLAGS_input_pinned, kLinkUtilizationMetric, ".*",
+                             0, std::numeric_limits<uint64_t>::max(), 0);
+
+  std::vector<std::pair<double, bool>> deltas;
+  for (const auto& id_and_rest : data) {
+    const StrPair& id = id_and_rest.first;
+    const NumDataVector& data_vector = id_and_rest.second;
+    const NumDataVector& data_vector_pinned =
+        nc::FindOrDieNoPrint(data_pinned, id);
+
+    double avg_utilization =
+        GetAverageUtilization(id.second, data_vector, bin_size);
+    double avg_utilization_pinned =
+        GetAverageUtilization(id.second, data_vector_pinned, bin_size);
+    double delta = avg_utilization - avg_utilization_pinned;
+    bool top_utilization = avg_utilization_pinned > 0.999;
+    deltas.emplace_back(delta, top_utilization);
+  }
+
+  std::sort(deltas.begin(), deltas.end());
+
+  std::vector<std::pair<double, double>> to_plot;
+  std::vector<std::pair<double, double>> to_plot_top_utilization;
+  for (size_t i = 0; i < deltas.size(); ++i) {
+    double delta;
+    bool top_utilization;
+    std::tie(delta, top_utilization) = deltas[i];
+
+    if (top_utilization) {
+      to_plot_top_utilization.emplace_back(delta, i);
+    } else {
+      to_plot.emplace_back(delta, i);
+    }
+  }
+
+  nc::viz::LinePlot scatter_plot(
+      {"Delta link utilization", "utilization - utilization pinned", "link"});
+  scatter_plot.TurnIntoScatterPlot();
+  scatter_plot.AddData("other", to_plot);
+  scatter_plot.AddData("top_utilization", to_plot_top_utilization);
+  scatter_plot.PlotToDir("utilization_deltas");
 }
 
 int main(int argc, char** argv) {
@@ -134,5 +192,8 @@ int main(int argc, char** argv) {
   CHECK(!FLAGS_input.empty()) << "need --input";
 
   PlotTopNLinks(FLAGS_n);
+  if (!FLAGS_input_pinned.empty()) {
+    PlotLinkUtilizationDeltas();
+  }
   return 0;
 }
