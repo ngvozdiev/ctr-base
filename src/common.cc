@@ -1084,7 +1084,11 @@ AggregateHistory AggregateHistory::SubtractRate(nc::net::Bandwidth rate) const {
   double bytes_per_bin = (rate.bps() / 8.0) / bins_in_second;
   std::vector<uint64_t> bins_copy = bins_;
   for (uint64_t& bin : bins_copy) {
-    bin -= bytes_per_bin;
+    if (bin >= bytes_per_bin) {
+      bin -= bytes_per_bin;
+    } else {
+      bin = 0;
+    }
   }
 
   return {bins_copy, bin_size_, flow_count_};
