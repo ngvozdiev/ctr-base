@@ -444,12 +444,14 @@ void NetMock::Run(PcapDataBinCache* cache) {
 
     bool need_update = false;
     if (next_period % periods_in_history_ == 0) {
+      LOG(INFO) << "Will force update";
       need_update = true;
     } else {
       std::set<AggregateId> aggregates_no_fit;
       std::tie(aggregates_no_fit, std::ignore) =
           routing_system_->CheckWithProbModel(*output, input);
       if (!aggregates_no_fit.empty()) {
+        LOG(INFO) << "Will trigger update";
         need_update = true;
       }
     }
