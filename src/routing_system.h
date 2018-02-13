@@ -55,15 +55,16 @@ class RoutingSystem {
 
   const nc::net::GraphStorage* graph() const { return graph_; }
 
- private:
-  // Fraction by which to scale up aggregates that do not fit.
-  static constexpr double kScaleFraction = 0.1;
-
   // Checks if all aggregates fit. Returns the set of aggregates that do not
   // fit.
   std::pair<std::set<AggregateId>, std::unique_ptr<CompetingAggregates>>
-  CheckWithProbModel(const RoutingConfiguration& routing,
-                     const std::map<AggregateId, AggregateHistory>& histories);
+  CheckWithProbModel(
+      const RoutingConfiguration& routing,
+      const std::map<AggregateId, AggregateHistory>& histories) const;
+
+ private:
+  // Fraction by which to scale up aggregates that do not fit.
+  static constexpr double kScaleFraction = 0.1;
 
   bool ScaleUpAggregates(
       const std::set<AggregateId>& aggregates,

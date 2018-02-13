@@ -192,7 +192,7 @@ class NetMock {
   NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
           std::chrono::milliseconds period_duration,
           std::chrono::milliseconds history_bin_size,
-          std::chrono::milliseconds total_duration,
+          std::chrono::milliseconds total_duration, size_t periods_in_history,
           RoutingSystem* routing_system);
 
   void Run(PcapDataBinCache* cache);
@@ -213,7 +213,8 @@ class NetMock {
       const std::map<AggregateId, BinSequence>& period_sequences,
       const RoutingConfiguration& configuration, PcapDataBinCache* cache) const;
 
-  std::map<AggregateId, BinSequence> GetNthPeriod(size_t n) const;
+  std::map<AggregateId, BinSequence> GetNthPeriod(size_t n,
+                                                  size_t bin_count) const;
 
   std::map<AggregateId, nc::net::Bandwidth> GetMeansForNthPeriod(
       size_t n, PcapDataBinCache* cache) const;
@@ -224,6 +225,10 @@ class NetMock {
   size_t period_count_;
 
   size_t period_duration_bins_;
+
+  size_t bins_in_history_;
+
+  size_t periods_in_history_;
 
   std::chrono::milliseconds history_bin_size_;
 

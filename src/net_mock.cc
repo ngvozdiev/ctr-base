@@ -231,8 +231,9 @@ NetMock::NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
                  std::chrono::milliseconds period_duration,
                  std::chrono::milliseconds history_bin_size,
                  std::chrono::milliseconds total_duration,
-                 RoutingSystem* routing_system)
-    : history_bin_size_(history_bin_size),
+                 size_t periods_in_history, RoutingSystem* routing_system)
+    : periods_in_history_(periods_in_history),
+      history_bin_size_(history_bin_size),
       initial_sequences_(std::move(initial_sequences)),
       routing_system_(routing_system),
       graph_(routing_system_->graph()) {
@@ -253,6 +254,7 @@ NetMock::NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
   }
 
   period_duration_bins_ = period_duration.count() / bin_size.count();
+  bins_in_history_ = period_duration_bins_ * periods_in_history;
   CHECK(period_duration_bins_ > 0);
   period_count_ = min_bin_count / period_duration_bins_;
 
@@ -330,9 +332,10 @@ NetMock::CheckOutput(const std::map<AggregateId, BinSequence>& period_sequences,
   return out;
 }
 
-std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(size_t n) const {
+std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(
+    size_t n, size_t bin_count) const {
   size_t period_start_bin = n * period_duration_bins_;
-  size_t period_end_bin = (n + 1) * period_duration_bins_;
+  size_t period_end_bin = period_start_bin + bin_count;
 
   std::map<AggregateId, BinSequence> out;
   for (const auto& aggregate_and_bins : initial_sequences_) {
@@ -351,7 +354,8 @@ std::map<AggregateId, BinSequence> NetMock::GetNthPeriod(size_t n) const {
 
 std::unique_ptr<RoutingConfiguration> NetMock::InitialOutput(
     PcapDataBinCache* cache) const {
-  std::map<AggregateId, BinSequence> zero_period = GetNthPeriod(0);
+  std::map<AggregateId, BinSequence> zero_period =
+      GetNthPeriod(0, bins_in_history_);
   std::map<AggregateId, AggregateHistory> input =
       GenerateInput(zero_period, cache);
   return routing_system_->Update(input).routing;
@@ -375,7 +379,8 @@ static size_t CheckSameSize(const nc::net::GraphLinkMap<
 
 std::map<AggregateId, nc::net::Bandwidth> NetMock::GetMeansForNthPeriod(
     size_t n, PcapDataBinCache* cache) const {
-  std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(n);
+  std::map<AggregateId, BinSequence> period_sequences =
+      GetNthPeriod(n, bins_in_history_);
   std::map<AggregateId, nc::net::Bandwidth> out;
   for (const auto& id_and_sequence : period_sequences) {
     const AggregateId& id = id_and_sequence.first;
@@ -396,7 +401,8 @@ void NetMock::Run(PcapDataBinCache* cache) {
   for (size_t i = 0; i < period_count_; ++i) {
     LOG(ERROR) << "Period " << i;
 
-    std::map<AggregateId, BinSequence> period_sequences = GetNthPeriod(i);
+    std::map<AggregateId, BinSequence> period_sequences =
+        GetNthPeriod(i, period_duration_bins_);
     nc::net::GraphLinkMap<std::vector<std::pair<double, double>>>
         per_link_residuals = CheckOutput(period_sequences, *output, cache);
     size_t num_residuals = CheckSameSize(per_link_residuals);
@@ -422,11 +428,39 @@ void NetMock::Run(PcapDataBinCache* cache) {
     }
 
     timestamp += num_residuals;
+
+    // At the end of the period, will run the optimization or will check to see
+    // if we need to trigger an optimization.
+    size_t next_period = i + 1;
+    if (next_period < periods_in_history_) {
+      // Skip history for the first period.
+      continue;
+    }
+
+    std::map<AggregateId, BinSequence> sequences_for_last_history =
+        GetNthPeriod(next_period - periods_in_history_, bins_in_history_);
     std::map<AggregateId, AggregateHistory> input =
-        GenerateInput(period_sequences, cache);
+        GenerateInput(sequences_for_last_history, cache);
+
+    bool need_update = false;
+    if (next_period % periods_in_history_ == 0) {
+      need_update = true;
+    } else {
+      std::set<AggregateId> aggregates_no_fit;
+      std::tie(aggregates_no_fit, std::ignore) =
+          routing_system_->CheckWithProbModel(*output, input);
+      if (!aggregates_no_fit.empty()) {
+        need_update = true;
+      }
+    }
+
+    if (!need_update) {
+      continue;
+    }
+
     if (FLAGS_mean_hints) {
       std::map<AggregateId, nc::net::Bandwidth> next_period_means =
-          GetMeansForNthPeriod(i + 1, cache);
+          GetMeansForNthPeriod(next_period, cache);
       RoutingSystemUpdateResult result =
           routing_system_->Update(input, next_period_means);
       output = std::move(result.routing);

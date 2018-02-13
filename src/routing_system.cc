@@ -330,7 +330,7 @@ RoutingSystemUpdateResult RoutingSystem::Update(
 std::pair<std::set<AggregateId>, std::unique_ptr<CompetingAggregates>>
 RoutingSystem::CheckWithProbModel(
     const RoutingConfiguration& routing,
-    const std::map<AggregateId, AggregateHistory>& histories) {
+    const std::map<AggregateId, AggregateHistory>& histories) const {
   CHECK(histories.size() == routing.routes().size());
 
   nc::net::GraphLinkMap<std::vector<std::pair<AggregateId, double>>>
