@@ -27,6 +27,9 @@ static constexpr char kLinkUtilizationMetric[] = "link_utilization";
 static constexpr char kLinkRateMetric[] = "link_rate_Mbps";
 static constexpr char kBinSizeMetric[] = "bin_size_ms";
 static constexpr char kQueueSizeMetric[] = "queue_size";
+static constexpr char kRouteAddMetric[] = "route_add";
+static constexpr char kRouteRemoveMetric[] = "route_remove";
+static constexpr char kRouteUpdateMetric[] = "route_update";
 
 using namespace nc;
 using namespace nc::metrics::parser;
@@ -50,6 +53,32 @@ static nc::net::Bandwidth GetLinkRate(const std::string& link_src_and_dst) {
       data, std::make_pair(kLinkRateMetric, link_src_and_dst));
   CHECK(values.size() == 1);
   return nc::net::Bandwidth::FromMBitsPerSecond(values[0]);
+}
+
+static void ParseSingleUpdateState(
+    const std::string& metric, std::map<uint64_t, std::vector<uint64_t>>* map) {
+  std::map<StrPair, NumDataVector> data = SimpleParseNumericData(
+      FLAGS_input, metric, ".*", 0, std::numeric_limits<uint64_t>::max(), 0);
+  CHECK(data.size() == 1);
+  const NumDataVector& data_vector = data.begin()->second;
+  for (const auto& timestamp_and_value : data_vector) {
+    (*map)[timestamp_and_value.first].emplace_back(timestamp_and_value.second);
+  }
+}
+
+static void PrintUpdateStats() {
+  std::map<uint64_t, std::vector<uint64_t>> counts;
+  ParseSingleUpdateState(kRouteAddMetric, &counts);
+  ParseSingleUpdateState(kRouteRemoveMetric, &counts);
+  ParseSingleUpdateState(kRouteUpdateMetric, &counts);
+
+  for (const auto& timestamp_and_counts : counts) {
+    uint64_t timestamp = timestamp_and_counts.first;
+    const std::vector<uint64_t>& counts = timestamp_and_counts.second;
+    CHECK(counts.size() == 3);
+    LOG(INFO) << "Opt at " << timestamp << " add " << counts[0] << " remove "
+              << counts[1] << " update " << counts[2];
+  }
 }
 
 static double GetAverageUtilization(const std::string& link_src_and_dst,
@@ -250,6 +279,7 @@ int main(int argc, char** argv) {
   CHECK(!FLAGS_input.empty()) << "need --input";
 
   PlotTopNLinks(FLAGS_n);
+  PrintUpdateStats();
   if (!FLAGS_input_pinned.empty()) {
     std::vector<std::string> link_order = PlotLinkUtilizationDeltas();
     PlotMaxQueueSizeDeltas(link_order);

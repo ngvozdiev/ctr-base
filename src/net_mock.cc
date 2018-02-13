@@ -45,6 +45,21 @@ static auto* bin_size_metric =
     nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
         "bin_size_ms", "Records how long (in milliseconds) is each bin");
 
+static auto* route_add_metric =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
+        "route_add",
+        "Records how many routes need to be added per optimization");
+
+static auto* route_update_metric =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
+        "route_update",
+        "Records how many routes need to be updated per optimization");
+
+static auto* route_remove_metric =
+    nc::metrics::DefaultMetricManager() -> GetUnsafeMetric<uint64_t>(
+        "route_remove",
+        "Records how many routes need to be removed per optimization");
+
 void MockSimDevice::HandleStateUpdate(
     const nc::htsim::SSCPAddOrUpdate& update) {
   nc::htsim::MatchRule* rule = update.MutableRule();
@@ -399,6 +414,25 @@ std::map<AggregateId, nc::net::Bandwidth> NetMock::GetMeansForNthPeriod(
   return out;
 }
 
+static void RecordDelta(uint64_t at, const RoutingConfiguration& from,
+                        const RoutingConfiguration& to) {
+  RoutingConfigurationDelta delta = from.GetDifference(to);
+
+  uint64_t total_add = 0;
+  uint64_t total_update = 0;
+  uint64_t total_remove = 0;
+  for (const auto& aggregate_and_delta : delta.aggregates) {
+    const AggregateDelta& delta = aggregate_and_delta.second;
+    total_add += delta.routes_added;
+    total_update += delta.routes_updated;
+    total_remove += delta.routes_removed;
+  }
+
+  route_add_metric->GetHandle()->AddValueWithTimestamp(at, total_add);
+  route_update_metric->GetHandle()->AddValueWithTimestamp(at, total_update);
+  route_remove_metric->GetHandle()->AddValueWithTimestamp(at, total_remove);
+}
+
 void NetMock::Run(PcapDataBinCache* cache) {
   std::unique_ptr<RoutingConfiguration> output = InitialOutput(cache);
   size_t timestamp = 0;
@@ -464,16 +498,17 @@ void NetMock::Run(PcapDataBinCache* cache) {
       continue;
     }
 
+    RoutingSystemUpdateResult result;
     if (FLAGS_mean_hints) {
       std::map<AggregateId, nc::net::Bandwidth> next_period_means =
           GetMeansForNthPeriod(next_period, cache);
-      RoutingSystemUpdateResult result =
-          routing_system_->Update(input, next_period_means);
-      output = std::move(result.routing);
+      result = routing_system_->Update(input, next_period_means);
     } else {
-      RoutingSystemUpdateResult result = routing_system_->Update(input);
-      output = std::move(result.routing);
+      result = routing_system_->Update(input);
     }
+
+    RecordDelta(timestamp, *output, *result.routing);
+    output = std::move(result.routing);
   }
 }
 
