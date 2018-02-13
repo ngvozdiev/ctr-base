@@ -15,9 +15,13 @@
 
 namespace ctr {
 
+DEFINE_bool(mean_hints, false,
+            "If true each aggregate mean level will be set to the ideal one "
+            "for the next history.");
 DEFINE_bool(
-    mean_hints, false,
-    "If true each period's aggregate mean level will be set to the ideal one.");
+    triggered_optimization, true,
+    "If true will convolve aggregates to trigger optimization if needed at the "
+    "end of each period.");
 
 static auto* link_utilization_metric =
     nc::metrics::DefaultMetricManager()
@@ -446,7 +450,7 @@ void NetMock::Run(PcapDataBinCache* cache) {
     if (next_period % periods_in_history_ == 0) {
       LOG(INFO) << "Will force update";
       need_update = true;
-    } else {
+    } else if (FLAGS_triggered_optimization) {
       std::set<AggregateId> aggregates_no_fit;
       std::tie(aggregates_no_fit, std::ignore) =
           routing_system_->CheckWithProbModel(*output, input);
