@@ -521,8 +521,7 @@ class BinSequenceGenerator {
   BinSequenceGenerator(const std::vector<const PcapDataTrace*>& all_traces,
                        const std::vector<std::chrono::milliseconds>& offsets);
 
-  // Returns a BinSequence that will fit within the given 'target_rate' (will
-  // have queues of 10ms or less) over 'init_window'.
+  // Returns a BinSequence at random.
   std::unique_ptr<BinSequence> Next(nc::net::Bandwidth target_rate,
                                     std::chrono::microseconds init_window,
                                     PcapDataBinCache* cache,

@@ -126,7 +126,10 @@ int main(int argc, char** argv) {
 
   ctr::PcapTraceStore trace_store(FLAGS_pcap_trace_store);
   ctr::BinSequenceGenerator bin_sequence_generator(
-      trace_store.AllTracesExcept(filter), {milliseconds(0)});
+      trace_store.AllTracesExcept(filter),
+      {milliseconds(0), milliseconds(20000), milliseconds(40000),
+       milliseconds(60000), milliseconds(80000), milliseconds(100000),
+       milliseconds(120000), milliseconds(140000)});
 
   std::unique_ptr<nc::lp::DemandMatrix> demand_matrix =
       nc::lp::DemandMatrix::LoadRepetitaFileOrDie(FLAGS_traffic_matrix,
