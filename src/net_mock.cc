@@ -293,6 +293,8 @@ NetMock::NetMock(std::map<AggregateId, BinSequence>&& initial_sequences,
 std::map<AggregateId, AggregateHistory> NetMock::GenerateInput(
     const std::map<AggregateId, BinSequence>& period_sequences,
     PcapDataBinCache* cache) const {
+  using namespace std::chrono;
+  auto t1 = high_resolution_clock::now();
   std::map<AggregateId, AggregateHistory> input;
   for (const auto& aggregate_and_bins : period_sequences) {
     const AggregateId& aggregate = aggregate_and_bins.first;
@@ -302,6 +304,8 @@ std::map<AggregateId, AggregateHistory> NetMock::GenerateInput(
                   std::forward_as_tuple(
                       bins.GenerateHistory(history_bin_size_, 1000, cache)));
   }
+  auto t2 = high_resolution_clock::now();
+  LOG(INFO) << "Gen input in " << duration_cast<milliseconds>(t2 - t1).count();
 
   return input;
 }

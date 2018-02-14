@@ -636,8 +636,6 @@ std::vector<TrimmedPcapDataTraceBin> PcapDataBinCache::AccumulateBins(
   }
 
   // Will group everything by fraction (and range).
-  using namespace std::chrono;
-  auto t1 = high_resolution_clock::now();
   std::map<FractionAndStartBin, std::map<const PcapDataTrace*, TraceSliceSet>>
       grouped_by_fraction;
   for (const auto& trace_and_slice : traces_and_slices) {
@@ -646,8 +644,6 @@ std::vector<TrimmedPcapDataTraceBin> PcapDataBinCache::AccumulateBins(
     grouped_by_fraction[fraction_and_start][trace_and_slice.trace].Insert(
         trace_and_slice.slice);
   }
-  auto t2 = high_resolution_clock::now();
-  size_t calls = 0;
 
   std::vector<TrimmedPcapDataTraceBin> out(count);
   for (const auto& fraction_and_start_and_rest : grouped_by_fraction) {
@@ -667,7 +663,6 @@ std::vector<TrimmedPcapDataTraceBin> PcapDataBinCache::AccumulateBins(
       std::vector<TrimmedPcapDataTraceBin>::const_iterator from;
       std::vector<TrimmedPcapDataTraceBin>::const_iterator to;
       std::tie(from, to) = Bins(key_index, start_bin, end_bin);
-      ++calls;
       CHECK(std::distance(from, to) == static_cast<ssize_t>(count));
 
       if (fraction == 1) {
@@ -681,10 +676,6 @@ std::vector<TrimmedPcapDataTraceBin> PcapDataBinCache::AccumulateBins(
       }
     }
   }
-  auto t3 = high_resolution_clock::now();
-  LOG(INFO) << "T1 " << duration_cast<milliseconds>(t2 - t1).count() << " T2 "
-            << duration_cast<milliseconds>(t3 - t2).count() << " CALLS "
-            << calls;
 
   return out;
 }
