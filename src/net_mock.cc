@@ -60,6 +60,11 @@ static auto* route_remove_metric =
         "route_remove",
         "Records how many routes need to be removed per optimization");
 
+static auto* prop_delay_per_packet =
+    nc::metrics::DefaultMetricManager()
+        -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
+            "prop_delay_per_packet", "Records propagation delay per packet");
+
 void MockSimDevice::HandleStateUpdate(
     const nc::htsim::SSCPAddOrUpdate& update) {
   nc::htsim::MatchRule* rule = update.MutableRule();

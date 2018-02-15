@@ -240,6 +240,8 @@ class NetMock {
   RoutingSystem* routing_system_;
 
   const nc::net::GraphStorage* graph_;
+
+  nc::DiscreteDistribution<uint64_t> delay_seen_;
 };
 
 }  // namespace ctr
