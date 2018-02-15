@@ -60,7 +60,7 @@ static auto* route_remove_metric =
         "route_remove",
         "Records how many routes need to be removed per optimization");
 
-static auto* prop_delay_per_packet =
+static auto* prop_delay_per_aggregate =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<nc::DiscreteDistribution<uint64_t>>(
             "prop_delay_per_packet", "Records propagation delay per packet");
@@ -312,10 +312,13 @@ std::map<AggregateId, AggregateHistory> NetMock::GenerateInput(
   return input;
 }
 
+static constexpr double kAggregateWeight = 1000;
+
 nc::net::GraphLinkMap<std::vector<std::pair<double, double>>>
 NetMock::CheckOutput(const std::map<AggregateId, BinSequence>& period_sequences,
                      const RoutingConfiguration& configuration,
-                     PcapDataBinCache* cache) const {
+                     PcapDataBinCache* cache) {
+  using namespace std::chrono;
   nc::net::GraphLinkMap<std::unique_ptr<BinSequence>> link_to_bins;
 
   // First need to figure out which paths cross each link. Will also build a
@@ -336,6 +339,11 @@ NetMock::CheckOutput(const std::map<AggregateId, BinSequence>& period_sequences,
 
     for (size_t i = 0; i < routes.size(); ++i) {
       const nc::net::Walk* path = routes[i].first;
+      double fraction = fractions[i];
+      uint64_t delay_ms = duration_cast<milliseconds>(path->delay()).count();
+      size_t path_weight = kAggregateWeight * fraction;
+      delays_seen_.Add(delay_ms, path_weight);
+
       for (nc::net::GraphLinkIndex link : path->links()) {
         std::unique_ptr<BinSequence>& bin_sequence_ptr = link_to_bins[link];
         if (!bin_sequence_ptr) {
@@ -516,6 +524,8 @@ void NetMock::Run(PcapDataBinCache* cache) {
     RecordDelta(timestamp, *output, *result.routing);
     output = std::move(result.routing);
   }
+
+  prop_delay_per_aggregate->GetHandle()->AddValue(delays_seen_);
 }
 
 }  // namespace ctr

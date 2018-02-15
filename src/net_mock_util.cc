@@ -58,6 +58,9 @@ DEFINE_double(exceed_probability, 0.001,
               "Probability convolution to exceed rate");
 DEFINE_bool(sp_opt, false, "If true will run SP routing instead of CTR");
 DEFINE_double(demand_scale, 1.0, "Will scale all packet traces by this much");
+DEFINE_bool(limited_opt, true,
+            "Whether or not to attempt to avoid churn at the expense of a "
+            "little optimality");
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -151,8 +154,9 @@ int main(int argc, char** argv) {
   if (FLAGS_sp_opt) {
     opt = nc::make_unique<ctr::ShortestPathOptimizer>(&path_provider);
   } else {
-    opt = nc::make_unique<ctr::CTROptimizer>(
-        &path_provider, FLAGS_link_capacity_multiplier, true, false);
+    opt = nc::make_unique<ctr::CTROptimizer>(&path_provider,
+                                             FLAGS_link_capacity_multiplier,
+                                             FLAGS_limited_opt, false);
   }
 
   ctr::ProbModelConfig prob_model_config;

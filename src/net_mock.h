@@ -211,7 +211,7 @@ class NetMock {
   // output.
   nc::net::GraphLinkMap<std::vector<std::pair<double, double>>> CheckOutput(
       const std::map<AggregateId, BinSequence>& period_sequences,
-      const RoutingConfiguration& configuration, PcapDataBinCache* cache) const;
+      const RoutingConfiguration& configuration, PcapDataBinCache* cache);
 
   std::map<AggregateId, BinSequence> GetNthPeriod(size_t n,
                                                   size_t bin_count) const;
@@ -241,7 +241,7 @@ class NetMock {
 
   const nc::net::GraphStorage* graph_;
 
-  nc::DiscreteDistribution<uint64_t> delay_seen_;
+  nc::DiscreteDistribution<uint64_t> delays_seen_;
 };
 
 }  // namespace ctr

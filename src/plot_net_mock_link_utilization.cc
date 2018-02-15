@@ -30,6 +30,7 @@ static constexpr char kQueueSizeMetric[] = "queue_size";
 static constexpr char kRouteAddMetric[] = "route_add";
 static constexpr char kRouteRemoveMetric[] = "route_remove";
 static constexpr char kRouteUpdateMetric[] = "route_update";
+static constexpr char kPropDelayMetric[] = "prop_delay_per_packet";
 
 using namespace nc;
 using namespace nc::metrics::parser;
@@ -239,6 +240,30 @@ static std::vector<std::string> PlotLinkUtilizationDeltas() {
   return out;
 }
 
+static void PlotDistribution(const std::string& metric,
+                             const std::string& out) {
+  std::map<StrPair, std::vector<nc::DiscreteDistribution<int64_t>>> data =
+      SimpleParseDistributionDataNoTimestamps(FLAGS_input, metric, ".*");
+  CHECK(data.size() == 1);
+
+  const std::vector<nc::DiscreteDistribution<int64_t>>& data_vector =
+      data.begin()->second;
+  CHECK(data_vector.size() == 1);
+
+  const nc::DiscreteDistribution<int64_t>& dist = data_vector.front();
+  std::vector<int64_t> values = dist.Percentiles(10000);
+
+  nc::viz::DataSeries2D data_series;
+  for (size_t i = 0; i < values.size(); ++i) {
+    data_series.data.emplace_back(values[i], i / 10000.0);
+  }
+
+  nc::viz::LinePlot plot(
+      {"Propagation delay per aggregate", "delay (ms)", "CDF"});
+  plot.AddData(data_series);
+  plot.PlotToDir(out);
+}
+
 static void PlotMaxQueueSizeDeltas(const std::vector<std::string>& link_order) {
   std::map<StrPair, NumDataVector> data =
       SimpleParseNumericData(FLAGS_input, kQueueSizeMetric, ".*", 0,
@@ -280,6 +305,7 @@ int main(int argc, char** argv) {
 
   PlotTopNLinks(FLAGS_n);
   PrintUpdateStats();
+  PlotDistribution(kPropDelayMetric, "propagation_delays");
   if (!FLAGS_input_pinned.empty()) {
     std::vector<std::string> link_order = PlotLinkUtilizationDeltas();
     PlotMaxQueueSizeDeltas(link_order);
