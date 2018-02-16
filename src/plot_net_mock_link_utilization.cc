@@ -240,10 +240,10 @@ static std::vector<std::string> PlotLinkUtilizationDeltas() {
   return out;
 }
 
-static void PlotDistribution(const std::string& metric,
-                             const std::string& out) {
+static std::vector<std::pair<double, double>> GetSingleDistribution(
+    const std::string& input, const std::string& metric) {
   std::map<StrPair, std::vector<nc::DiscreteDistribution<int64_t>>> data =
-      SimpleParseDistributionDataNoTimestamps(FLAGS_input, metric, ".*");
+      SimpleParseDistributionDataNoTimestamps(input, metric, ".*");
   CHECK(data.size() == 1);
 
   const std::vector<nc::DiscreteDistribution<int64_t>>& data_vector =
@@ -253,15 +253,22 @@ static void PlotDistribution(const std::string& metric,
   const nc::DiscreteDistribution<int64_t>& dist = data_vector.front();
   std::vector<int64_t> values = dist.Percentiles(10000);
 
-  nc::viz::DataSeries2D data_series;
+  std::vector<std::pair<double, double>> out;
   for (size_t i = 0; i < values.size(); ++i) {
-    data_series.data.emplace_back(values[i], i / 10000.0);
+    out.emplace_back(values[i], i / 10000.0);
   }
 
+  return out;
+}
+
+static void PlotPropDelayDistribution() {
   nc::viz::LinePlot plot(
       {"Propagation delay per aggregate", "delay (ms)", "CDF"});
-  plot.AddData(data_series);
-  plot.PlotToDir(out);
+
+  plot.AddData("regular", GetSingleDistribution(FLAGS_input, kPropDelayMetric));
+  plot.AddData("pinned",
+               GetSingleDistribution(FLAGS_input_pinned, kPropDelayMetric));
+  plot.PlotToDir("propagation_delays");
 }
 
 static void PlotMaxQueueSizeDeltas(const std::vector<std::string>& link_order) {
@@ -305,7 +312,7 @@ int main(int argc, char** argv) {
 
   PlotTopNLinks(FLAGS_n);
   PrintUpdateStats();
-  PlotDistribution(kPropDelayMetric, "propagation_delays");
+  PlotPropDelayDistribution();
   if (!FLAGS_input_pinned.empty()) {
     std::vector<std::string> link_order = PlotLinkUtilizationDeltas();
     PlotMaxQueueSizeDeltas(link_order);
