@@ -58,12 +58,18 @@ std::map<std::string, std::vector<const RCSummary*>> GroupByOpt(
   return out;
 }
 
-void PlotStretch(
+void PlotStuff(
     const std::string& prefix,
     const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
-  std::map<size_t, nc::viz::CDFPlot> plots;
-  for (uint32_t i = 50; i <= 100; i += 5) {
-    plots[i] = nc::viz::CDFPlot(
+  std::map<size_t, nc::viz::CDFPlot> stretch_plots;
+  nc::viz::CDFPlot total_delay_delta_plot(
+      {"Distribution of total delay", "change over SP delay"});
+  nc::viz::CDFPlot avg_path_count_plot(
+      {"Average paths per aggregate", "average path count"});
+
+  std::vector<uint32_t> percentiles = {90, 95, 100};
+  for (uint32_t i : percentiles) {
+    stretch_plots[i] = nc::viz::CDFPlot(
         {nc::Substitute("Distribution of the $0th percentile of flow stretch",
                         i),
          "times greater than shortest path"});
@@ -73,6 +79,8 @@ void PlotStretch(
     const std::string& opt = opt_and_summaries.first;
     const std::vector<const RCSummary*>& rcs = opt_and_summaries.second;
 
+    std::vector<double> delay_changes;
+    std::vector<double> avg_path_counts;
     std::map<size_t, std::vector<double>> values;
     for (const RCSummary* rc : rcs) {
       std::vector<double> stretches = rc->rel_stretches;
@@ -93,23 +101,36 @@ void PlotStretch(
       }
 
       std::vector<double> p = nc::Percentiles(&stretches);
-      for (size_t i = 50; i <= 100; i += 5) {
+      for (size_t i : percentiles) {
         values[i].emplace_back(p[i]);
       }
+
+      double fraction_change_in_delay =
+          (rc->total_delay - rc->total_sp_delay) / rc->total_delay;
+      delay_changes.emplace_back(fraction_change_in_delay);
+
+      double total =
+          std::accumulate(rc->path_counts.begin(), rc->path_counts.end(), 0.0);
+      avg_path_counts.emplace_back(total / rc->path_counts.size());
     }
 
+    total_delay_delta_plot.AddData(opt, delay_changes);
+    avg_path_count_plot.AddData(opt, avg_path_counts);
     for (const auto& percentile_and_values : values) {
       size_t percentile = percentile_and_values.first;
       const std::vector<double>& values = percentile_and_values.second;
-      plots[percentile].AddData(opt, values);
+      stretch_plots[percentile].AddData(opt, values);
     }
   }
 
-  for (const auto& percentile_and_plot : plots) {
+  for (const auto& percentile_and_plot : stretch_plots) {
     uint32_t percentile = percentile_and_plot.first;
     const nc::viz::CDFPlot& plot = percentile_and_plot.second;
-    plot.PlotToDir(nc::StrCat(prefix, "_p", percentile, "_stretch"));
+    plot.PlotToDir(nc::StrCat(prefix, "p", percentile, "_stretch"));
   }
+
+  total_delay_delta_plot.PlotToDir(nc::StrCat(prefix, "total_delay_delta"));
+  avg_path_count_plot.PlotToDir(nc::StrCat(prefix, "avg_path_count"));
 }
 
 static void PlotRuntime(
@@ -128,22 +149,7 @@ static void PlotRuntime(
     runtime_plot.AddData(opt, values);
   }
 
-  runtime_plot.PlotToDir(nc::StrCat(prefix, "_runtime"));
-}
-
-void PlotRatio(
-    const std::string& prefix,
-    const std::map<std::string, std::vector<const RCSummary*>>& summaries) {
-  MultiRCSummaryPlotPack plot_pack;
-  for (const auto& opt_and_summaries : summaries) {
-    const std::string& opt = opt_and_summaries.first;
-    const std::vector<const RCSummary*>& summaries_for_opt =
-        opt_and_summaries.second;
-
-    plot_pack.PlotPathRatios(opt, summaries_for_opt);
-  }
-
-  plot_pack.ratios_plot().PlotToDir(nc::StrCat(prefix, "delay_ratio"));
+  runtime_plot.PlotToDir(nc::StrCat(prefix, "runtime"));
 }
 
 static double MedianOfPercentileStretch(
@@ -227,11 +233,8 @@ int main(int argc, char** argv) {
 
   std::string hr_prefix = nc::StrCat(FLAGS_output_prefix, "_hr_");
   std::string lr_prefix = nc::StrCat(FLAGS_output_prefix, "_lr_");
-  LOG(INFO) << "Will plot stretch";
-  PlotStretch(hr_prefix, hr_by_opt);
-  PlotStretch(lr_prefix, lr_by_opt);
+  PlotStuff(hr_prefix, hr_by_opt);
+  PlotStuff(lr_prefix, lr_by_opt);
   PlotRuntime(hr_prefix, hr_by_opt);
   PlotRuntime(lr_prefix, lr_by_opt);
-  PlotRatio(hr_prefix, hr_by_opt);
-  PlotRatio(lr_prefix, lr_by_opt);
 }
