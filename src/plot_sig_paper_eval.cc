@@ -221,12 +221,13 @@ int main(int argc, char** argv) {
   auto lr_by_opt = GroupByOpt(low_routability_graphs, summaries);
 
   if (FLAGS_dump_median_max_stretch) {
-    DumpMeidanOfPercentileStretch(hr_by_opt, 95);
+    DumpMeidanOfPercentileStretch(hr_by_opt, 100);
     return 0;
   }
 
   std::string hr_prefix = nc::StrCat(FLAGS_output_prefix, "_hr_");
   std::string lr_prefix = nc::StrCat(FLAGS_output_prefix, "_lr_");
+  LOG(INFO) << "Will plot stretch";
   PlotStretch(hr_prefix, hr_by_opt);
   PlotStretch(lr_prefix, lr_by_opt);
   PlotRuntime(hr_prefix, hr_by_opt);
