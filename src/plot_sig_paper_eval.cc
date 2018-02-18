@@ -90,13 +90,15 @@ void PlotStuff(
       std::vector<bool> overloaded = rc->overloaded;
       std::sort(stretches.begin(), stretches.end());
 
-      double on_sp = 0;
-      for (double stretch : rc->abs_stretches) {
-        if (stretch < 0.0001) {
-          ++on_sp;
+      double all_flows =
+          std::accumulate(rc->flow_counts.begin(), rc->flow_counts.end(), 0.0);
+      double flows_on_sp = 0;
+      for (size_t i = 0; i < rc->abs_stretches.size(); ++i) {
+        if (rc->abs_stretches[i] < 0.0001) {
+          flows_on_sp += rc->flow_counts[i];
         }
       }
-      fractions_on_sp.emplace_back(on_sp / rc->abs_stretches.size());
+      fractions_on_sp.emplace_back(flows_on_sp / all_flows);
 
       double total =
           std::accumulate(rc->path_counts.begin(), rc->path_counts.end(), 0.0);
