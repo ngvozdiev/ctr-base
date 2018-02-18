@@ -66,6 +66,8 @@ void PlotStuff(
       {"Distribution of total delay", "change over SP delay"});
   nc::viz::CDFPlot avg_path_count_plot(
       {"Average paths per aggregate", "average path count"});
+  nc::viz::CDFPlot sp_fraction_plot(
+      {"Fraction of aggregates with stretch of 1", "fraction"});
 
   std::vector<uint32_t> percentiles = {90, 95, 100};
   for (uint32_t i : percentiles) {
@@ -81,11 +83,24 @@ void PlotStuff(
 
     std::vector<double> delay_changes;
     std::vector<double> avg_path_counts;
+    std::vector<double> fractions_on_sp;
     std::map<size_t, std::vector<double>> values;
     for (const RCSummary* rc : rcs) {
       std::vector<double> stretches = rc->rel_stretches;
       std::vector<bool> overloaded = rc->overloaded;
       std::sort(stretches.begin(), stretches.end());
+
+      double on_sp = 0;
+      for (double stretch : rc->abs_stretches) {
+        if (stretch < 0.0001) {
+          ++on_sp;
+        }
+      }
+      fractions_on_sp.emplace_back(on_sp / rc->abs_stretches.size());
+
+      double total =
+          std::accumulate(rc->path_counts.begin(), rc->path_counts.end(), 0.0);
+      avg_path_counts.emplace_back(total / rc->path_counts.size());
 
       bool any_overloaded = false;
       CHECK(stretches.size() == overloaded.size());
@@ -108,14 +123,11 @@ void PlotStuff(
       double fraction_change_in_delay =
           (rc->total_delay - rc->total_sp_delay) / rc->total_delay;
       delay_changes.emplace_back(fraction_change_in_delay);
-
-      double total =
-          std::accumulate(rc->path_counts.begin(), rc->path_counts.end(), 0.0);
-      avg_path_counts.emplace_back(total / rc->path_counts.size());
     }
 
     total_delay_delta_plot.AddData(opt, delay_changes);
     avg_path_count_plot.AddData(opt, avg_path_counts);
+    sp_fraction_plot.AddData(opt, fractions_on_sp);
     for (const auto& percentile_and_values : values) {
       size_t percentile = percentile_and_values.first;
       const std::vector<double>& values = percentile_and_values.second;
@@ -131,6 +143,7 @@ void PlotStuff(
 
   total_delay_delta_plot.PlotToDir(nc::StrCat(prefix, "total_delay_delta"));
   avg_path_count_plot.PlotToDir(nc::StrCat(prefix, "avg_path_count"));
+  sp_fraction_plot.PlotToDir(nc::StrCat(prefix, "sp_fraction"));
 }
 
 static void PlotRuntime(
