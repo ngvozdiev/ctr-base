@@ -77,7 +77,7 @@ add_library(alg_eval_tools src/plot_algorithm_eval_tools.cc)
 target_link_libraries(alg_eval_tools ctr_base demand_matrix_input gflags)
 
 add_executable(stability_eval src/opt/stability_eval.cc)
-target_link_libraries(stability_eval ctr_base)
+target_link_libraries(stability_eval demand_matrix_input ctr_base)
 
 add_executable(stability_eval_dependent src/opt/stability_eval_dependent.cc)
 target_link_libraries(stability_eval_dependent ctr_base)

@@ -1,29 +1,21 @@
 #include <gflags/gflags.h>
+#include <ncode/logging.h>
+#include <ncode/lp/demand_matrix.h>
+#include <ncode/net/net_common.h>
 #include <stddef.h>
-#include <algorithm>
-#include <cstdint>
-#include <map>
+#include <stdint.h>
+#include <iostream>
 #include <memory>
 #include <random>
-#include <set>
-#include <string>
 #include <tuple>
-#include <utility>
 #include <vector>
 
-#include "ncode/common.h"
-#include "ncode/file.h"
-#include "ncode/logging.h"
-#include "ncode/lp/demand_matrix.h"
-#include "ncode/lp/mc_flow.h"
-#include "ncode/net/net_common.h"
-#include "ncode/net/net_gen.h"
-#include "ncode/strutil.h"
 #include "../common.h"
+#include "../demand_matrix_input.h"
 #include "../metrics/metrics.h"
+#include "../topology_input.h"
 #include "ctr.h"
 #include "opt.h"
-#include "oversubscription_model.h"
 #include "path_provider.h"
 
 static auto* stability_volume_delta =
@@ -70,13 +62,6 @@ static auto* stability_remove_count =
             "stability_remove_count", "Number of REMOVEs", "Topology",
             "Traffic matrix", "Optimizer");
 
-static auto* stability_scale_factor =
-    nc::metrics::DefaultMetricManager()
-        -> GetUnsafeMetric<double, std::string, std::string>(
-            "stability_scale_factor",
-            "By how much the TM had to be scaled to make B4 fit", "Topology",
-            "Traffic matrix");
-
 static auto* stability_total_flow_delay_delta =
     nc::metrics::DefaultMetricManager()
         -> GetUnsafeMetric<double, std::string, std::string, std::string>(
@@ -84,21 +69,15 @@ static auto* stability_total_flow_delay_delta =
             "Change in the total sum of delays experienced by all flows.",
             "Topology", "Traffic matrix", "Optimizer");
 
-DEFINE_string(topology_files, "", "A list of topology files");
+using namespace ctr;
+
 DEFINE_double(demand_fraction, 0.05, "By how much to vary demand");
 DEFINE_double(flow_count_fraction, 0.05, "By how much to vary flow counts.");
 DEFINE_uint64(aggregate_count, 1, "How many aggregates to change");
 DEFINE_uint64(try_count, 1, "How many tries to perform");
-DEFINE_uint64(seed, 1ul, "Seed to use for the RNG");
-DEFINE_bool(scale_to_fit_b4, true, "Scales down matrices until B4 fits.");
-DEFINE_uint64(max_matrix_size, 500, "Ignore matrices with > aggregates.");
-DEFINE_double(matrix_scale, 1.0, "Matrix demands will be scaled by this much");
+DEFINE_uint64(stability_eval_seed, 1ul, "Seed to use for the RNG");
 
-static bool Fits(const ctr::RoutingConfiguration& routing) {
-  const std::set<ctr::AggregateId>& aggregates_no_fit =
-      ctr::OverSubModel(routing).aggregates_no_fit();
-  return aggregates_no_fit.empty();
-}
+DEFINE_bool(skip_trivial, true, "Skips trivially satisfiable TMs");
 
 void RecordDeltas(const std::string& topology, const std::string& tm,
                   const std::string& opt,
@@ -137,174 +116,75 @@ void RecordDeltas(const std::string& topology, const std::string& tm,
   remove_count_handle->AddValue(route_removals);
 }
 
-// Runs B4. If B4 is unable to fit the traffic will scale the matrix down to the
-// point where it can.
-static std::pair<std::unique_ptr<ctr::RoutingConfiguration>,
-                 std::unique_ptr<ctr::RoutingConfiguration>>
-RunB4(const ctr::TrafficMatrix& tm, const std::string& topology_string,
-      const std::string& tm_string, ctr::PathProvider* path_provider,
-      std::mt19937* rnd) {
-  ctr::B4Optimizer b4_optimizer(path_provider, false, 1.0);
-  double scale = 1.01;
-  while (scale > 0) {
-    // Will scale it down by 1%.
-    scale -= 0.01;
-
-    auto scaled_tm = tm.ScaleDemands(scale, {});
-    // B4 should run fine on both the scaled and the randomized TMs.
-    auto before = b4_optimizer.Optimize(*scaled_tm);
-    if (FLAGS_scale_to_fit_b4 && !Fits(*before)) {
-      continue;
-    }
-
-    auto rnd_tm =
-        scaled_tm->Randomize(FLAGS_demand_fraction, FLAGS_flow_count_fraction,
-                             FLAGS_aggregate_count, rnd);
-    auto after = b4_optimizer.Optimize(*rnd_tm);
-    if (FLAGS_scale_to_fit_b4 && !Fits(*after)) {
-      continue;
-    }
-
-    stability_scale_factor->GetHandle(topology_string, tm_string)
-        ->AddValue(scale);
-    return {std::move(before), std::move(after)};
-  }
-
-  LOG(FATAL) << "Should not happen";
-  return {};
-}
-
-static void ParseMatrix(const ctr::TrafficMatrix& tm,
-                        const std::string& topology_string,
-                        const std::string& tm_string, size_t seed,
-                        ctr::PathProvider* path_provider) {
+static void ParseMatrix(
+    const ctr::DemandMatrixAndFilename* demand_matrix_and_filename,
+    size_t seed) {
   std::mt19937 rnd(seed);
-  auto b4_before_and_after =
-      RunB4(tm, topology_string, tm_string, path_provider, &rnd);
+  const std::string& top_file = demand_matrix_and_filename->topology_file;
+  const std::string& tm_file = demand_matrix_and_filename->file;
+  nc::lp::DemandMatrix* demand_matrix =
+      demand_matrix_and_filename->demand_matrix.get();
 
-  // Will check to see if the matrix is trivially satisfiable---if all
-  // aggregates fit on the shortest path.
-  size_t max_num_paths =
-      b4_before_and_after.second->MaxNumberOfPathsInAggregate();
-  CHECK(max_num_paths > 0);
-  if (max_num_paths == 1) {
-    LOG(INFO) << "Will skip trivially satisfiable topology " << topology_string
-              << " matrix " << tm_string;
-    return;
-  }
+  const nc::net::GraphStorage* graph = demand_matrix->graph();
+  LOG(ERROR) << "Running " << top_file << " " << tm_file;
 
-  ctr::RoutingConfigurationDelta b4_delta =
-      b4_before_and_after.first->GetDifference(*b4_before_and_after.second);
+  std::unique_ptr<ctr::TrafficMatrix> tm =
+      ctr::TrafficMatrix::DistributeFromDemandMatrix(*demand_matrix);
+  auto tm_after =
+      tm->Randomize(FLAGS_demand_fraction, FLAGS_flow_count_fraction,
+                    FLAGS_aggregate_count, &rnd);
 
-  const ctr::TrafficMatrix* tm_before = b4_before_and_after.first.get();
-  const ctr::TrafficMatrix* tm_after = b4_before_and_after.second.get();
+  PathProvider path_provider(graph);
+  CTROptimizer ctr_optimizer_limited(&path_provider, 1.0, true, false);
+  MinMaxOptimizer minmax_low_delay_optimizer(&path_provider, 1.0, true);
+  MinMaxPathBasedOptimizer minmax_ksp_optimizer(&path_provider, 1.0, true, 10);
+  B4Optimizer b4_optimizer(&path_provider, false, 1.0);
 
-  // Need to also generate before/after for CTR using the same TMs as B4.
-  ctr::CTROptimizer ctr_optimizer(path_provider, 1.0, true, false);
-  auto ctr_before = ctr_optimizer.Optimize(*tm_before);
-
-  // Will also run with a heuristic.
+  auto ctr_before = ctr_optimizer_limited.Optimize(*tm);
   std::unique_ptr<ctr::RoutingConfiguration> ctr_after_with_limits;
   std::unique_ptr<ctr::RoutingConfiguration> ctr_after;
   std::tie(ctr_after_with_limits, ctr_after) =
-      ctr_optimizer.OptimizeAndReturnUnlimitedRun(*tm_after);
+      ctr_optimizer_limited.OptimizeAndReturnUnlimitedRun(*tm_after);
 
   ctr::RoutingConfigurationDelta ctr_delta_limits =
       ctr_before->GetDifference(*ctr_after_with_limits);
   ctr::RoutingConfigurationDelta ctr_delta =
       ctr_before->GetDifference(*ctr_after);
 
-  ctr::MinMaxOptimizer minmax_opt(path_provider, 1.0, true);
-  auto minmax_before = minmax_opt.Optimize(*tm_before);
-  auto minmax_after = minmax_opt.Optimize(*tm_after);
+  auto minmax_before = minmax_low_delay_optimizer.Optimize(*tm);
+  auto minmax_after = minmax_low_delay_optimizer.Optimize(*tm_after);
   ctr::RoutingConfigurationDelta minmax_delta =
       minmax_before->GetDifference(*minmax_after);
 
-  ctr::MinMaxPathBasedOptimizer minmax_pb_opt(path_provider, 1.0, true, 10);
-  auto minmax_pb_before = minmax_pb_opt.Optimize(*tm_before);
-  auto minmax_pb_after = minmax_pb_opt.Optimize(*tm_after);
+  auto minmax_pb_before = minmax_ksp_optimizer.Optimize(*tm);
+  auto minmax_pb_after = minmax_ksp_optimizer.Optimize(*tm_after);
   ctr::RoutingConfigurationDelta minmax_pb_delta =
       minmax_pb_before->GetDifference(*minmax_pb_after);
 
-  RecordDeltas(topology_string, tm_string, "MinMax(LD)", minmax_delta);
-  RecordDeltas(topology_string, tm_string, "MinMax(K10)", minmax_pb_delta);
-  RecordDeltas(topology_string, tm_string, "CTR", ctr_delta);
-  RecordDeltas(topology_string, tm_string, "CTR_LIM", ctr_delta_limits);
-  RecordDeltas(topology_string, tm_string, "B4", b4_delta);
-}
+  auto b4_before = b4_optimizer.Optimize(*tm);
+  auto b4_after = b4_optimizer.Optimize(*tm_after);
+  ctr::RoutingConfigurationDelta b4_delta = b4_before->GetDifference(*b4_after);
 
-// The TM that we load will have no flow counts. Need some out of thin air.
-static std::map<nc::lp::SrcAndDst, size_t> GetFlowCountMap(
-    const nc::lp::DemandMatrix& demand_matrix) {
-  std::map<nc::lp::SrcAndDst, size_t> out;
-  for (const auto& element : demand_matrix.elements()) {
-    // Will assign flow counts in a way that yields the same per-flow bandwidth.
-    double count = element.demand.Mbps();
-    out[{element.src, element.dst}] = std::max(1.0, count);
-  }
-
-  return out;
-}
-
-static std::vector<std::string> GetTopologyFiles() {
-  std::vector<std::string> out;
-  std::vector<std::string> split = nc::Split(FLAGS_topology_files, ",");
-  for (const std::string& piece : split) {
-    std::vector<std::string> files = nc::Glob(piece);
-    out.insert(out.end(), files.begin(), files.end());
-  }
-
-  return out;
-}
-
-static std::vector<std::string> GetMatrixFiles(
-    const std::string& topology_file) {
-  std::string matrix_location =
-      nc::StringReplace(topology_file, ".graph", ".*.demands", true);
-  return nc::Glob(matrix_location);
+  RecordDeltas(top_file, tm_file, "MinMaxLD", minmax_delta);
+  RecordDeltas(top_file, tm_file, "MinMaxK10", minmax_pb_delta);
+  RecordDeltas(top_file, tm_file, "CTR", ctr_delta);
+  RecordDeltas(top_file, tm_file, "CTR_LIM", ctr_delta_limits);
+  RecordDeltas(top_file, tm_file, "B4", b4_delta);
 }
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   nc::metrics::InitMetrics();
 
-  std::vector<std::string> topology_files = GetTopologyFiles();
-  CHECK(!topology_files.empty());
+  std::vector<ctr::TopologyAndFilename> topologies;
+  std::vector<ctr::DemandMatrixAndFilename> matrices;
+  std::tie(topologies, matrices) =
+      ctr::GetDemandMatrixInputs(FLAGS_skip_trivial);
 
-  for (const std::string& topology_file : topology_files) {
-    std::vector<std::string> nodes_in_order;
-    nc::net::GraphBuilder graph_builder = nc::net::LoadRepetitaOrDie(
-        nc::File::ReadFileToStringOrDie(topology_file), &nodes_in_order);
-    graph_builder.RemoveMultipleLinks();
-    nc::net::GraphStorage graph(graph_builder);
-
-    std::vector<std::string> matrix_files = GetMatrixFiles(topology_file);
-    if (matrix_files.empty()) {
-      LOG(ERROR) << "No matrices for " << topology_file;
-      continue;
-    }
-
-    for (const std::string& matrix_file : matrix_files) {
-      LOG(INFO) << "Processing " << topology_file << " : " << matrix_file;
-      auto demand_matrix = nc::lp::DemandMatrix::LoadRepetitaFileOrDie(
-          matrix_file, nodes_in_order, &graph);
-      ctr::TrafficMatrix traffic_matrix(*demand_matrix,
-                                        GetFlowCountMap(*demand_matrix));
-
-      if (traffic_matrix.demands().size() > FLAGS_max_matrix_size) {
-        continue;
-      }
-
-      // Will scale the TM here.
-      auto scaled_tm = traffic_matrix.ScaleDemands(FLAGS_matrix_scale, {});
-
-      ctr::PathProvider path_provider(&graph);
-      for (size_t i = 0; i < FLAGS_try_count; ++i) {
-        size_t seed = FLAGS_seed + i;
-        ParseMatrix(*scaled_tm, nc::File::ExtractFileName(matrix_file),
-                    nc::File::ExtractFileName(topology_file), seed,
-                    &path_provider);
-      }
+  for (const ctr::DemandMatrixAndFilename& input : matrices) {
+    for (size_t i = 0; i < FLAGS_try_count; ++i) {
+      size_t seed = FLAGS_stability_eval_seed + i;
+      ParseMatrix(&input, seed);
     }
   }
 }
