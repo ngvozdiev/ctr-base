@@ -99,18 +99,21 @@ void PlotStuff(
       double all_flows =
           std::accumulate(rc->flow_counts.begin(), rc->flow_counts.end(), 0.0);
       double flows_on_sp = 0;
-      double flows_on_single_path = 0;
       for (size_t i = 0; i < rc->abs_stretches.size(); ++i) {
         if (rc->abs_stretches[i] < 0.0001) {
           flows_on_sp += rc->flow_counts[i];
         }
-
-        if (rc->flow_counts[i] == 1.0) {
-          flows_on_single_path += rc->flow_counts[i];
-        }
       }
       fractions_on_sp.emplace_back(flows_on_sp / all_flows);
-      fractions_on_single_path.emplace_back(flows_on_single_path / all_flows);
+
+      double aggregates_on_single_path = 0;
+      for (size_t i = 0; i < rc->path_counts.size(); ++i) {
+        if (rc->path_counts[i] == 1) {
+          ++aggregates_on_single_path;
+        }
+      }
+      fractions_on_single_path.emplace_back(aggregates_on_single_path /
+                                            rc->path_counts.size());
 
       double total =
           std::accumulate(rc->path_counts.begin(), rc->path_counts.end(), 0.0);
