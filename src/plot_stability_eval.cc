@@ -18,7 +18,7 @@
 #include "metrics/metrics_parser.h"
 
 DEFINE_string(metrics_dir, "", "The metrics directory.");
-DEFINE_string(optimizers, "MinMax(LD),CTR_LIM,B4,CTR,MinMax(K10)",
+DEFINE_string(optimizers, "MinMaxLD,CTR_LIM,B4,CTR,MinMaxK10",
               "Optimizers to plot.");
 
 static constexpr char kVolumeChangeMetric[] = "stability_volume_delta";

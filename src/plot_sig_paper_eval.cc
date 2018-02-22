@@ -66,6 +66,10 @@ void PlotStuff(
       {"Distribution of total delay", "change over SP delay"});
   nc::viz::CDFPlot avg_path_count_plot(
       {"Average paths per aggregate", "average path count"});
+  nc::viz::CDFPlot max_path_count_plot(
+      {"Max paths per aggregate", "max path count"});
+  nc::viz::CDFPlot single_path_fraction_plot(
+      {"Fraction of aggregates with a single path", "fraction"});
   nc::viz::CDFPlot sp_fraction_plot(
       {"Fraction of aggregates with stretch of 1", "fraction"});
 
@@ -83,7 +87,9 @@ void PlotStuff(
 
     std::vector<double> delay_changes;
     std::vector<double> avg_path_counts;
+    std::vector<double> max_path_counts;
     std::vector<double> fractions_on_sp;
+    std::vector<double> fractions_on_single_path;
     std::map<size_t, std::vector<double>> values;
     for (const RCSummary* rc : rcs) {
       std::vector<double> stretches = rc->rel_stretches;
@@ -93,16 +99,26 @@ void PlotStuff(
       double all_flows =
           std::accumulate(rc->flow_counts.begin(), rc->flow_counts.end(), 0.0);
       double flows_on_sp = 0;
+      double flows_on_single_path = 0;
       for (size_t i = 0; i < rc->abs_stretches.size(); ++i) {
         if (rc->abs_stretches[i] < 0.0001) {
           flows_on_sp += rc->flow_counts[i];
         }
+
+        if (rc->flow_counts[i] == 1.0) {
+          flows_on_single_path += rc->flow_counts[i];
+        }
       }
       fractions_on_sp.emplace_back(flows_on_sp / all_flows);
+      fractions_on_single_path.emplace_back(flows_on_single_path / all_flows);
 
       double total =
           std::accumulate(rc->path_counts.begin(), rc->path_counts.end(), 0.0);
+      double max_path_count =
+          *(std::max_element(rc->path_counts.begin(), rc->path_counts.end()));
+
       avg_path_counts.emplace_back(total / rc->path_counts.size());
+      max_path_counts.emplace_back(max_path_count);
 
       bool any_overloaded = false;
       CHECK(stretches.size() == overloaded.size());
@@ -129,7 +145,9 @@ void PlotStuff(
 
     total_delay_delta_plot.AddData(opt, delay_changes);
     avg_path_count_plot.AddData(opt, avg_path_counts);
+    max_path_count_plot.AddData(opt, max_path_counts);
     sp_fraction_plot.AddData(opt, fractions_on_sp);
+    single_path_fraction_plot.AddData(opt, fractions_on_single_path);
     for (const auto& percentile_and_values : values) {
       size_t percentile = percentile_and_values.first;
       const std::vector<double>& values = percentile_and_values.second;
