@@ -163,7 +163,10 @@ void PlotStuff(
 
   total_delay_delta_plot.PlotToDir(nc::StrCat(prefix, "total_delay_delta"));
   avg_path_count_plot.PlotToDir(nc::StrCat(prefix, "avg_path_count"));
+  max_path_count_plot.PlotToDir(nc::StrCat(prefix, "max_path_count"));
   sp_fraction_plot.PlotToDir(nc::StrCat(prefix, "sp_fraction"));
+  single_path_fraction_plot.PlotToDir(
+      nc::StrCat(prefix, "single_path_fraction"));
 }
 
 static void PlotRuntime(
