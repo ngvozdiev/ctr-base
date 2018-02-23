@@ -680,6 +680,13 @@ std::vector<TrimmedPcapDataTraceBin> PcapDataBinCache::AccumulateBins(
   return out;
 }
 
+void PcapDataBinCache::Populate(const PcapDataTrace* trace,
+                                const TraceSliceSet& slices, size_t start_bin,
+                                size_t end_bin) {
+  size_t key_index = FindOrInsertKey(trace, slices);
+  Bins(key_index, start_bin, end_bin);
+}
+
 size_t PcapDataBinCache::FindOrInsertKey(const PcapDataTrace* trace,
                                          const TraceSliceSet& slices) {
   for (size_t i = 0; i < keys_.size(); ++i) {

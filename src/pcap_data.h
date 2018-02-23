@@ -323,6 +323,9 @@ class PcapDataBinCache {
 
   std::string CacheStats() const;
 
+  void Populate(const PcapDataTrace* trace, const TraceSliceSet& slices,
+                size_t bin_from, size_t bin_to);
+
  private:
   // Number of bins in a cache line.
   static constexpr size_t kCacheLineBinCount = 100000;

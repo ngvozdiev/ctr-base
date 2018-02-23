@@ -61,6 +61,9 @@ DEFINE_double(demand_scale, 1.0, "Will scale all packet traces by this much");
 DEFINE_bool(limited_opt, true,
             "Whether or not to attempt to avoid churn at the expense of a "
             "little optimality");
+DEFINE_uint64(cache_prepopulate, 0,
+              "If not 0 will pre-populate the cache with this many bins from "
+              "each trace/slices combination");
 
 // A global variable that will keep a reference to the event queue, useful for
 // logging, as the logging handler only accepts a C-style function pointer.
@@ -82,6 +85,22 @@ static void HandleApproximate(
   milliseconds total_duration(FLAGS_duration_ms);
 
   ctr::PcapDataBinCache cache;
+  if (FLAGS_cache_prepopulate != 0) {
+    std::map<const ctr::PcapDataTrace*, ctr::TraceSliceSet> to_cache;
+    for (const auto& aggregate_and_init_sequence : initial_sequences) {
+      const ctr::BinSequence& sequence = aggregate_and_init_sequence.second;
+      for (const ctr::BinSequence::TraceAndSlice& trace_and_slice :
+           sequence.traces()) {
+        to_cache[trace_and_slice.trace].insert(trace_and_slice.slice);
+      }
+    }
+
+    for (const auto& trace_and_slices : to_cache) {
+      cache.Populate(trace_and_slices.first, trace_and_slices.second, 0,
+                     FLAGS_cache_prepopulate);
+    }
+  }
+
   ctr::NetMock net_mock(std::move(initial_sequences), round_duration,
                         poll_period, total_duration, FLAGS_periods_in_history,
                         routing_system);
@@ -169,7 +188,7 @@ int main(int argc, char** argv) {
   routing_system_config.store_to_metrics = false;
   routing_system_config.link_capacity_multiplier =
       FLAGS_link_capacity_multiplier +
-      (1 - FLAGS_link_capacity_multiplier) / 2.0;
+      (1 - FLAGS_link_capacity_multiplier) / 3.0;
   ctr::RoutingSystem routing_system(routing_system_config, opt.get(),
                                     &estimator_factory);
 
