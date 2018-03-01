@@ -85,7 +85,7 @@ void PlotStuff(
     const std::string& opt = opt_and_summaries.first;
     const std::vector<const RCSummary*>& rcs = opt_and_summaries.second;
 
-    std::vector<double> delay_changes;
+    std::vector<std::pair<double, const RCSummary*>> delay_changes;
     std::vector<double> avg_path_counts;
     std::vector<double> max_path_counts;
     std::vector<double> fractions_on_sp;
@@ -143,10 +143,23 @@ void PlotStuff(
 
       double fraction_change_in_delay =
           (rc->total_delay - rc->total_sp_delay) / rc->total_delay;
-      delay_changes.emplace_back(fraction_change_in_delay);
+      delay_changes.emplace_back(fraction_change_in_delay, rc);
     }
 
-    total_delay_delta_plot.AddData(opt, delay_changes);
+    std::sort(delay_changes.begin(), delay_changes.end());
+    const RCSummary* median_delay_change =
+        delay_changes[delay_changes.size() / 2].second;
+
+    std::vector<double> delay_change_values;
+    for (const auto& delay_change : delay_changes) {
+      delay_change_values.emplace_back(delay_change.first);
+    }
+
+    LOG(INFO) << "Median for " << opt << " is "
+              << (*median_delay_change->parent->topology_file_name) << " tm "
+              << (*median_delay_change->parent->demand_matrix_file_name);
+
+    total_delay_delta_plot.AddData(opt, delay_change_values);
     avg_path_count_plot.AddData(opt, avg_path_counts);
     max_path_count_plot.AddData(opt, max_path_counts);
     sp_fraction_plot.AddData(opt, fractions_on_sp);
