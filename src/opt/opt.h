@@ -68,8 +68,10 @@ class ShortestPathOptimizer : public Optimizer {
 class MinMaxOptimizer : public Optimizer {
  public:
   MinMaxOptimizer(PathProvider* path_provider, double capacity_multiplier,
-                  bool also_minimize_delay)
+                  bool also_minimize_delay,
+                  const nc::net::ExclusionSet& exclusion_set = {})
       : Optimizer(path_provider),
+        exclusion_set_(exclusion_set),
         link_capacity_multiplier_(capacity_multiplier),
         also_minimize_delay_(also_minimize_delay) {}
 
@@ -77,6 +79,9 @@ class MinMaxOptimizer : public Optimizer {
       const TrafficMatrix& tm) override;
 
  private:
+  // Elements to exclude.
+  const nc::net::ExclusionSet exclusion_set_;
+
   // All links' capacity is multiplied by this number.
   double link_capacity_multiplier_;
 
@@ -135,16 +140,21 @@ class B4Optimizer : public Optimizer {
 // A link-based formulation of CTR.
 class CTRLinkBased : public Optimizer {
  public:
-  CTRLinkBased(PathProvider* path_provider, double link_capacity_multiplier)
+  CTRLinkBased(PathProvider* path_provider, double link_capacity_multiplier,
+               const nc::net::ExclusionSet& exclusion_set = {})
       : Optimizer(path_provider),
+        exclusion_set_(exclusion_set),
         link_capacity_multiplier_(link_capacity_multiplier) {}
 
   std::unique_ptr<RoutingConfiguration> Optimize(
       const TrafficMatrix& tm) override;
 
  private:
+  // Elements to exclude.
+  const nc::net::ExclusionSet exclusion_set_;
+
   // All links' capacities will be multiplied by this number.
-  double link_capacity_multiplier_;
+  const double link_capacity_multiplier_;
 };
 
 // Returns for each of the N (N-1) aggregates the amount of flow that can be

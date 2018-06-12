@@ -150,9 +150,9 @@ int main(int argc, char** argv) {
   for (const auto& topology : topologies) {
     topologies_by_name[topology.file] = &topology;
 
-    LOG(INFO) << "Getting datapoint for " << topology.file;
     double datapoint = GetDatapointForTopology(*topology.graph);
     topology_datapoints[topology.file] = datapoint;
+    LOG(INFO) << "Datapoint for " << topology.file << " " << datapoint;
   }
 
   std::vector<Input> inputs;

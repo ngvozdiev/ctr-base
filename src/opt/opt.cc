@@ -41,10 +41,17 @@ std::unique_ptr<RoutingConfiguration> ShortestPathOptimizer::Optimize(
 }
 
 static nc::net::GraphLinkMap<double> GetCapacities(
-    const nc::net::GraphStorage& graph, double multiplier) {
+    const nc::net::GraphStorage& graph, double multiplier,
+    const nc::net::ExclusionSet& exclusion_set) {
   nc::net::GraphLinkMap<double> out;
   for (nc::net::GraphLinkIndex link : graph.AllLinks()) {
-    double capacity = graph.GetLink(link)->bandwidth().Mbps();
+    const nc::net::GraphLink* link_ptr = graph.GetLink(link);
+    bool should_exclude = exclusion_set.ShouldExcludeLink(link) ||
+                          exclusion_set.ShouldExcludeNode(link_ptr->src()) ||
+                          exclusion_set.ShouldExcludeNode(link_ptr->dst());
+    double capacity =
+        should_exclude ? 0 : graph.GetLink(link)->bandwidth().Mbps();
+
     out[link] = capacity * multiplier;
   }
 
@@ -89,7 +96,7 @@ static std::unique_ptr<RoutingConfiguration> GetRoutingConfig(
 std::unique_ptr<RoutingConfiguration> MinMaxOptimizer::Optimize(
     const TrafficMatrix& tm) {
   nc::lp::MinMaxProblem problem(
-      graph_, GetCapacities(*graph_, link_capacity_multiplier_),
+      graph_, GetCapacities(*graph_, link_capacity_multiplier_, exclusion_set_),
       also_minimize_delay_);
 
   for (const auto& aggregate_and_demand : tm.demands()) {
@@ -119,8 +126,8 @@ static nc::net::GraphLinkMap<double> GetCosts(
 std::unique_ptr<RoutingConfiguration> CTRLinkBased::Optimize(
     const TrafficMatrix& tm) {
   nc::lp::MinCostMultiCommodityFlowProblem problem(
-      GetCapacities(*graph_, link_capacity_multiplier_), GetCosts(*graph_),
-      graph_);
+      GetCapacities(*graph_, link_capacity_multiplier_, exclusion_set_),
+      GetCosts(*graph_), graph_);
 
   for (const auto& aggregate_and_demand : tm.demands()) {
     const AggregateId& aggregate_id = aggregate_and_demand.first;
@@ -617,7 +624,7 @@ static nc::net::Bandwidth GetCapacityAtDelay(const nc::net::GraphStorage& graph,
     tm.AddDemand(id, DemandAndFlowCount(bw, 1ul));
 
     PathProvider path_provider(&graph);
-    CTRLinkBased ctr(&path_provider, 1.0);
+    CTRLinkBased ctr(&path_provider, 1.0, {});
     auto result = ctr.Optimize(tm);
     if (!result) {
       // Not feasible.
@@ -722,6 +729,38 @@ std::map<AggregateId, double> GetCapacityAtDelay(
   return out;
 }
 
+// Returns true if it is possible to fit 'bandwidth' traffic from the source of
+// the aggregate identified by 'id' to its destination without using any paths
+// with delay longer than 'threshold'.
+static bool CanFitTraffic(const nc::net::GraphStorage& graph,
+                          const AggregateId& id,
+                          const nc::net::ExclusionSet& exclusion_set,
+                          nc::net::Bandwidth bandwidth,
+                          nc::net::Delay threshold) {
+  PathProvider path_provider(&graph);
+  CTRLinkBased ctr_link_based(&path_provider, 1.0, exclusion_set);
+
+  std::map<AggregateId, DemandAndFlowCount> demands;
+  TrafficMatrix tm(&graph);
+  tm.AddDemand(id, {bandwidth, 1000});
+
+  std::unique_ptr<RoutingConfiguration> routing_configuration =
+      ctr_link_based.Optimize(tm);
+  if (!routing_configuration) {
+    return false;
+  }
+
+  const std::vector<RouteAndFraction>& routes =
+      routing_configuration->FindRoutesOrDie(id);
+  for (const auto& route_and_fraction : routes) {
+    if (route_and_fraction.first->delay() > threshold) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Returns all links that have capacity less than 'bandwidth'.
 nc::net::GraphLinkSet LinksWithCapacityLessThan(
     const nc::net::GraphStorage& graph, nc::net::Bandwidth bandwidth) {
@@ -743,6 +782,25 @@ static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
                                      const nc::net::Walk& shortest_path,
                                      const AggregateId& id,
                                      nc::net::Delay threshold) {
+  nc::net::Bandwidth sp_path_flow = PathFlow(shortest_path, graph);
+
+  double count = 0;
+  for (nc::net::GraphLinkIndex link : shortest_path.links()) {
+    nc::net::ExclusionSet exclusion_set;
+    exclusion_set.Links({link});
+    if (!CanFitTraffic(graph, id, exclusion_set, sp_path_flow, threshold)) {
+      continue;
+    }
+
+    ++count;
+  }
+
+  return count / shortest_path.links().size();
+}
+
+static double GetLinkFractionAtDelaySameCapacity(
+    const nc::net::GraphStorage& graph, const nc::net::Walk& shortest_path,
+    const AggregateId& id, nc::net::Delay threshold) {
   double count = 0;
   for (nc::net::GraphLinkIndex link : shortest_path.links()) {
     nc::net::Bandwidth link_bw = graph.GetLink(link)->bandwidth();
@@ -755,6 +813,7 @@ static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
 
     auto alternative_path = nc::net::ShortestPathWithConstraints(
         id.src(), id.dst(), graph, constraints);
+
     if (!alternative_path) {
       continue;
     }
@@ -765,13 +824,27 @@ static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
 
     ++count;
   }
-
   return count / shortest_path.links().size();
+}
+
+static bool AllLinksSameCapacity(const nc::net::GraphStorage& graph) {
+  nc::net::Bandwidth bw = nc::net::Bandwidth::Max();
+  for (nc::net::GraphLinkIndex link_index : graph.AllLinks()) {
+    const nc::net::GraphLink* link_ptr = graph.GetLink(link_index);
+    if (bw != nc::net::Bandwidth::Max() && link_ptr->bandwidth() != bw) {
+      return false;
+    }
+
+    bw = link_ptr->bandwidth();
+  }
+
+  return true;
 }
 
 std::map<AggregateId, double> GetLinkFractionAtDelay(
     const nc::net::GraphStorage& graph, double delay_fraction) {
   nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
+  bool all_same = AllLinksSameCapacity(graph);
 
   std::map<AggregateId, double> out;
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
@@ -786,7 +859,10 @@ std::map<AggregateId, double> GetLinkFractionAtDelay(
       nc::net::Delay delay_threshold =
           nc::net::Delay(static_cast<size_t>(threshold));
 
-      double f = GetLinkFractionAtDelay(graph, *path, id, delay_threshold);
+      double f =
+          all_same ? GetLinkFractionAtDelaySameCapacity(graph, *path, id,
+                                                        delay_threshold)
+                   : GetLinkFractionAtDelay(graph, *path, id, delay_threshold);
       out[id] = f;
     }
   }

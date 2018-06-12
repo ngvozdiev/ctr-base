@@ -12,6 +12,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "opt/ctr.h"
 
 DEFINE_string(topology_root, "", "Root for topologies. Required.");
 DEFINE_double(link_delay_scale, 1.0,
@@ -19,6 +20,10 @@ DEFINE_double(link_delay_scale, 1.0,
 DEFINE_double(link_capacity_scale, 1.0,
               "All link bandwidths will be scaled by this number");
 DEFINE_uint64(split_threshold_ms, 0, "If not 0, will split the topologies");
+DEFINE_bool(dump_llpd, false, "If true will dump LLP per topology and exit");
+DEFINE_double(sp_fraction, 1.4, "How far from the SP a path can be");
+DEFINE_double(link_fraction_limit, 0.7,
+              "At least this much of the SP's links can be routed around");
 
 static constexpr char kTopologyExtension[] = ".graph";
 
@@ -106,6 +111,11 @@ std::vector<nc::net::GraphBuilder> SplitTopology(
   return out;
 }
 
+static double GetDatapointForTopology(const nc::net::GraphStorage& graph) {
+  return ctr::GetFractionOfPairsAboveLinkFraction(graph, FLAGS_sp_fraction,
+                                                  FLAGS_link_fraction_limit);
+}
+
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
@@ -114,6 +124,14 @@ int main(int argc, char** argv) {
     std::vector<std::string> node_order;
     nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
         nc::File::ReadFileToStringOrDie(topology_file), &node_order);
+    builder.RemoveMultipleLinks();
+
+    if (FLAGS_dump_llpd) {
+      nc::net::GraphStorage graph(builder);
+      LOG(INFO) << "Topology " << topology_file << " LLPD "
+                << GetDatapointForTopology(graph);
+      continue;
+    }
 
     if (FLAGS_split_threshold_ms > 0) {
       nc::net::Delay threshold = std::chrono::duration_cast<nc::net::Delay>(
