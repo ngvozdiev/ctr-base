@@ -142,6 +142,15 @@ class TrafficMatrix {
 
   std::pair<nc::net::Bandwidth, nc::net::Bandwidth> MinMaxAggregates() const;
 
+  // Adds meta information to this traffic matrix.
+  void UpdateProperty(const std::string& key, const std::string& value) {
+    properties_[key] = value;
+  }
+
+  const std::map<std::string, std::string>& properties() const {
+    return properties_;
+  }
+
  protected:
   // The graph.
   const nc::net::GraphStorage* graph_;
@@ -149,6 +158,9 @@ class TrafficMatrix {
  private:
   // For each aggregate its demand and its flow count.
   std::map<AggregateId, DemandAndFlowCount> demands_;
+
+  // Same as the properties of DemandMatrix.
+  std::map<std::string, std::string> properties_;
 
   DISALLOW_COPY_AND_ASSIGN(TrafficMatrix);
 };

@@ -1,0 +1,391 @@
+syntax = "proto3";
+package ctr.info;
+
+message Link {
+  // Index of the source node.
+  // Required.
+  uint32 source_index = 1;
+
+  // Index of the destination node.
+  // Required.
+  uint32 destination_index = 2;
+
+  // Delay in microseconds.
+  // Required, non-zero.
+  uint64 delay_micros = 3;
+
+  // Rate in bps.
+  // Required, non-zero.
+  uint64 rate_bps = 4;
+};
+
+// An unsigned value and a number of instances of this value. A series
+// of these messages form a discrete distribution.
+message ValueAndCount {
+  // The value.
+  // Required.
+  uint64 value = 1;
+
+  // How many times the value was seen.
+  // Required, non-zero.
+  uint64 count = 2;
+};
+
+// A discrete distribution of values.
+message DiscreteDistribution {
+  // The values and for each value the number of instances.
+  repeated ValueAndCount values_and_counts = 1;
+
+  // Multiplier for each value. If this value is 1 then the original
+  // values are added directly to the distribution. If this value is
+  // 0.1 then each value is divided by 10, and truncated before adding
+  // to the distribution. This reduces the entropy of the distribution
+  // and results in less state, at the expense of accuracy.
+  double value_multiplier = 2;
+};
+
+message RealDistribution {
+  // The percentiles of the distribution. Contains 101 values the min
+  // is at [0] the max is at [100] percentile p is at [p].
+  repeated double percentiles = 1;
+
+  // The sum of all values.
+  double sum = 2;
+
+  // The number of values.
+  uint64 count = 3;
+
+  // The sum of the squares of the values.
+  double sum_squared = 4;
+};
+
+message TopologyInfo {
+  // Identifies the topology.
+  // Required.
+  uint64 topology_id = 1;
+  
+  // Number of nodes.
+  uint32 node_count = 2;
+
+  // Number of links.
+  uint32 link_count = 3;
+
+  // Number of unidirectional links.
+  uint32 unidirectional_link_count = 4;
+
+  // Number of multiple links.
+  uint32 multiple_link_count = 5;
+
+  // Diameter of the topology in propagation delay.
+  uint64 diameter_micros = 6;
+  
+  // Diameter of the topology in hops.
+  uint64 diameter_hops = 7;
+
+  // Low-latency path diversity.
+  double llpd = 8;
+
+  // The in-degree of nodes.
+  DiscreteDistribution node_in_degrees = 9;
+
+  // The out-degree of nodes.
+  DiscreteDistribution node_out_degrees = 10;
+
+  // The delays of all N * (N-1) shortest paths in the topology.
+  DiscreteDistribution shortest_path_delays = 11;
+  
+  // The hop counts of all N * (N-1) shortest paths in the topology.
+  DiscreteDistribution shortest_path_hop_counts = 12;
+
+  // The capacities of all links in the topology (in bps).
+  DiscreteDistribution link_capacities = 13;
+
+  // The delays of all links in the topology (in microseconds).
+  DiscreteDistribution link_delays = 14;
+
+  // All of the links.
+  repeated Link links = 15;
+
+  // A short human-readable name for the topology.
+  string name = 16;
+
+  // Date the topology was taken.
+  string date = 17;
+
+  // Additional longer descrption.
+  string description = 18;
+};
+
+// Mask for TopologyInfo, indicates fields to fetch except for
+// topology_id which is always set.
+message TopologyInfoMask {
+  bool node_count = 1;
+  bool link_count = 2;
+  bool unidirectional_link_count = 3;
+  bool multiple_link_count = 4;
+  bool diameter_micros = 5;
+  bool diameter_hops = 6;
+  bool llpd = 7;
+  bool node_in_degrees = 8;
+  bool node_out_degrees = 9;
+  bool link_capacities = 10;
+  bool link_delays = 11;
+  bool links = 12;
+  bool name = 13;
+  bool date = 14;
+  bool description = 15;
+
+  // If non-zero will populate the corresponding distribution.
+  double shortest_path_delays_multiplier = 16;
+  double shortest_path_hop_counts_multiplier = 17;
+};
+
+message TopologyInfoRequest {
+  // Identifies of the topologies whose information to fetch. If
+  // empty will fetch info for all topologies.
+  repeated uint64 topology_ids = 1;
+
+  // Information to fetch.
+  TopologyInfoMask mask = 2;
+};
+
+message TopologyInfoResponse {
+  repeated TopologyInfo topology_info = 1;
+};
+
+message Demand {
+  // Source node.
+  uint32 ingress_index = 1;
+
+  // Destination node.
+  uint32 egress_index = 2;
+
+  // Reate in bps, if present should be non-zero.
+  uint64 rate_bps = 3;
+
+  // Flow count, if present should be non-zero. If not present will
+  // assume to be 1.
+  uint64 flow_count = 4;
+
+  // Delay of the shortest path between the ingress and the egress in
+  // microseconds.
+  uint64 shortest_path_delay_micros = 5;
+};
+
+message DemandMask {
+  bool ingress_index = 1;
+  bool egress_index = 2;
+  bool rate_bps = 3;
+  bool flow_count = 4;
+  bool shortest_path_delay_micros = 5;
+};
+
+message TrafficMatrixInfo {
+  // Identifies this traffic matrix and topology.
+  uint64 traffic_matrix_id = 1;
+  
+  // Identifies this TM's topology.
+  uint64 topology_id = 2;
+  
+  // Number of non-zero demands.
+  uint64 demand_count = 3;
+
+  // Fraction of all possible N * (N - 1) demands that are non-zero.
+  double demand_fraction = 4;
+
+  // Sum of all demands in bps.
+  uint64 total_demand_bps = 5;
+  
+  // Locality used when generating the traffic matrix.
+  double locality = 6;
+
+  // How close to the max flow this matrix is. If all capacities were
+  // scaled by this number the matrix will just about be routable. If
+  // the matrix does not fit this value will be less than 1.
+  double limiting_multiplier = 7;
+
+  // Like limiting_multiplier, but instead of scaling all capacities
+  // by the same number will add the same rate (in bps) to all. Can be
+  // negative.
+  int64 limiting_rate = 8;
+  
+  // If true all demands can be routed on their shortest path.
+  bool is_trivial = 9;
+
+  // Rates of all demands.
+  DiscreteDistribution demand_rates = 10;
+
+  // Flow counts of all demands.
+  DiscreteDistribution demand_flow_counts = 11;
+
+  // Number of egresses for each ingress.
+  DiscreteDistribution demands_out_degree = 12;
+
+  // Number of ingresses for each egress.
+  DiscreteDistribution demands_in_degree = 13;
+
+  // All demands.
+  repeated Demand demands = 14;
+};
+
+message TrafficMatrixInfoMask {
+  bool demand_count = 1;
+  bool demand_fraction = 2;
+  bool total_demand_bps = 3;
+  bool locality = 4;
+  bool limiting_multiplier = 5;
+  bool limiting_rate = 6;
+  bool is_trivial = 7;
+  bool demands_out_degree = 8;
+  bool demands_in_degree = 9;
+
+  double demand_rates_multiplier = 10;
+  double demand_flow_counts_multiplier = 11;
+
+  // If any of the fields of the mask are non-false will populate the
+  // demands with the fields.
+  DemandMask demand_mask = 12;
+};
+
+message TrafficMatrixInfoRequest {
+  // The topology.
+  uint64 topology_id = 1;
+
+  // The traffic matrices. If empty will return all traffic matrices
+  // for the given topology.
+  repeated uint64 traffic_matrix_ids = 2;
+
+  // Indicates which fields of the traffic matrices to return.
+  TrafficMatrixInfoMask mask = 3;
+};
+
+message TrafficMatrixInfoResponse {
+  repeated TrafficMatrixInfo traffic_info = 1;
+};
+
+// The result of running a specific routing algorithm on the given
+// topology and traffic matrix.
+message RoutingInfo {
+  // Identifies the combination of traffic matrix, topology and
+  // routing system.
+  uint64 routing_id = 1;
+  
+  // The topology.
+  uint64 topology_id = 2;
+
+  // The traffic matrix
+  uint64 traffic_matrix_id = 3;
+
+  // A short human-readable string representation of the routing
+  // system. One of SP, B4, MinMaxK10, CTR, MinMaxLD.
+  string routing_system = 4;
+
+  // Fraction of the non-zero deamds that cross a link with utilization > 1.
+  double congested_demands_fraction = 5;
+  
+  // Fraction of all flows that cross a link with utilization > 1.
+  double congested_flows_fraction = 6;
+  
+  // The ratio sum D_{p} / sum D_{sp} where where D_{p} is the delay of the 
+  // path and D_{sp} is the delay of the shortest possible path for each flow. 
+  double total_latency_stretch = 7;
+
+  // The utilizations of all links. If any of those values is > 1 then
+  // the network is oversubscribed and queues are likely to form if
+  // this routing solution is deployed in a real network.
+  RealDistribution link_utilizations = 8;
+
+  // The ratios D_{p} / D_{sp} for each flow where D_{p} is the delay
+  // of the path and D_{sp} is the delay of the shortest possible path
+  // for the flow.
+  RealDistribution latency_stretch = 9;
+
+  // Like flows_delay_stretch, but only for flows that cross links
+  // with utilization <= 1.
+  RealDistribution latency_stretch_uncongested = 10;
+
+  // Delays experienced by all flows in the traffic matrix.
+  DiscreteDistribution flow_delays = 11;
+
+  // Like flow_delays, but only for flows that cross links whose
+  // utilization is <= 1. If the network is not oversubscribed this
+  // and 'flow_delays' are equivalent.
+  DiscreteDistribution flow_delays_uncongested = 12;
+};
+
+message RoutingInfoMask {
+  bool congested_flows_fraction = 1;
+  bool congested_demands_fraction = 2;
+  bool total_latency_stretch = 3;
+  bool link_utilizations = 4;
+  bool latency_stretch = 5;
+  bool latency_stretch_uncongested = 6;
+
+  double flow_delays_multiplier = 7;
+  double flow_delays_uncongested_multiplier = 8;
+};
+
+message RoutingInfoRequest {
+  // Identifies the traffic matrix.
+  uint64 traffic_matrix_id = 1;
+
+  // The routing system. If this and routing_ids are left empty, will return 
+  // routing results for all routing systems on traffic_matrix_id.
+  repeated string routing_systems = 2;
+
+  // The ids of the routing infos to return. If this and routing_systems are 
+  // left empty will return results for all routing systems on 
+  // traffic_matrix_id.
+  repeated uint64 routing_ids = 3;
+
+  // The fields that will be returned.
+  RoutingInfoMask mask = 4;
+};
+
+message RoutingInfoResponse {
+  repeated RoutingInfo routing_info = 1;
+};
+
+message TrafficMatrixGenerateRequest {
+  // The topology this traffic matrix is for.
+  uint64 topology_id = 1;
+
+  // How geographically local traffic should be.
+  double locality = 2;
+  
+  // The generated matrix will be scaleable by this much without becoming 
+  // unfeasible.
+  double limiting_multiplier = 3;
+  
+  // The seed for the matrix.
+  double seed = 4;
+};
+
+message TrafficMatrixGenerateResponse {
+  // The identifier of the newly-generated traffic matrix.
+  uint64 traffic_matrix_id = 2;
+};
+
+message InfoRequest {
+  oneof request {
+    TopologyInfoRequest topology_info_request = 1;
+    TrafficMatrixInfoRequest traffic_info_request = 2;
+    RoutingInfoRequest routing_info_request = 3;
+  };
+};
+
+message InfoResponse {
+  oneof response {
+    TopologyInfoResponse topology_info_response = 1;
+    TrafficMatrixInfoResponse traffic_info_response = 2;
+    RoutingInfoResponse routing_info_response = 3;
+  };
+};
+
+message Info {
+  oneof info {
+  	TopologyInfo topology_info = 1;
+  	TrafficMatrixInfo traffic_matrix_info = 2;
+  	RoutingInfo routing_info = 3;
+  };
+};

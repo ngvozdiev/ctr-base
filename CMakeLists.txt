@@ -119,7 +119,7 @@ add_executable(metrics_explore src/metrics/metrics_explore.cc)
 target_link_libraries(metrics_explore metrics_parser gflags)
 
 add_executable(tm_util src/tm_util.cc)
-target_link_libraries(tm_util ctr_base gflags)
+target_link_libraries(tm_util ctr_base topology_input gflags)
 
 add_executable(llpd_grow src/llpd_grow.cc)
 target_link_libraries(llpd_grow ctr_base geo_lib gflags)
@@ -189,3 +189,21 @@ target_link_libraries(top_grow geo_lib ctr_base demand_matrix_input metrics gfla
 
 add_executable(sfml_main src/sfml/sfml_main.cc)
 target_link_libraries(sfml_main sfml_utils sfml-graphics sfml-system sfml-window)
+
+PROTOBUF_GENERATE_CPP(INFO_PROTO_SRCS INFO_PROTO_HDRS src/info/info.proto)
+set_property(SOURCE ${INFO_PROTO_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS "-Wno-extended-offsetof")
+add_library(info STATIC src/info/info.cc src/info/processing_pool.cc ${INFO_PROTO_SRCS} ${INFO_PROTO_HDRS})
+target_link_libraries(info ctr_base ${PROTOBUF_LIBRARIES})
+
+add_library(info_server STATIC src/info/info_server.cc)
+target_link_libraries(info_server info)
+
+add_executable(generate_info src/info/generate_info.cc)
+target_link_libraries(generate_info info demand_matrix_input)
+
+add_executable(run_info_server src/info/run_info_server.cc)
+target_link_libraries(run_info_server info_server)
+
+if (NOT CTR_BASE_DISABLE_TESTS)
+   add_test_exec(processing_pool_test src/info/processing_pool_test.cc ncode info)
+endif()

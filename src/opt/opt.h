@@ -176,6 +176,8 @@ double GetFractionOfPairsAboveLinkFraction(const nc::net::GraphStorage& graph,
                                            double delay_fraction,
                                            double link_fraction);
 
+size_t CapacityDiversity(const nc::net::GraphStorage& graph);
+
 }  // namespace ctr
 
 #endif

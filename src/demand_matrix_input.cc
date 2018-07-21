@@ -115,8 +115,7 @@ GetDemandMatrixInputs(bool skip_trivial) {
 
     auto graph = nc::make_unique<nc::net::GraphStorage>(builder);
     nc::net::GraphStats stats = graph->Stats();
-    CHECK(!stats.sp_delay_percentiles.empty());
-    if (stats.sp_delay_percentiles.back() == nc::net::Delay::max()) {
+    if (stats.isPartitioned()) {
       LOG(INFO) << "Skipping " << topology_file << " graph partitioned ";
       continue;
     }
@@ -129,7 +128,8 @@ GetDemandMatrixInputs(bool skip_trivial) {
       continue;
     }
 
-    nc::net::Delay diameter = graph->Stats().sp_delay_percentiles.back();
+    nc::net::Delay diameter = duration_cast<nc::net::Delay>(
+        microseconds(stats.sp_delays_micros.Max()));
     if (diameter < milliseconds(FLAGS_topology_delay_limit_ms)) {
       LOG(INFO) << "Skipping " << topology_file << " / " << topology_file
                 << " delay limit " << FLAGS_topology_delay_limit_ms

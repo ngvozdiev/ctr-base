@@ -1,0 +1,134 @@
+syntax = "proto3";
+package ctr;
+
+message TCPSYNFlowSummary {
+  // True if the first packet the flow has seen is a SYN without an
+  // ACK. False if it is SYN/ACK
+  bool pure_syn_seen = 1;
+
+  // IPv4 source and destination addresses.
+  uint32 source = 2;
+  uint32 destination = 3;
+
+  // TCP source and destination ports.
+  uint32 src_port = 4;
+  uint32 dst_port = 5;
+
+  // RTT estimate based on the handshake (diff between first packet
+  // that carries a SYN and the next packet).
+  uint64 syn_rtt_estimate_nanos = 6;
+
+  // RTT estimate based on the FIN. Not always available, set to 0 if not.
+  uint64 fin_rtt_estimate_nanos = 7;
+
+  // TTL value of the first packet from this flow (the one that
+  // carries either a SYN or a SYN/ACK).
+  uint32 first_packet_ttl = 8;
+
+  // Total number of bytes/pkts seen.
+  uint64 bytes_seen = 9;
+  uint64 pkts_seen = 10;
+};
+
+// Binned data for a SubTrace. The trace is split into bins of given
+// size, and the number of bytes/pkts seen in each bin is recorded.
+message PBBin {
+  // Bytes per bin.
+  uint64 byte_count = 1;
+
+  // Packets per bin.
+  uint64 packet_count = 2;
+
+  // Number of SYNs seen during the bin.
+  uint64 enter_flow_count = 3;
+
+  // Number of FINs seen during the bin. 
+  uint64 exit_flow_count = 4;
+};
+
+message PBTraceId {
+  // Timestamp when the trace was started (in milliseconds since
+  // Epoch).
+  uint32 year = 1;
+  uint32 month = 2;
+  uint32 day = 3;
+
+  // The physical location where the trace was taken. A human-readable
+  // string.
+  string location = 4;
+}
+
+// A single entry in the store. The store is serialized in one big
+// file as follows:
+// 1. A PBPcapDataTrace entry that describes a trace.
+// 2. A series of PBBin messages for the trace.
+// 3. A series of TCPSYNFlowSummary messages for the trace.
+// 4. Another trace's PBPcapDataTrace
+// 5. ...
+message PBPcapDataTrace {
+  // The trace id.
+  PBTraceId id = 1;
+
+  // A list of .pcap files, in the order they should be read. The
+  // paths are usually relative, not absolute.
+  repeated string pcap_files = 3;
+
+  // How many flows the trace has. Only flows for which there is a SYN
+  // or a SYN/ACK in the trace are recorded.
+  uint64 tcp_syn_flow_summary_count = 4;
+
+  // Each of the PBBin messages will have a bin size of this.
+  uint64 bin_size_micros = 5;
+
+  // Number of PBBin messages per sub-trace.
+  uint64 bin_count = 6;
+  
+  // The total trace is split into this many sub-traces. Each
+  // sub-trace will have bin_cunt PBBin messages.
+  uint64 split_count = 7;
+
+  // Where, relative to the end of PBPcapDataTrace the series of PBBin
+  // messages starts. There are as many offsets as there are splits,
+  // first one is always 0.
+  repeated fixed64 binned_data_start_offsets = 8;
+
+  // Where, relative to the end of PBPcapDataTrace the series of
+  // TCPSYNFlowSummary messages starts.
+  fixed64 flow_summaries_start_offset = 9;
+
+  // Offset from the end of PBPcapDataTrace to the end of the last
+  // TCPFlowSynSummary message. Can be used to quickly skip to the
+  // next trace in a serialized trace store.
+  fixed64 flow_summaries_end_offset = 10;
+};
+
+// Uniquely identifies a single slice (split) in the trace.
+message PBTraceAndSlice {
+  // The id of the trace.
+  PBTraceId id = 1;
+
+  // The index of the slice.
+  uint64 slice_index = 2;
+
+  // Start bin.
+  uint64 start_bin = 3;
+
+  // End bin.
+  uint64 end_bin = 4;
+
+  // What fraction of this slice should be used.
+  double fraction = 5;
+}
+
+message PBBinSequence {
+  // Identifies the traces.
+  repeated PBTraceAndSlice traces_and_slices = 1;
+};
+
+// A set of slices that have a mean rate.
+message PBTracesToFitRate {
+  PBBinSequence bin_sequence = 1;
+
+  // Mean rate of the rates.
+  double mean_rate_Mbps = 2;
+}

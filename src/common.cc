@@ -96,8 +96,10 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ProportionalFromDemandMatrix(
     demands_and_counts[id] = {element.demand, flow_count};
   }
 
-  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
-                                        demands_and_counts);
+  auto out =
+      nc::make_unique<TrafficMatrix>(demand_matrix.graph(), demands_and_counts);
+  out->properties_ = demand_matrix.properties();
+  return out;
 }
 
 std::unique_ptr<TrafficMatrix> TrafficMatrix::DistributeFromDemandMatrix(
@@ -117,8 +119,10 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::DistributeFromDemandMatrix(
     demands_and_counts[id] = {element.demand, flow_count};
   }
 
-  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
-                                        demands_and_counts);
+  auto out =
+      nc::make_unique<TrafficMatrix>(demand_matrix.graph(), demands_and_counts);
+  out->properties_ = demand_matrix.properties();
+  return out;
 }
 
 std::unique_ptr<TrafficMatrix> TrafficMatrix::ConstantFromDemandMatrix(
@@ -131,8 +135,10 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ConstantFromDemandMatrix(
     demands_and_counts[id] = {element.demand, flow_count};
   }
 
-  return nc::make_unique<TrafficMatrix>(demand_matrix.graph(),
-                                        demands_and_counts);
+  auto out =
+      nc::make_unique<TrafficMatrix>(demand_matrix.graph(), demands_and_counts);
+  out->properties_ = demand_matrix.properties();
+  return out;
 }
 
 std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
@@ -144,7 +150,11 @@ std::unique_ptr<nc::lp::DemandMatrix> TrafficMatrix::ToDemandMatrix() const {
     elements.emplace_back(aggregate.src(), aggregate.dst(), demand);
   }
 
-  return nc::make_unique<nc::lp::DemandMatrix>(std::move(elements), graph_);
+  auto out = nc::make_unique<nc::lp::DemandMatrix>(std::move(elements), graph_);
+  for (const auto& k_and_v : properties_) {
+    out->UpdateProperty(k_and_v.first, k_and_v.second);
+  }
+  return out;
 }
 
 std::pair<nc::net::Bandwidth, nc::net::Bandwidth>
@@ -178,7 +188,9 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::ScaleDemands(
                               demand_and_flow_count.second};
   }
 
-  return nc::make_unique<TrafficMatrix>(graph_, new_demands);
+  auto out = nc::make_unique<TrafficMatrix>(graph_, new_demands);
+  out->properties_ = properties_;
+  return out;
 }
 
 std::unique_ptr<TrafficMatrix> TrafficMatrix::AddToDemands(
@@ -197,7 +209,9 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::AddToDemands(
                               demand_and_flow_count.second};
   }
 
-  return nc::make_unique<TrafficMatrix>(graph_, new_demands);
+  auto out = nc::make_unique<TrafficMatrix>(graph_, new_demands);
+  out->properties_ = properties_;
+  return out;
 }
 
 static double Pick(double current, double fraction, std::mt19937* rnd) {
@@ -242,6 +256,7 @@ std::unique_ptr<TrafficMatrix> TrafficMatrix::Randomize(
 
   auto new_tm = nc::make_unique<TrafficMatrix>(graph_);
   new_tm->demands_ = std::move(new_demands);
+  new_tm->properties_ = properties_;
   return new_tm;
 }
 

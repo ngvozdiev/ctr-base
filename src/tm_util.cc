@@ -13,24 +13,37 @@
 #include <string>
 #include <vector>
 #include "opt/ctr.h"
+#include "topology_input.h"
 
-DEFINE_string(topology_root, "", "Root for topologies. Required.");
 DEFINE_double(link_delay_scale, 1.0,
               "All link delays will be scaled by this number");
 DEFINE_double(link_capacity_scale, 1.0,
               "All link bandwidths will be scaled by this number");
 DEFINE_uint64(split_threshold_ms, 0, "If not 0, will split the topologies");
 DEFINE_bool(dump_llpd, false, "If true will dump LLP per topology and exit");
+DEFINE_bool(dump_stats, false, "If true will dump overall stats and exit");
 DEFINE_double(sp_fraction, 1.4, "How far from the SP a path can be");
 DEFINE_double(link_fraction_limit, 0.7,
               "At least this much of the SP's links can be routed around");
 
-static constexpr char kTopologyExtension[] = ".graph";
+static void DumpStats(const std::vector<ctr::TopologyAndFilename>& topologies) {
+  std::vector<double> node_counts;
+  std::vector<double> edge_counts;
+  for (const auto& topology_and_filename : topologies) {
+    size_t node_count = topology_and_filename.graph->NodeCount();
+    size_t edge_count = topology_and_filename.graph->LinkCount();
 
-static std::vector<std::string> GetTopologyFiles() {
-  std::string top_root = FLAGS_topology_root;
-  CHECK(top_root != "");
-  return nc::File::GetFilesWithExtension(top_root, kTopologyExtension);
+    node_counts.emplace_back(node_count);
+    edge_counts.emplace_back(edge_count / 2);
+  }
+
+  std::vector<double> np = nc::Percentiles(&node_counts, 100);
+  std::vector<double> ep = nc::Percentiles(&edge_counts, 100);
+
+  LOG(INFO) << nc::Substitute("Nodes min $0, med $1, p90: $2, max $3", np[0],
+                              np[50], np[90], np[100]);
+  LOG(INFO) << nc::Substitute("Edges min $0, med $1, p90: $2, max $3", ep[0],
+                              ep[50], ep[90], ep[100]);
 }
 
 // Returns the links in the graph for which both the source and the destination
@@ -119,17 +132,21 @@ static double GetDatapointForTopology(const nc::net::GraphStorage& graph) {
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  std::vector<std::string> topology_files = GetTopologyFiles();
-  for (const std::string& topology_file : topology_files) {
-    std::vector<std::string> node_order;
-    nc::net::GraphBuilder builder = nc::net::LoadRepetitaOrDie(
-        nc::File::ReadFileToStringOrDie(topology_file), &node_order);
-    builder.RemoveMultipleLinks();
+  std::vector<ctr::TopologyAndFilename> topologies = ctr::GetTopologyInputs();
+  if (FLAGS_dump_stats) {
+    DumpStats(topologies);
+    return 0;
+  }
+
+  for (const ctr::TopologyAndFilename& topology_and_filename : topologies) {
+    const std::string& topology_file = topology_and_filename.file;
+    const nc::net::GraphStorage& graph = *topology_and_filename.graph;
+    nc::net::GraphBuilder builder = graph.ToBuilder();
 
     if (FLAGS_dump_llpd) {
-      nc::net::GraphStorage graph(builder);
       LOG(INFO) << "Topology " << topology_file << " LLPD "
-                << GetDatapointForTopology(graph);
+                << GetDatapointForTopology(graph) << " CD "
+                << ctr::CapacityDiversity(graph);
       continue;
     }
 
@@ -153,7 +170,7 @@ int main(int argc, char** argv) {
       builder.ScaleCapacity(FLAGS_link_capacity_scale);
       builder.ScaleDelay(FLAGS_link_delay_scale);
 
-      std::string serialized = builder.ToRepetita(node_order);
+      std::string serialized = builder.ToRepetita(graph.NodeOrderOrDie());
       nc::File::WriteStringToFileOrDie(serialized, topology_file);
       LOG(INFO) << "Overwrote " << topology_file << " capacity scale "
                 << FLAGS_link_capacity_scale << " delay scale "

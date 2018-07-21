@@ -758,6 +758,7 @@ static bool CanFitTraffic(const nc::net::GraphStorage& graph,
     }
   }
 
+  CHECK(routes.size() > 0);
   return true;
 }
 
@@ -775,17 +776,54 @@ nc::net::GraphLinkSet LinksWithCapacityLessThan(
   return out;
 }
 
+static bool HasSingleAlternativePath(
+    const nc::net::GraphStorage& graph,
+    const nc::net::GraphLinkSet& links_with_low_capacity,
+    nc::net::GraphLinkIndex link, const AggregateId& id,
+    nc::net::Delay threshold) {
+  nc::net::GraphLinkSet to_exclude(links_with_low_capacity);
+  to_exclude.Insert(link);
+
+  nc::net::ConstraintSet constraints;
+  constraints.Exclude().Links(to_exclude);
+
+  auto alternative_path = nc::net::ShortestPathWithConstraints(
+      id.src(), id.dst(), graph, constraints);
+
+  if (!alternative_path) {
+    return false;
+  }
+
+  if (alternative_path->delay() > threshold) {
+    return false;
+  }
+
+  return true;
+}
+
 // Returns the fraction of links on the aggregate's shortest path that can be
 // removed and still have the entire aggregate be routed along an alternative
 // path.
 static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
                                      const nc::net::Walk& shortest_path,
                                      const AggregateId& id,
-                                     nc::net::Delay threshold) {
+                                     nc::net::Delay threshold, bool all_same) {
   nc::net::Bandwidth sp_path_flow = PathFlow(shortest_path, graph);
+  nc::net::GraphLinkSet links_with_low_capacity =
+      LinksWithCapacityLessThan(graph, sp_path_flow);
 
   double count = 0;
   for (nc::net::GraphLinkIndex link : shortest_path.links()) {
+    if (HasSingleAlternativePath(graph, links_with_low_capacity, link, id,
+                                 threshold)) {
+      ++count;
+      continue;
+    }
+
+    if (all_same) {
+      continue;
+    }
+
     nc::net::ExclusionSet exclusion_set;
     exclusion_set.Links({link});
     if (!CanFitTraffic(graph, id, exclusion_set, sp_path_flow, threshold)) {
@@ -798,53 +836,20 @@ static double GetLinkFractionAtDelay(const nc::net::GraphStorage& graph,
   return count / shortest_path.links().size();
 }
 
-static double GetLinkFractionAtDelaySameCapacity(
-    const nc::net::GraphStorage& graph, const nc::net::Walk& shortest_path,
-    const AggregateId& id, nc::net::Delay threshold) {
-  double count = 0;
-  for (nc::net::GraphLinkIndex link : shortest_path.links()) {
-    nc::net::Bandwidth link_bw = graph.GetLink(link)->bandwidth();
-    nc::net::GraphLinkSet to_exclude =
-        LinksWithCapacityLessThan(graph, link_bw);
-    to_exclude.Insert(link);
-
-    nc::net::ConstraintSet constraints;
-    constraints.Exclude().Links(to_exclude);
-
-    auto alternative_path = nc::net::ShortestPathWithConstraints(
-        id.src(), id.dst(), graph, constraints);
-
-    if (!alternative_path) {
-      continue;
-    }
-
-    if (alternative_path->delay() > threshold) {
-      continue;
-    }
-
-    ++count;
-  }
-  return count / shortest_path.links().size();
-}
-
-static bool AllLinksSameCapacity(const nc::net::GraphStorage& graph) {
-  nc::net::Bandwidth bw = nc::net::Bandwidth::Max();
+size_t CapacityDiversity(const nc::net::GraphStorage& graph) {
+  std::set<nc::net::Bandwidth> links_set;
   for (nc::net::GraphLinkIndex link_index : graph.AllLinks()) {
     const nc::net::GraphLink* link_ptr = graph.GetLink(link_index);
-    if (bw != nc::net::Bandwidth::Max() && link_ptr->bandwidth() != bw) {
-      return false;
-    }
-
-    bw = link_ptr->bandwidth();
+    links_set.insert(link_ptr->bandwidth());
   }
 
-  return true;
+  return links_set.size();
 }
 
 std::map<AggregateId, double> GetLinkFractionAtDelay(
     const nc::net::GraphStorage& graph, double delay_fraction) {
   nc::net::AllPairShortestPath sp({}, graph.AdjacencyList(), nullptr, nullptr);
-  bool all_same = AllLinksSameCapacity(graph);
+  bool all_same = CapacityDiversity(graph) == 1;
 
   std::map<AggregateId, double> out;
   for (nc::net::GraphNodeIndex src : graph.AllNodes()) {
@@ -860,9 +865,7 @@ std::map<AggregateId, double> GetLinkFractionAtDelay(
           nc::net::Delay(static_cast<size_t>(threshold));
 
       double f =
-          all_same ? GetLinkFractionAtDelaySameCapacity(graph, *path, id,
-                                                        delay_threshold)
-                   : GetLinkFractionAtDelay(graph, *path, id, delay_threshold);
+          GetLinkFractionAtDelay(graph, *path, id, delay_threshold, all_same);
       out[id] = f;
     }
   }

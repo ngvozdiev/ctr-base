@@ -132,7 +132,8 @@ int main(int argc, char** argv) {
                                                   node_order, &graph);
   demand_matrix = demand_matrix->Scale(FLAGS_tm_scale);
 
-  nc::net::Delay diameter = graph.Stats().sp_delay_percentiles.back();
+  nc::net::Delay diameter = duration_cast<nc::net::Delay>(
+      microseconds(graph.Stats().sp_delays_micros.Max()));
   if (diameter < milliseconds(10)) {
     LOG(FATAL) << "Graph diameter too small ("
                << duration_cast<milliseconds>(diameter).count() << "ms)";
