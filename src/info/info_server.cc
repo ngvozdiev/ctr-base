@@ -4,13 +4,21 @@
 #include <google/protobuf/repeated_field.h>
 #include <ncode/common.h>
 #include <ncode/logging.h>
+#include <ncode/lp/demand_matrix.h>
+#include <ncode/net/net_common.h>
+#include <ncode/substitute.h>
+#include <ncode/viz/server.h>
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <random>
 #include <set>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "../common.h"
+#include "tm_gen.h"
 
 #define SET_SIMPLE_FIELD(name)       \
   if (mask.name()) {                 \
@@ -73,6 +81,7 @@ static info::TopologyInfo ApplyTopologyMask(
   SET_COMPLEX_FIELD(link_capacities);
   SET_COMPLEX_FIELD(link_delays);
   SET_COMPLEX_FIELD(links);
+  SET_COMPLEX_FIELD(node_names);
   SET_SIMPLE_FIELD(name);
   SET_SIMPLE_FIELD(date);
   SET_SIMPLE_FIELD(description);
@@ -103,8 +112,7 @@ static info::TrafficMatrixInfo ApplyTrafficInfoMask(
   SET_SIMPLE_FIELD(demand_fraction);
   SET_SIMPLE_FIELD(total_demand_bps);
   SET_SIMPLE_FIELD(locality);
-  SET_SIMPLE_FIELD(limiting_multiplier);
-  SET_SIMPLE_FIELD(limiting_rate);
+  SET_SIMPLE_FIELD(max_commodity_scale_factor);
   SET_SIMPLE_FIELD(is_trivial);
   SET_COMPLEX_FIELD(demands_out_degree);
   SET_COMPLEX_FIELD(demands_in_degree);
@@ -138,121 +146,195 @@ static info::RoutingInfo ApplyRoutingInfoMask(
 }
 
 InfoServer::InfoServer(std::unique_ptr<InfoStorage> info_storage)
-    : nc::ProtobufServer<ctr::info::InfoRequest, ctr::info::InfoResponse>(
-          FLAGS_info_server_port, FLAGS_info_server_threads),
+    : nc::ProtobufServer<ctr::info::Request, ctr::info::Response>(
+          nc::viz::TCPServerConfig(FLAGS_info_server_port, 1 << 10),
+          FLAGS_info_server_threads),
       info_storage_(std::move(info_storage)) {}
 
-std::unique_ptr<ctr::info::InfoResponse> InfoServer::HandleRequest(
-    const ctr::info::InfoRequest& request) {
-  if (request.has_topology_info_request()) {
-    return HandleTopologyInfo(request.topology_info_request());
-  }
-  if (request.has_traffic_info_request()) {
-    return HandleTrafficMatrixInfo(request.traffic_info_request());
-  }
-  if (request.has_routing_info_request()) {
-    return HandleRoutingInfo(request.routing_info_request());
-  }
+std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
+    const info::SelectInfoRequest& request) const {
+  std::vector<const info::TopologyInfo*> selected_topologies;
+  std::set<const info::TrafficMatrixInfo*> selected_traffic_matrices;
+  std::set<const info::RoutingInfo*> selected_routings;
 
-  LOG(INFO) << "Empty request";
-  return nc::make_unique<ctr::info::InfoResponse>();
-}
-
-std::unique_ptr<ctr::info::InfoResponse> InfoServer::HandleTopologyInfo(
-    const info::TopologyInfoRequest& request) const {
-  std::vector<const info::TopologyInfo*> infos_to_serve;
-  if (request.topology_ids_size() == 0) {
-    infos_to_serve = info_storage_->GetAllTopologyInfos();
+  if (request.select_all_topologies()) {
+    for (const info::TopologyInfo* info :
+         info_storage_->GetAllTopologyInfos()) {
+      selected_topologies.emplace_back(info);
+    }
   } else {
-    for (uint64_t topology_id : request.topology_ids()) {
+    for (uint64_t topology_id : request.topology_id()) {
       const info::TopologyInfo* info =
           info_storage_->GetTopologyInfoOrNull(topology_id);
       if (info != nullptr) {
-        infos_to_serve.emplace_back(info);
+        selected_topologies.emplace_back(info);
       }
     }
   }
 
-  auto out = nc::make_unique<ctr::info::InfoResponse>();
-  if (infos_to_serve.empty()) {
-    return out;
-  }
-
-  info::TopologyInfoResponse* response = out->mutable_topology_info_response();
-  for (const info::TopologyInfo* info : infos_to_serve) {
-    *(response->add_topology_info()) = ApplyTopologyMask(*info, request.mask());
-  }
-
-  return out;
-}
-
-std::unique_ptr<ctr::info::InfoResponse> InfoServer::HandleTrafficMatrixInfo(
-    const info::TrafficMatrixInfoRequest& request) const {
-  std::vector<const info::TrafficMatrixInfo*> infos_to_serve;
-  if (request.traffic_matrix_ids_size() == 0) {
-    infos_to_serve =
-        info_storage_->GetAllTrafficMatrixInfos(request.topology_id());
-  } else {
-    for (uint64_t topology_id : request.traffic_matrix_ids()) {
-      const info::TrafficMatrixInfo* info =
-          info_storage_->GetTrafficMatrixInfoOrNull(topology_id);
-      if (info != nullptr) {
-        infos_to_serve.emplace_back(info);
-      }
+  for (uint64_t traffic_matrix_id : request.traffic_matrix_id()) {
+    const info::TrafficMatrixInfo* info =
+        info_storage_->GetTrafficMatrixInfoOrNull(traffic_matrix_id);
+    if (info != nullptr) {
+      selected_traffic_matrices.insert(info);
     }
   }
 
-  auto out = nc::make_unique<ctr::info::InfoResponse>();
-  if (infos_to_serve.empty()) {
-    return out;
-  }
-
-  info::TrafficMatrixInfoResponse* response =
-      out->mutable_traffic_info_response();
-  for (const info::TrafficMatrixInfo* info : infos_to_serve) {
-    *(response->add_traffic_info()) =
-        ApplyTrafficInfoMask(*info, request.mask());
-  }
-
-  return out;
-}
-
-std::unique_ptr<ctr::info::InfoResponse> InfoServer::HandleRoutingInfo(
-    const info::RoutingInfoRequest& request) const {
-  std::set<const info::RoutingInfo*> infos_to_serve;
-  if (request.routing_systems_size() == 0 && request.routing_ids_size()) {
-    std::vector<const info::RoutingInfo*> infos_vector =
-        info_storage_->GetAllRoutingInfos(request.traffic_matrix_id());
-    infos_to_serve.insert(infos_vector.begin(), infos_vector.end());
-  } else {
-    for (uint64_t routing_id : request.routing_ids()) {
-      const info::RoutingInfo* info =
-          info_storage_->GetRoutingInfoOrNull(routing_id);
-      if (info != nullptr) {
-        infos_to_serve.emplace(info);
-      }
+  if (request.select_all_traffic_matrices_for_topologies()) {
+    for (const info::TopologyInfo* topology : selected_topologies) {
+      std::vector<const info::TrafficMatrixInfo*> infos =
+          info_storage_->GetAllTrafficMatrixInfos(topology->topology_id());
+      selected_traffic_matrices.insert(infos.begin(), infos.end());
     }
+  }
 
-    for (const std::string& routing_system : request.routing_systems()) {
+  for (uint64_t routing_id : request.routing_id()) {
+    const info::RoutingInfo* info =
+        info_storage_->GetRoutingInfoOrNull(routing_id);
+    if (info != nullptr) {
+      selected_routings.insert(info);
+    }
+  }
+
+  for (const std::string& routing_system : request.routing_systems()) {
+    for (const info::TrafficMatrixInfo* tm_info : selected_traffic_matrices) {
       const info::RoutingInfo* info = info_storage_->GetRoutingInfoOrNull(
-          request.traffic_matrix_id(), routing_system);
+          tm_info->traffic_matrix_id(), routing_system);
       if (info != nullptr) {
-        infos_to_serve.emplace(info);
+        selected_routings.insert(info);
       }
     }
   }
 
-  auto out = nc::make_unique<ctr::info::InfoResponse>();
-  if (infos_to_serve.empty()) {
-    return out;
+  if (request.select_all_routing_for_traffic_matrices()) {
+    for (const info::TrafficMatrixInfo* tm_info : selected_traffic_matrices) {
+      std::vector<const info::RoutingInfo*> infos =
+          info_storage_->GetAllRoutingInfos(tm_info->traffic_matrix_id());
+      selected_routings.insert(infos.begin(), infos.end());
+    }
   }
 
-  info::RoutingInfoResponse* response = out->mutable_routing_info_response();
-  for (const info::RoutingInfo* info : infos_to_serve) {
-    *(response->add_routing_info()) =
-        ApplyRoutingInfoMask(*info, request.mask());
+  auto out = nc::make_unique<ctr::info::Response>();
+  info::SelectInfoResponse* select_response =
+      out->mutable_select_info_response();
+  for (const info::TopologyInfo* topology_info : selected_topologies) {
+    *(select_response->add_topology_info()) =
+        ApplyTopologyMask(*topology_info, request.topology_mask());
+  }
+  for (const info::TrafficMatrixInfo* traffic_matrix_info :
+       selected_traffic_matrices) {
+    *(select_response->add_traffic_matrix_info()) = ApplyTrafficInfoMask(
+        *traffic_matrix_info, request.traffic_matrix_mask());
+  }
+  for (const info::RoutingInfo* routing_info : selected_routings) {
+    *(select_response->add_routing_info()) =
+        ApplyRoutingInfoMask(*routing_info, request.routing_mask());
   }
 
   return out;
 }
+
+std::unique_ptr<ctr::info::Response> InfoServer::HandleRequest(
+    const ctr::info::Request& request) {
+  LOG(INFO) << "R " << request.DebugString();
+  if (request.has_select_info_request()) {
+    return HandleSelect(request.select_info_request());
+  }
+  if (request.has_traffic_matrix_generate_request()) {
+    return HandleTMGenRequest(request.traffic_matrix_generate_request());
+  }
+
+  LOG(INFO) << "Empty request";
+  return nc::make_unique<ctr::info::Response>();
+}
+
+static std::unique_ptr<ctr::info::Response> GetTMGenResponseWithError(
+    const std::string& error) {
+  auto response = nc::make_unique<ctr::info::Response>();
+  response->mutable_generate_traffic_matrix_response()->set_error(error);
+  return response;
+}
+
+std::unique_ptr<ctr::info::Response> InfoServer::HandleTMGenRequest(
+    const info::TrafficMatrixGenerateRequest& request) const {
+  if (request.flow_count_distribution_case() ==
+      info::TrafficMatrixGenerateRequest::FLOW_COUNT_DISTRIBUTION_NOT_SET) {
+    return GetTMGenResponseWithError(
+        "Need one of constant_flow_count or demand_based_total_flow_count");
+  }
+
+  uint64_t topology_id = request.topology_id();
+  const info::TopologyInfo* topology_info =
+      info_storage_->GetTopologyInfoOrNull(topology_id);
+  if (topology_info == nullptr) {
+    return GetTMGenResponseWithError(
+        nc::Substitute("Unable to find topology with ID $0", topology_id));
+  }
+
+  std::unique_ptr<nc::net::GraphStorage> graph = InfoToGraph(*topology_info);
+  std::mt19937 gen(request.seed());
+  auto demand_matrix =
+      GenerateRoughan(*graph, nc::net::Bandwidth::FromGBitsPerSecond(1), &gen);
+
+  demand_matrix = LocalizeDemandMatrix(*demand_matrix, request.locality());
+  demand_matrix = BalanceReverseDemands(*demand_matrix, 0.1);
+  double csf = demand_matrix->MaxCommodityScaleFactor({}, 1.0);
+  CHECK(csf != 0);
+  CHECK(csf == csf);
+  demand_matrix = demand_matrix->Scale(csf);
+
+  double load = 1.0 / request.max_commodity_scale_factor();
+  demand_matrix = demand_matrix->Scale(load);
+
+  std::unique_ptr<ctr::TrafficMatrix> tm;
+  switch (request.flow_count_distribution_case()) {
+    case info::TrafficMatrixGenerateRequest::kConstantFlowCount: {
+      tm = TrafficMatrix::ConstantFromDemandMatrix(
+          *demand_matrix, request.constant_flow_count());
+      break;
+    }
+
+    case info::TrafficMatrixGenerateRequest::kDemandBasedTotalFlowCount: {
+      tm = TrafficMatrix::DistributeFromDemandMatrix(
+          *demand_matrix, request.demand_based_total_flow_count());
+      break;
+    }
+
+    case info::TrafficMatrixGenerateRequest::FLOW_COUNT_DISTRIBUTION_NOT_SET: {
+      LOG(FATAL) << "Should not happen";
+    }
+  }
+
+  uint64_t traffic_matrix_id =
+      info_storage_->AddTrafficMatrix(topology_id, *tm);
+  auto response = nc::make_unique<ctr::info::Response>();
+  response->mutable_generate_traffic_matrix_response()->set_traffic_matrix_id(
+      traffic_matrix_id);
+  return response;
+}
+
+void InfoServer::LogMessage(const LoggedMessage& logged_message) {
+  info::RequestLogEntry log_entry;
+  *(log_entry.mutable_request()) = *(logged_message.request);
+  log_entry.set_request_size_bytes(logged_message.request->ByteSize());
+  log_entry.set_response_size_bytes(logged_message.response_size_bytes);
+
+  const nc::viz::TCPConnectionInfo& connection_info =
+      logged_message.header_and_message->tcp_connection_info;
+  log_entry.set_connection_id(connection_info.connection_id);
+  log_entry.set_remote_ip(connection_info.remote_ip);
+  log_entry.set_remote_port(connection_info.remote_port);
+
+  log_entry.set_request_rx_ms(
+      logged_message.header_and_message->time_rx.count());
+  log_entry.set_request_started_processing_ms(
+      logged_message.processing_started.count());
+  log_entry.set_request_done_processing_ms(
+      logged_message.processing_done.count());
+  log_entry.set_response_sent_ms(logged_message.response_sent.count());
+  log_entry.set_worker_index(logged_message.worker_index);
+
+  LOG(INFO) << log_entry.DebugString();
+}
+
 }  // namespace ctr

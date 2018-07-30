@@ -22,7 +22,7 @@ bool ParseConstantSizeHeader(std::vector<char>::const_iterator from,
   return true;
 }
 
-void BlockingWriteProtoMessage(const google::protobuf::Message& message,
+bool BlockingWriteProtoMessage(const google::protobuf::Message& message,
                                int socket) {
   nc::viz::OutgoingHeaderAndMessage header_and_message(socket);
 
@@ -34,7 +34,7 @@ void BlockingWriteProtoMessage(const google::protobuf::Message& message,
   memcpy(buffer.data(), &header, 4);
   CHECK(message.SerializeToArray(buffer.data() + 4, size))
       << "Unable to serialize message";
-  nc::viz::BlockingWriteMessage(header_and_message);
+  return nc::viz::BlockingWriteMessage(header_and_message);
 }
 
 void BlockingReadProtoMessage(int socket, google::protobuf::Message* message) {
@@ -45,6 +45,11 @@ void BlockingReadProtoMessage(int socket, google::protobuf::Message* message) {
   std::vector<char> buffer(size);
   CHECK(read(socket, buffer.data(), size) == size) << "Unable to read message";
   CHECK(message->ParseFromArray(buffer.data(), size)) << "Invalid message";
+}
+
+std::chrono::milliseconds TimeNow() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::high_resolution_clock::now().time_since_epoch());
 }
 
 }  // namespace nc

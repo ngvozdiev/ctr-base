@@ -192,7 +192,7 @@ target_link_libraries(sfml_main sfml_utils sfml-graphics sfml-system sfml-window
 
 PROTOBUF_GENERATE_CPP(INFO_PROTO_SRCS INFO_PROTO_HDRS src/info/info.proto)
 set_property(SOURCE ${INFO_PROTO_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS "-Wno-extended-offsetof")
-add_library(info STATIC src/info/info.cc src/info/processing_pool.cc ${INFO_PROTO_SRCS} ${INFO_PROTO_HDRS})
+add_library(info STATIC src/info/info.cc src/info/processing_pool.cc src/info/tm_gen.cc ${INFO_PROTO_SRCS} ${INFO_PROTO_HDRS})
 target_link_libraries(info ctr_base ${PROTOBUF_LIBRARIES})
 
 add_library(info_server STATIC src/info/info_server.cc)

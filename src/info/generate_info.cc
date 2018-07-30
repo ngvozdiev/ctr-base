@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
             nc::File::ReadFileToStringOrDie(rc_filename);
         auto rc = ctr::RoutingConfiguration::LoadFromSerializedText(
             *tm, node_order, rc_serialized, &path_provider);
-        info_storage.AddRouting(topology_id, traffic_matrix_id, *rc);
+        info_storage.AddRouting(opt, topology_id, traffic_matrix_id, *rc);
       }
     }
   }

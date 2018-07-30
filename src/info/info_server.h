@@ -10,23 +10,22 @@
 namespace ctr {
 
 // Serves the information contained in InfoStorage.
-class InfoServer : public nc::ProtobufServer<ctr::info::InfoRequest,
-                                             ctr::info::InfoResponse> {
+class InfoServer
+    : public nc::ProtobufServer<ctr::info::Request, ctr::info::Response> {
  public:
   InfoServer(std::unique_ptr<InfoStorage> info_storage);
 
-  std::unique_ptr<ctr::info::InfoResponse> HandleRequest(
-      const ctr::info::InfoRequest& request) override;
+  std::unique_ptr<ctr::info::Response> HandleRequest(
+      const ctr::info::Request& request) override;
+
+  void LogMessage(const LoggedMessage& logged_message) override;
 
  private:
-  std::unique_ptr<ctr::info::InfoResponse> HandleTopologyInfo(
-      const info::TopologyInfoRequest& request) const;
+  std::unique_ptr<ctr::info::Response> HandleSelect(
+      const info::SelectInfoRequest& request) const;
 
-  std::unique_ptr<ctr::info::InfoResponse> HandleTrafficMatrixInfo(
-      const info::TrafficMatrixInfoRequest& request) const;
-
-  std::unique_ptr<ctr::info::InfoResponse> HandleRoutingInfo(
-      const info::RoutingInfoRequest& request) const;
+  std::unique_ptr<ctr::info::Response> HandleTMGenRequest(
+      const info::TrafficMatrixGenerateRequest& request) const;
 
   std::unique_ptr<InfoStorage> info_storage_;
 };

@@ -62,7 +62,7 @@ class AggregateId {
 };
 
 // A bandwidth demand and flow count.
-using DemandAndFlowCount = std::pair<nc::net::Bandwidth, size_t>;
+using DemandAndFlowCount = std::pair<nc::net::Bandwidth, uint64_t>;
 
 // A path and a fraction of demand that should go over it.
 using RouteAndFraction = std::pair<const nc::net::Walk*, double>;

@@ -114,6 +114,9 @@ message TopologyInfo {
 
   // Additional longer descrption.
   string description = 18;
+  
+  // Names of nodes.
+  repeated string node_names = 19;
 };
 
 // Mask for TopologyInfo, indicates fields to fetch except for
@@ -134,23 +137,11 @@ message TopologyInfoMask {
   bool name = 13;
   bool date = 14;
   bool description = 15;
+  bool node_names = 16;
 
   // If non-zero will populate the corresponding distribution.
-  double shortest_path_delays_multiplier = 16;
-  double shortest_path_hop_counts_multiplier = 17;
-};
-
-message TopologyInfoRequest {
-  // Identifies of the topologies whose information to fetch. If
-  // empty will fetch info for all topologies.
-  repeated uint64 topology_ids = 1;
-
-  // Information to fetch.
-  TopologyInfoMask mask = 2;
-};
-
-message TopologyInfoResponse {
-  repeated TopologyInfo topology_info = 1;
+  double shortest_path_delays_multiplier = 17;
+  double shortest_path_hop_counts_multiplier = 18;
 };
 
 message Demand {
@@ -202,30 +193,25 @@ message TrafficMatrixInfo {
   // How close to the max flow this matrix is. If all capacities were
   // scaled by this number the matrix will just about be routable. If
   // the matrix does not fit this value will be less than 1.
-  double limiting_multiplier = 7;
-
-  // Like limiting_multiplier, but instead of scaling all capacities
-  // by the same number will add the same rate (in bps) to all. Can be
-  // negative.
-  int64 limiting_rate = 8;
+  double max_commodity_scale_factor = 7;
   
   // If true all demands can be routed on their shortest path.
-  bool is_trivial = 9;
+  bool is_trivial = 8;
 
   // Rates of all demands.
-  DiscreteDistribution demand_rates = 10;
+  DiscreteDistribution demand_rates = 9;
 
   // Flow counts of all demands.
-  DiscreteDistribution demand_flow_counts = 11;
+  DiscreteDistribution demand_flow_counts = 10;
 
   // Number of egresses for each ingress.
-  DiscreteDistribution demands_out_degree = 12;
+  DiscreteDistribution demands_out_degree = 11;
 
   // Number of ingresses for each egress.
-  DiscreteDistribution demands_in_degree = 13;
+  DiscreteDistribution demands_in_degree = 12;
 
   // All demands.
-  repeated Demand demands = 14;
+  repeated Demand demands = 13;
 };
 
 message TrafficMatrixInfoMask {
@@ -233,34 +219,17 @@ message TrafficMatrixInfoMask {
   bool demand_fraction = 2;
   bool total_demand_bps = 3;
   bool locality = 4;
-  bool limiting_multiplier = 5;
-  bool limiting_rate = 6;
-  bool is_trivial = 7;
-  bool demands_out_degree = 8;
-  bool demands_in_degree = 9;
+  bool max_commodity_scale_factor = 5;
+  bool is_trivial = 6;
+  bool demands_out_degree = 7;
+  bool demands_in_degree = 8;
 
-  double demand_rates_multiplier = 10;
-  double demand_flow_counts_multiplier = 11;
+  double demand_rates_multiplier = 9;
+  double demand_flow_counts_multiplier = 10;
 
   // If any of the fields of the mask are non-false will populate the
   // demands with the fields.
-  DemandMask demand_mask = 12;
-};
-
-message TrafficMatrixInfoRequest {
-  // The topology.
-  uint64 topology_id = 1;
-
-  // The traffic matrices. If empty will return all traffic matrices
-  // for the given topology.
-  repeated uint64 traffic_matrix_ids = 2;
-
-  // Indicates which fields of the traffic matrices to return.
-  TrafficMatrixInfoMask mask = 3;
-};
-
-message TrafficMatrixInfoResponse {
-  repeated TrafficMatrixInfo traffic_info = 1;
+  DemandMask demand_mask = 11;
 };
 
 // The result of running a specific routing algorithm on the given
@@ -325,25 +294,51 @@ message RoutingInfoMask {
   double flow_delays_uncongested_multiplier = 8;
 };
 
-message RoutingInfoRequest {
-  // Identifies the traffic matrix.
-  uint64 traffic_matrix_id = 1;
+// A request to select topologies, traffic matrices and routing solutions.
+message SelectInfoRequest {
+  // Topologies to include in the selection.
+  repeated uint64 topology_id = 1;
+  
+  // Traffic matrices to include in the selection.
+  repeated uint64 traffic_matrix_id = 2;
+  
+  // Routing solutions to include in the selection.
+  repeated uint64 routing_id = 3;
+  
+  // For each traffic matrix selected, will select routing solutions for those 
+  // systems. 
+  repeated string routing_systems = 4;
+  
+  // If true will ignore topology_ids and will select all topologies.
+  bool select_all_topologies = 5;
+  
+  // If true will include all traffic matrices for each topology in the 
+  // selection.
+  bool select_all_traffic_matrices_for_topologies = 6;
+  
+  // If true will include all routing solutions for each traffic matrix 
+  // in the selection.
+  bool select_all_routing_for_traffic_matrices = 7;
 
-  // The routing system. If this and routing_ids are left empty, will return 
-  // routing results for all routing systems on traffic_matrix_id.
-  repeated string routing_systems = 2;
-
-  // The ids of the routing infos to return. If this and routing_systems are 
-  // left empty will return results for all routing systems on 
-  // traffic_matrix_id.
-  repeated uint64 routing_ids = 3;
-
-  // The fields that will be returned.
-  RoutingInfoMask mask = 4;
+  // All topologies selected will have this mask applied.
+  TopologyInfoMask topology_mask = 8;
+  
+  // All traffic matrices selected will have this mask applied.
+  TrafficMatrixInfoMask traffic_matrix_mask = 9;
+  
+  // All routing solutions selected will have this mask applied.
+  RoutingInfoMask routing_mask = 10;
 };
 
-message RoutingInfoResponse {
-  repeated RoutingInfo routing_info = 1;
+message SelectInfoResponse {
+  // Topologies in the selection.
+  repeated TopologyInfo topology_info = 1;
+  
+  // Traffic matrices in the selection.
+  repeated TrafficMatrixInfo traffic_matrix_info = 2;
+  
+  // Routing solutions in the selection.
+  repeated RoutingInfo routing_info = 3;
 };
 
 message TrafficMatrixGenerateRequest {
@@ -355,31 +350,78 @@ message TrafficMatrixGenerateRequest {
   
   // The generated matrix will be scaleable by this much without becoming 
   // unfeasible.
-  double limiting_multiplier = 3;
+  double max_commodity_scale_factor = 3;
   
   // The seed for the matrix.
   double seed = 4;
+  
+  oneof flow_count_distribution {
+  	// Each aggregate will have this flow count. Should be at least 1.
+  	uint64 constant_flow_count = 5;
+  	
+  	// Flow counts will be distributed proportionally to aggregate demands in a 
+  	// way that the total flow count is this number.
+  	uint64 demand_based_total_flow_count = 6;
+  };
 };
 
 message TrafficMatrixGenerateResponse {
-  // The identifier of the newly-generated traffic matrix.
-  uint64 traffic_matrix_id = 2;
+  oneof id_or_error {
+  	// The identifier of the newly-generated traffic matrix.
+  	uint64 traffic_matrix_id = 1;
+  	
+  	// A string describing the error.
+  	string error = 2;
+  }
 };
 
-message InfoRequest {
+message Request {
   oneof request {
-    TopologyInfoRequest topology_info_request = 1;
-    TrafficMatrixInfoRequest traffic_info_request = 2;
-    RoutingInfoRequest routing_info_request = 3;
+    SelectInfoRequest select_info_request = 1;
+    TrafficMatrixGenerateRequest traffic_matrix_generate_request = 2;
   };
 };
 
-message InfoResponse {
+message Response {
   oneof response {
-    TopologyInfoResponse topology_info_response = 1;
-    TrafficMatrixInfoResponse traffic_info_response = 2;
-    RoutingInfoResponse routing_info_response = 3;
+    SelectInfoResponse select_info_response = 1;
+    TrafficMatrixGenerateResponse generate_traffic_matrix_response = 2;
   };
+};
+
+message RequestLogEntry {
+  // Uniquely identifies the connection.
+  uint64 connection_id = 1;
+  
+  // The remote IP address, in host order.
+  uint32 remote_ip = 2;
+  
+  // The remote port.
+  uint32 remote_port = 3;
+  
+  // Time the request was received.
+  uint64 request_rx_ms = 4;
+  
+  // Time the request started processing.
+  uint64 request_started_processing_ms = 5;
+  
+  // Time the request was done processing.
+  uint64 request_done_processing_ms = 6;
+  
+  // Time the reply was sent.
+  uint64 response_sent_ms = 7;
+  
+  // Size of the request.
+  uint32 request_size_bytes = 8;
+  
+  // Size of the reply.
+  uint32 response_size_bytes = 9;
+  
+  // The worker thread that processed the request.
+  uint32 worker_index = 10;
+  
+  // Copy of the request.
+  Request request = 11;
 };
 
 message Info {

@@ -25,14 +25,17 @@ bool ParseConstantSizeHeader(std::vector<char>::const_iterator from,
                              size_t* header_size, size_t* message_size);
 
 // Performs a blocking send of a protobuf on a socket.
-void BlockingWriteProtoMessage(const google::protobuf::Message& message,
+bool BlockingWriteProtoMessage(const google::protobuf::Message& message,
                                int socket);
 
 // Performs a blocking read of a message from a socket.
 void BlockingReadProtoMessage(int socket, google::protobuf::Message* message);
 
+// Gets a timestamp.
+std::chrono::milliseconds TimeNow();
+
 template <typename Input>
-using Processor = std::function<void(const Input&)>;
+using Processor = std::function<void(std::unique_ptr<Input>, uint32_t)>;
 
 template <typename Input>
 using InputQueue = nc::PtrQueue<Input, 1024>;
@@ -44,7 +47,7 @@ class ProcessingPool {
                  size_t thread_count)
       : processor_(processor), input_queue_(input_queue) {
     for (size_t i = 0; i < thread_count; ++i) {
-      threads_.emplace_back([this] { RunWorker(); });
+      threads_.emplace_back([this, i] { RunWorker(i); });
     }
   }
 
@@ -56,7 +59,7 @@ class ProcessingPool {
   }
 
  private:
-  void RunWorker() {
+  void RunWorker(uint32_t worker_index) {
     while (!to_kill_) {
       bool timed_out;
       std::unique_ptr<Input> input = input_queue_->ConsumeOrBlockWithTimeout(
@@ -73,7 +76,7 @@ class ProcessingPool {
         break;
       }
 
-      processor_(*input);
+      processor_(std::move(input), worker_index);
     }
   }
 
@@ -92,22 +95,34 @@ class ProcessingPool {
 template <typename Request, typename Reply>
 class ProtobufServer {
  public:
-  ProtobufServer(uint32_t port, size_t thread_count)
+  ProtobufServer(const nc::viz::TCPServerConfig& server_config,
+                 size_t thread_count,
+                 std::chrono::milliseconds log_message_timeout =
+                     std::chrono::milliseconds(10))
       : thread_count_(thread_count),
-        tcp_server_(port, ParseConstantSizeHeader, &input_queue_) {}
+        log_message_timeout_(log_message_timeout),
+        tcp_server_(server_config, ParseConstantSizeHeader, &input_queue_) {}
 
   virtual ~ProtobufServer() { Stop(); }
-
-  virtual std::unique_ptr<Reply> HandleRequest(const Request& request) = 0;
 
   void Start() {
     processing_pool_ =
         nc::make_unique<ProcessingPool<nc::viz::IncomingHeaderAndMessage>>(
-            [this](
-                const nc::viz::IncomingHeaderAndMessage& header_and_message) {
-              HandleIncomingMessage(header_and_message);
+            [this](std::unique_ptr<nc::viz::IncomingHeaderAndMessage>
+                       header_and_message,
+                   uint32_t worker_index) {
+              HandleIncomingMessage(std::move(header_and_message),
+                                    worker_index);
             },
             &input_queue_, thread_count_);
+    log_processing_pool_ = nc::make_unique<ProcessingPool<LoggedMessage>>(
+        [this](std::unique_ptr<LoggedMessage> logged_message,
+               uint32_t worker_index) {
+          nc::Unused(worker_index);
+          LogMessage(*logged_message);
+        },
+        &log_queue_, 1);
+
     tcp_server_.Start();
   }
 
@@ -115,26 +130,82 @@ class ProtobufServer {
 
   void Join() { tcp_server_.Join(); }
 
+ protected:
+  struct LoggedMessage {
+    LoggedMessage(
+        std::unique_ptr<nc::viz::IncomingHeaderAndMessage> header_and_message,
+        std::unique_ptr<Request> request, uint32_t worker_index,
+        uint32_t response_size_bytes,
+        std::chrono::milliseconds processing_started,
+        std::chrono::milliseconds processing_done,
+        std::chrono::milliseconds response_sent)
+        : header_and_message(std::move(header_and_message)),
+          request(std::move(request)),
+          worker_index(worker_index),
+          response_size_bytes(response_size_bytes),
+          processing_started(processing_started),
+          processing_done(processing_done),
+          response_sent(response_sent) {}
+
+    std::unique_ptr<nc::viz::IncomingHeaderAndMessage> header_and_message;
+    std::unique_ptr<Request> request;
+    uint32_t worker_index;
+    uint32_t response_size_bytes;
+
+    std::chrono::milliseconds processing_started;
+    std::chrono::milliseconds processing_done;
+    std::chrono::milliseconds response_sent;
+  };
+
+  virtual std::unique_ptr<Reply> HandleRequest(const Request& request) = 0;
+
+  virtual void LogMessage(const LoggedMessage& logged_message) {
+    nc::Unused(logged_message);
+  }
+
  private:
+  using LogQueue = PtrQueue<LoggedMessage, 1024>;
+
   void HandleIncomingMessage(
-      const nc::viz::IncomingHeaderAndMessage& header_and_message) {
+      std::unique_ptr<nc::viz::IncomingHeaderAndMessage> header_and_message,
+      uint32_t worker_index) {
     size_t message_size =
-        header_and_message.buffer.size() - header_and_message.header_offset;
-    Request request;
-    request.ParseFromArray(
-        header_and_message.buffer.data() + header_and_message.header_offset,
+        header_and_message->buffer.size() - header_and_message->header_offset;
+    auto request = nc::make_unique<Request>();
+    request->ParseFromArray(
+        header_and_message->buffer.data() + header_and_message->header_offset,
         message_size);
 
-    std::unique_ptr<Reply> reply = HandleRequest(request);
+    std::chrono::milliseconds processing_started = TimeNow();
+    std::unique_ptr<Reply> reply = HandleRequest(*request);
+    std::chrono::milliseconds processing_done = TimeNow();
+
+    uint32_t response_size_bytes = reply->ByteSize();
     if (reply) {
-      BlockingWriteProtoMessage(*reply, header_and_message.socket);
+      BlockingWriteProtoMessage(*reply, header_and_message->socket);
+    }
+    std::chrono::milliseconds response_sent = TimeNow();
+
+    auto logged_message = nc::make_unique<LoggedMessage>(
+        std::move(header_and_message), std::move(request), worker_index,
+        response_size_bytes, processing_started, processing_done,
+        response_sent);
+
+    bool timed_out;
+    log_queue_.ProduceOrBlockWithTimeout(std::move(logged_message),
+                                         log_message_timeout_, &timed_out);
+    if (timed_out) {
+      LOG(INFO) << "Logging too slow; unable to log message";
     }
   }
 
   const size_t thread_count_;
+  const std::chrono::milliseconds log_message_timeout_;
   nc::viz::IncomingMessageQueue input_queue_;
+  LogQueue log_queue_;
   std::unique_ptr<ProcessingPool<nc::viz::IncomingHeaderAndMessage>>
       processing_pool_;
+  std::unique_ptr<ProcessingPool<LoggedMessage>> log_processing_pool_;
   nc::viz::TCPServer tcp_server_;
 };
 

@@ -136,6 +136,10 @@ static info::TopologyInfo GenerateTopologyInfo(
     link_info->set_destination_index(link_ptr->src());
   }
 
+  for (nc::net::GraphNodeIndex node : graph.AllNodes()) {
+    out.add_node_names(graph.GetNode(node)->id());
+  }
+
   return out;
 }
 
@@ -159,7 +163,8 @@ static info::TrafficMatrixInfo GenerateTrafficMatrixInfo(
   CHECK(nc::safe_strtod(locality_string, &locality))
       << "Unable to parse locality";
   out.set_locality(locality);
-  out.set_limiting_multiplier(demand_matrix->MaxCommodityScaleFactor({}, 1.0));
+  out.set_max_commodity_scale_factor(
+      demand_matrix->MaxCommodityScaleFactor({}, 1.0));
 
   nc::DiscreteDistribution<uint64_t> demand_rates;
   nc::DiscreteDistribution<uint64_t> demand_flow_counts;
@@ -189,12 +194,13 @@ static info::TrafficMatrixInfo GenerateTrafficMatrixInfo(
 }
 
 static info::RoutingInfo GenerateRoutingInfo(
-    uint64_t id, uint64_t topology_id, uint64_t traffic_matrix_id,
-    const ctr::RoutingConfiguration& rc) {
+    const std::string& routing_system, uint64_t id, uint64_t topology_id,
+    uint64_t traffic_matrix_id, const ctr::RoutingConfiguration& rc) {
   info::RoutingInfo out;
   out.set_routing_id(id);
   out.set_topology_id(topology_id);
   out.set_traffic_matrix_id(traffic_matrix_id);
+  out.set_routing_system(routing_system);
 
   double total_count = rc.demands().size();
   double overloaded_fraction = rc.OverloadedAggregates().size() / total_count;
@@ -212,6 +218,7 @@ static info::RoutingInfo GenerateRoutingInfo(
       overloaded_links.insert(link);
     }
   }
+
   *(out.mutable_link_utilizations()) = ToRealDistributionProto(&utilizations);
 
   nc::DiscreteDistribution<uint64_t> latency_stretch_dist;
@@ -281,26 +288,56 @@ static info::RoutingInfo GenerateRoutingInfo(
   return out;
 }
 
+void InfoStorage::PrivateAddTopology(const info::TopologyInfo& topology_info) {
+  uint64_t id = topology_info.topology_id();
+  topology_infos_[id] = topology_info;
+}
+
+void InfoStorage::PrivateAddTrafficMatrix(
+    const info::TrafficMatrixInfo& tm_info) {
+  uint64_t id = tm_info.traffic_matrix_id();
+  uint64_t topology_id = tm_info.topology_id();
+
+  info::TrafficMatrixInfo& new_info = traffic_matrix_infos_[id];
+  new_info = tm_info;
+  topology_to_tm_infos_[topology_id].emplace_back(&new_info);
+}
+
+void InfoStorage::PrivateAddRouting(const info::RoutingInfo& routing_info) {
+  uint64_t id = routing_info.routing_id();
+  uint64_t tm_id = routing_info.traffic_matrix_id();
+  const std::string& routing_system = routing_info.routing_system();
+
+  info::RoutingInfo& new_info = routing_infos_[id];
+  new_info = routing_info;
+  tm_to_routing_infos_[tm_id].emplace_back(&new_info);
+  routing_system_to_tm_to_routing_infos_[routing_system][tm_id] = &new_info;
+}
+
 uint64_t InfoStorage::AddTopology(const nc::net::GraphStorage& graph,
                                   const std::string& name) {
+  std::lock_guard<std::mutex> lock_guard(mu_);
   uint64_t id = GetId();
-  topology_infos_[id] = GenerateTopologyInfo(id, graph, name);
+  PrivateAddTopology(GenerateTopologyInfo(id, graph, name));
   return id;
 }
 
 uint64_t InfoStorage::AddTrafficMatrix(uint64_t topology_id,
                                        const ctr::TrafficMatrix& tm) {
+  std::lock_guard<std::mutex> lock_guard(mu_);
   uint64_t id = GetId();
-  traffic_matrix_infos_[id] = GenerateTrafficMatrixInfo(id, topology_id, tm);
+  PrivateAddTrafficMatrix(GenerateTrafficMatrixInfo(id, topology_id, tm));
   return id;
 }
 
-uint64_t InfoStorage::AddRouting(uint64_t topology_id,
+uint64_t InfoStorage::AddRouting(const std::string& routing_system,
+                                 uint64_t topology_id,
                                  uint64_t traffic_matrix_id,
                                  const ctr::RoutingConfiguration& routing) {
+  std::lock_guard<std::mutex> lock_guard(mu_);
   uint64_t id = GetId();
-  routing_infos_[id] =
-      GenerateRoutingInfo(id, topology_id, traffic_matrix_id, routing);
+  PrivateAddRouting(GenerateRoutingInfo(routing_system, id, topology_id,
+                                        traffic_matrix_id, routing));
   return id;
 }
 
@@ -320,13 +357,11 @@ std::vector<const info::TopologyInfo*> InfoStorage::GetAllTopologyInfos()
 
 std::vector<const info::TrafficMatrixInfo*>
 InfoStorage::GetAllTrafficMatrixInfos(uint64_t topology_id) const {
-  std::vector<const info::TrafficMatrixInfo*> out;
-  for (const auto& id_and_info : traffic_matrix_infos_) {
-    if (id_and_info.second.topology_id() == topology_id) {
-      out.emplace_back(&(id_and_info.second));
-    }
+  const auto* infos = nc::FindOrNull(topology_to_tm_infos_, topology_id);
+  if (infos == nullptr) {
+    return {};
   }
-  return out;
+  return *infos;
 }
 
 const info::TrafficMatrixInfo* InfoStorage::GetTrafficMatrixInfoOrNull(
@@ -341,26 +376,27 @@ const info::RoutingInfo* InfoStorage::GetRoutingInfoOrNull(
 
 std::vector<const info::RoutingInfo*> InfoStorage::GetAllRoutingInfos(
     uint64_t traffic_matrix_id) const {
-  std::vector<const info::RoutingInfo*> out;
-  for (const auto& id_and_info : routing_infos_) {
-    if (id_and_info.second.traffic_matrix_id() == traffic_matrix_id) {
-      out.emplace_back(&(id_and_info.second));
-    }
+  const auto* infos = nc::FindOrNull(tm_to_routing_infos_, traffic_matrix_id);
+  if (infos == nullptr) {
+    return {};
   }
-  return out;
+  return *infos;
 }
 
 const info::RoutingInfo* InfoStorage::GetRoutingInfoOrNull(
     uint64_t traffic_matrix_id, const std::string& routing_system) const {
-  const std::vector<const info::RoutingInfo*> same_tm =
-      GetAllRoutingInfos(traffic_matrix_id);
-  for (const info::RoutingInfo* info : same_tm) {
-    if (info->routing_system() == routing_system) {
-      return info;
-    }
+  const auto* tm_to_routing_infos =
+      nc::FindOrNull(routing_system_to_tm_to_routing_infos_, routing_system);
+  if (tm_to_routing_infos == nullptr) {
+    return {};
   }
 
-  return nullptr;
+  const auto* info = nc::FindOrNull(*tm_to_routing_infos, traffic_matrix_id);
+  if (info == nullptr) {
+    return {};
+  }
+
+  return *info;
 }
 
 uint64_t InfoStorage::GetId() {
@@ -462,29 +498,68 @@ void InfoStorage::ReadFromFile(const std::string& file) {
   CHECK(fd > 0) << "Bad input file " << file << ": " << strerror(errno);
   CHECK(lseek64(fd, 0, SEEK_SET) != -1);
 
+  uint64_t topology_count = 0;
+  uint64_t tm_count = 0;
+  uint64_t routing_count = 0;
+
   google::protobuf::io::FileInputStream file_input_stream(fd);
-  google::protobuf::io::CodedInputStream coded_input(&file_input_stream);
   info::Info info;
   while (true) {
+    google::protobuf::io::CodedInputStream coded_input(&file_input_stream);
     if (!ReadDelimitedFrom(&info, &coded_input)) {
       break;
     }
 
     if (info.has_topology_info()) {
-      const info::TopologyInfo& topology_info = info.topology_info();
-      topology_infos_[topology_info.topology_id()] = topology_info;
+      PrivateAddTopology(info.topology_info());
+      ++topology_count;
     } else if (info.has_traffic_matrix_info()) {
-      const info::TrafficMatrixInfo& traffic_matrix_info =
-          info.traffic_matrix_info();
-      traffic_matrix_infos_[traffic_matrix_info.traffic_matrix_id()] =
-          traffic_matrix_info;
+      PrivateAddTrafficMatrix(info.traffic_matrix_info());
+      ++tm_count;
     } else if (info.has_routing_info()) {
-      const info::RoutingInfo& routing_info = info.routing_info();
-      routing_infos_[routing_info.routing_id()] = routing_info;
+      PrivateAddRouting(info.routing_info());
+      ++routing_count;
     }
 
     info.Clear();
   }
+
+  LOG(INFO) << nc::Substitute(
+      "Loaded $0 topologies, $1 traffic matrices and $2 routing solutions",
+      topology_count, tm_count, routing_count);
+}
+
+std::unique_ptr<nc::net::GraphStorage> InfoToGraph(
+    const info::TopologyInfo& info) {
+  nc::net::GraphBuilder graph_builder;
+  for (const auto& link : info.links()) {
+    nc::net::Bandwidth bw =
+        nc::net::Bandwidth::FromBitsPerSecond(link.rate_bps());
+    nc::net::Delay delay = std::chrono::duration_cast<nc::net::Delay>(
+        std::chrono::microseconds(link.delay_micros()));
+    const std::string& src = info.node_names(link.source_index());
+    const std::string& dst = info.node_names(link.destination_index());
+    graph_builder.AddLink({src, dst, bw, delay});
+  }
+
+  return nc::make_unique<nc::net::GraphStorage>(graph_builder);
+}
+
+std::unique_ptr<ctr::TrafficMatrix> InfoToTM(
+    const nc::net::GraphStorage& graph, const info::TrafficMatrixInfo& info) {
+  auto out = nc::make_unique<ctr::TrafficMatrix>(&graph);
+  for (const auto& demand : info.demands()) {
+    auto ingress_index = nc::net::GraphNodeIndex(demand.ingress_index());
+    auto egress_index = nc::net::GraphNodeIndex(demand.egress_index());
+
+    nc::net::Bandwidth bw =
+        nc::net::Bandwidth::FromBitsPerSecond(demand.rate_bps());
+    uint64_t flow_count = demand.flow_count();
+
+    out->AddDemand({ingress_index, egress_index}, {bw, flow_count});
+  }
+
+  return out;
 }
 
 }  // namespace ctr
