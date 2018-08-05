@@ -157,60 +157,86 @@ std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
   std::set<const info::TrafficMatrixInfo*> selected_traffic_matrices;
   std::set<const info::RoutingInfo*> selected_routings;
 
-  if (request.select_all_topologies()) {
-    for (const info::TopologyInfo* info :
-         info_storage_->GetAllTopologyInfos()) {
-      selected_topologies.emplace_back(info);
-    }
-  } else {
-    for (uint64_t topology_id : request.topology_id()) {
-      const info::TopologyInfo* info =
-          info_storage_->GetTopologyInfoOrNull(topology_id);
-      if (info != nullptr) {
+  bool return_topologies = false;
+  bool return_tms = false;
+  bool return_routing = false;
+  if (request.topology_mask().SerializeAsString() !=
+      info::TopologyInfoMask::default_instance().SerializeAsString()) {
+    return_topologies = true;
+  }
+  if (request.traffic_matrix_mask().SerializeAsString() !=
+      info::TrafficMatrixInfoMask::default_instance().SerializeAsString()) {
+    return_topologies = true;
+    return_tms = true;
+  }
+  if (request.routing_mask().SerializeAsString() !=
+      info::RoutingInfoMask::default_instance().SerializeAsString()) {
+    return_topologies = true;
+    return_tms = true;
+    return_routing = true;
+  }
+
+  if (return_topologies) {
+    if (request.topology_id_size() == 0) {
+      for (const info::TopologyInfo* info :
+           info_storage_->GetAllTopologyInfos()) {
         selected_topologies.emplace_back(info);
       }
-    }
-  }
-
-  for (uint64_t traffic_matrix_id : request.traffic_matrix_id()) {
-    const info::TrafficMatrixInfo* info =
-        info_storage_->GetTrafficMatrixInfoOrNull(traffic_matrix_id);
-    if (info != nullptr) {
-      selected_traffic_matrices.insert(info);
-    }
-  }
-
-  if (request.select_all_traffic_matrices_for_topologies()) {
-    for (const info::TopologyInfo* topology : selected_topologies) {
-      std::vector<const info::TrafficMatrixInfo*> infos =
-          info_storage_->GetAllTrafficMatrixInfos(topology->topology_id());
-      selected_traffic_matrices.insert(infos.begin(), infos.end());
-    }
-  }
-
-  for (uint64_t routing_id : request.routing_id()) {
-    const info::RoutingInfo* info =
-        info_storage_->GetRoutingInfoOrNull(routing_id);
-    if (info != nullptr) {
-      selected_routings.insert(info);
-    }
-  }
-
-  for (const std::string& routing_system : request.routing_systems()) {
-    for (const info::TrafficMatrixInfo* tm_info : selected_traffic_matrices) {
-      const info::RoutingInfo* info = info_storage_->GetRoutingInfoOrNull(
-          tm_info->traffic_matrix_id(), routing_system);
-      if (info != nullptr) {
-        selected_routings.insert(info);
+    } else {
+      for (uint64_t topology_id : request.topology_id()) {
+        const info::TopologyInfo* info =
+            info_storage_->GetTopologyInfoOrNull(topology_id);
+        if (info != nullptr) {
+          selected_topologies.emplace_back(info);
+        }
       }
     }
   }
 
-  if (request.select_all_routing_for_traffic_matrices()) {
-    for (const info::TrafficMatrixInfo* tm_info : selected_traffic_matrices) {
-      std::vector<const info::RoutingInfo*> infos =
-          info_storage_->GetAllRoutingInfos(tm_info->traffic_matrix_id());
-      selected_routings.insert(infos.begin(), infos.end());
+  if (return_tms) {
+    if (request.traffic_matrix_id_size() == 0) {
+      for (const info::TopologyInfo* topology : selected_topologies) {
+        std::vector<const info::TrafficMatrixInfo*> infos =
+            info_storage_->GetAllTrafficMatrixInfos(topology->topology_id());
+        selected_traffic_matrices.insert(infos.begin(), infos.end());
+      }
+    } else {
+      for (uint64_t traffic_matrix_id : request.traffic_matrix_id()) {
+        const info::TrafficMatrixInfo* info =
+            info_storage_->GetTrafficMatrixInfoOrNull(traffic_matrix_id);
+        if (info != nullptr) {
+          selected_traffic_matrices.insert(info);
+        }
+      }
+    }
+  }
+
+  if (return_routing) {
+    if (request.routing_id_size() == 0 && request.routing_systems_size() == 0) {
+      for (const info::TrafficMatrixInfo* tm_info : selected_traffic_matrices) {
+        std::vector<const info::RoutingInfo*> infos =
+            info_storage_->GetAllRoutingInfos(tm_info->traffic_matrix_id());
+        selected_routings.insert(infos.begin(), infos.end());
+      }
+    } else {
+      for (uint64_t routing_id : request.routing_id()) {
+        const info::RoutingInfo* info =
+            info_storage_->GetRoutingInfoOrNull(routing_id);
+        if (info != nullptr) {
+          selected_routings.insert(info);
+        }
+      }
+
+      for (const std::string& routing_system : request.routing_systems()) {
+        for (const info::TrafficMatrixInfo* tm_info :
+             selected_traffic_matrices) {
+          const info::RoutingInfo* info = info_storage_->GetRoutingInfoOrNull(
+              tm_info->traffic_matrix_id(), routing_system);
+          if (info != nullptr) {
+            selected_routings.insert(info);
+          }
+        }
+      }
     }
   }
 

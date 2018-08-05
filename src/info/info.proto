@@ -296,29 +296,22 @@ message RoutingInfoMask {
 
 // A request to select topologies, traffic matrices and routing solutions.
 message SelectInfoRequest {
-  // Topologies to include in the selection.
+  // Topologies to include in the selection. If empty will include all 
+  // topologies.
   repeated uint64 topology_id = 1;
   
-  // Traffic matrices to include in the selection.
+  // Traffic matrices to include in the selection. If empty will include all 
+  // traffic matrices for any topology selected.
   repeated uint64 traffic_matrix_id = 2;
   
-  // Routing solutions to include in the selection.
+  // Routing solutions to include in the selection. If this and 
+  // 'routing_systems' are both emtpy, will include all routing solutions for 
+  // any traffic matrix in the selection.
   repeated uint64 routing_id = 3;
   
-  // For each traffic matrix selected, will select routing solutions for those 
+  // For each traffic matrix selected, will select routing solutions for these 
   // systems. 
   repeated string routing_systems = 4;
-  
-  // If true will ignore topology_ids and will select all topologies.
-  bool select_all_topologies = 5;
-  
-  // If true will include all traffic matrices for each topology in the 
-  // selection.
-  bool select_all_traffic_matrices_for_topologies = 6;
-  
-  // If true will include all routing solutions for each traffic matrix 
-  // in the selection.
-  bool select_all_routing_for_traffic_matrices = 7;
 
   // All topologies selected will have this mask applied.
   TopologyInfoMask topology_mask = 8;

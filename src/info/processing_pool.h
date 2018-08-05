@@ -180,11 +180,17 @@ class ProtobufServer {
     std::unique_ptr<Reply> reply = HandleRequest(*request);
     std::chrono::milliseconds processing_done = TimeNow();
 
+    std::chrono::milliseconds response_sent = std::chrono::milliseconds::zero();
     uint32_t response_size_bytes = reply->ByteSize();
     if (reply) {
-      BlockingWriteProtoMessage(*reply, header_and_message->socket);
+      if (BlockingWriteProtoMessage(*reply, header_and_message->socket)) {
+        response_sent = TimeNow();
+      } else {
+        uint64_t connection_id =
+            header_and_message->tcp_connection_info.connection_id;
+        tcp_server_.CloseConnection(connection_id);
+      }
     }
-    std::chrono::milliseconds response_sent = TimeNow();
 
     auto logged_message = nc::make_unique<LoggedMessage>(
         std::move(header_and_message), std::move(request), worker_index,
