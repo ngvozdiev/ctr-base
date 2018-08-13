@@ -36,6 +36,14 @@
         ScaleDiscreteDistribution(original.name(), mask.name##_multiplier()); \
   }
 
+#define EVALUATE_NUM_FIELD(name)                    \
+  if (mask.name()) {                                \
+    if ((info.name() < constraint.lower_limit()) || \
+        (info.name() > constraint.upper_limit())) { \
+      return false;                                 \
+    }                                               \
+  }
+
 DEFINE_uint64(info_server_port, 8080, "The port to run the server on");
 DEFINE_uint64(info_server_threads, 10,
               "Number of threads to serve requests on");
@@ -91,6 +99,22 @@ static info::TopologyInfo ApplyTopologyMask(
   return out;
 }
 
+static bool ConstraintMatches(const info::TopologyInfo& info,
+                              const info::FieldConstraint& constraint) {
+  if (constraint.has_topology_mask()) {
+    const info::TopologyInfoMask& mask = constraint.topology_mask();
+    EVALUATE_NUM_FIELD(node_count);
+    EVALUATE_NUM_FIELD(link_count);
+    EVALUATE_NUM_FIELD(unidirectional_link_count);
+    EVALUATE_NUM_FIELD(multiple_link_count);
+    EVALUATE_NUM_FIELD(diameter_hops);
+    EVALUATE_NUM_FIELD(diameter_micros);
+    EVALUATE_NUM_FIELD(llpd);
+  }
+
+  return true;
+}
+
 static info::Demand ApplyDemandMask(const info::Demand& original,
                                     const info::DemandMask& mask) {
   info::Demand out;
@@ -128,6 +152,20 @@ static info::TrafficMatrixInfo ApplyTrafficInfoMask(
   return out;
 }
 
+static bool ConstraintMatches(const info::TrafficMatrixInfo& info,
+                              const info::FieldConstraint& constraint) {
+  if (constraint.has_traffic_matrix_mask()) {
+    const info::TrafficMatrixInfoMask& mask = constraint.traffic_matrix_mask();
+    EVALUATE_NUM_FIELD(demand_count);
+    EVALUATE_NUM_FIELD(demand_fraction);
+    EVALUATE_NUM_FIELD(total_demand_bps);
+    EVALUATE_NUM_FIELD(locality);
+    EVALUATE_NUM_FIELD(max_commodity_scale_factor);
+  }
+
+  return true;
+}
+
 static info::RoutingInfo ApplyRoutingInfoMask(
     const info::RoutingInfo& original, const info::RoutingInfoMask& mask) {
   info::RoutingInfo out;
@@ -143,6 +181,76 @@ static info::RoutingInfo ApplyRoutingInfoMask(
   SET_DISCRETE_DIST(flow_delays);
   SET_DISCRETE_DIST(flow_delays_uncongested);
   return out;
+}
+
+static bool ConstraintMatches(const info::RoutingInfo& info,
+                              const info::FieldConstraint& constraint) {
+  if (constraint.has_routing_mask()) {
+    const info::RoutingInfoMask& mask = constraint.routing_mask();
+    EVALUATE_NUM_FIELD(congested_flows_fraction);
+    EVALUATE_NUM_FIELD(congested_demands_fraction);
+    EVALUATE_NUM_FIELD(total_latency_stretch);
+  }
+
+  return true;
+}
+
+template <typename T>
+static bool ConstraintMatchesExpression(
+    const T& element,
+    const info::ConstraintOrExpression& constraint_or_expression) {
+  if (constraint_or_expression.has_constraint()) {
+    return ConstraintMatches(element, constraint_or_expression.constraint());
+  }
+
+  if (constraint_or_expression.has_expression()) {
+    const info::ConstraintExpression& expression =
+        constraint_or_expression.expression();
+    switch (expression.type()) {
+      case info::ConstraintExpression::NOT:
+        CHECK(expression.has_op_one());
+        return !ConstraintMatchesExpression(element, expression.op_one());
+      case info::ConstraintExpression::AND:
+        CHECK(expression.has_op_one());
+        CHECK(expression.has_op_two());
+        return ConstraintMatchesExpression(element, expression.op_one()) &&
+               ConstraintMatchesExpression(element, expression.op_two());
+      case info::ConstraintExpression::OR:
+        CHECK(expression.has_op_one());
+        CHECK(expression.has_op_two());
+        return ConstraintMatchesExpression(element, expression.op_one()) ||
+               ConstraintMatchesExpression(element, expression.op_two());
+      default:
+        LOG(ERROR) << "Invalid expression type " << expression.type();
+        return false;
+    }
+  }
+
+  return true;
+}
+
+template <typename T>
+static void Filter(std::vector<T>* values, std::function<bool(T)> filter) {
+  std::vector<T> out;
+  for (const auto& v : *values) {
+    if (filter(v)) {
+      out.emplace_back(v);
+    }
+  }
+
+  *values = out;
+}
+
+template <typename T>
+static void Filter(std::set<T>* values, std::function<bool(T)> filter) {
+  std::set<T> out;
+  for (const auto& v : *values) {
+    if (filter(v)) {
+      out.insert(v);
+    }
+  }
+
+  *values = out;
 }
 
 InfoServer::InfoServer(std::unique_ptr<InfoStorage> info_storage)
@@ -191,6 +299,11 @@ std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
         }
       }
     }
+
+    Filter<const info::TopologyInfo*>(
+        &selected_topologies, [&request](const info::TopologyInfo* info) {
+          return ConstraintMatchesExpression(*info, request.constraints());
+        });
   }
 
   if (return_tms) {
@@ -209,6 +322,12 @@ std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
         }
       }
     }
+
+    Filter<const info::TrafficMatrixInfo*>(
+        &selected_traffic_matrices,
+        [&request](const info::TrafficMatrixInfo* info) {
+          return ConstraintMatchesExpression(*info, request.constraints());
+        });
   }
 
   if (return_routing) {
@@ -238,6 +357,11 @@ std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
         }
       }
     }
+
+    Filter<const info::RoutingInfo*>(
+        &selected_routings, [&request](const info::RoutingInfo* info) {
+          return ConstraintMatchesExpression(*info, request.constraints());
+        });
   }
 
   auto out = nc::make_unique<ctr::info::Response>();

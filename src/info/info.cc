@@ -162,9 +162,13 @@ static info::TrafficMatrixInfo GenerateTrafficMatrixInfo(
   double locality;
   CHECK(nc::safe_strtod(locality_string, &locality))
       << "Unable to parse locality";
+
+  std::string load_string = nc::FindOrDie(demand_matrix->properties(), "load");
+  double load;
+  CHECK(nc::safe_strtod(load_string, &load)) << "Unable to parse load";
+
   out.set_locality(locality);
-  out.set_max_commodity_scale_factor(
-      demand_matrix->MaxCommodityScaleFactor({}, 1.0));
+  out.set_max_commodity_scale_factor(1.0 / load);
 
   nc::DiscreteDistribution<uint64_t> demand_rates;
   nc::DiscreteDistribution<uint64_t> demand_flow_counts;
@@ -229,6 +233,9 @@ static info::RoutingInfo GenerateRoutingInfo(
   double total_sp_delay = 0;
   double total_flow_count = 0;
   double total_congested_flow_count = 0;
+
+  nc::net::AllPairShortestPath sp({}, rc.graph()->AdjacencyList(), nullptr,
+                                  nullptr);
   for (const auto& aggregate_and_routes : rc.routes()) {
     const AggregateId& id = aggregate_and_routes.first;
     const DemandAndFlowCount& demand_and_flow_count =
@@ -236,7 +243,7 @@ static info::RoutingInfo GenerateRoutingInfo(
     size_t aggregate_flow_count = demand_and_flow_count.second;
     total_flow_count += aggregate_flow_count;
 
-    nc::net::Delay sp_delay = id.GetSPDelay(*(rc.graph()));
+    nc::net::Delay sp_delay = sp.GetDistance(id.src(), id.dst());
     uint64_t sp_delay_ms = duration_cast<milliseconds>(sp_delay).count();
     sp_delay_ms = std::max(static_cast<uint64_t>(1), sp_delay_ms);
     total_sp_delay += sp_delay_ms * demand_and_flow_count.second;

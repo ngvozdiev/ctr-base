@@ -294,6 +294,48 @@ message RoutingInfoMask {
   double flow_delays_uncongested_multiplier = 8;
 };
 
+// A set of constraints on one or more fields.
+message FieldConstraint {
+  // Lower limit for numeric fields.
+  double lower_limit = 1;
+  
+  // Upper limit for numeric fields.
+  double upper_limit = 2;
+  
+  // Whether or not boolean fields should be true.
+  bool is_true = 3;
+  
+  // Any field that is set in these masks will have to comply with the 
+  // constraints in this message.  
+  TopologyInfoMask topology_mask = 4;
+  TrafficMatrixInfoMask traffic_matrix_mask = 5;
+  RoutingInfoMask routing_mask = 6;
+};
+
+// A constraint or an expression of constraints.
+message ConstraintOrExpression {
+  oneof constraint_or_expression {
+    FieldConstraint constraint = 1;
+  	ConstraintExpression expression = 2;
+  }
+};
+
+// An expression of constraints.
+message ConstraintExpression {
+  enum Type {
+  	UNDEFINED = 0;
+  	AND = 1;
+  	OR = 2;
+  	NOT = 3; // Only applies to op_one.
+  }
+  
+  ConstraintOrExpression op_one = 1;  
+  ConstraintOrExpression op_two = 2;
+  
+  // Type of the expression.
+  Type type = 5;
+};
+
 // A request to select topologies, traffic matrices and routing solutions.
 message SelectInfoRequest {
   // Topologies to include in the selection. If empty will include all 
@@ -321,6 +363,9 @@ message SelectInfoRequest {
   
   // All routing solutions selected will have this mask applied.
   RoutingInfoMask routing_mask = 10;
+  
+  // Constraints to apply to the selection.
+  ConstraintOrExpression constraints = 11;
 };
 
 message SelectInfoResponse {
