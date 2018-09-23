@@ -1,0 +1,33 @@
+syntax = "proto3";
+package nc.deep_storage;
+
+// A value.
+message ValueProto {
+  oneof element {
+    uint64 discrete_numeric_value = 1;
+  	double numeric_value = 2;
+  	string string_value = 3;
+  	uint32 ip_v4_address = 4;
+  }
+};
+
+// The header of a chunk file. Lists the keys. All entries will have the same 
+// number of values, the ith value of each entry corresponds to the ith key.
+message ChunkFileHeaderProto {
+  repeated string keys = 1;
+};
+
+// Describes a single entry.
+message EntryHandleProto {
+  // The values associated with the entry.
+  repeated ValueProto values = 1;
+  
+  // Time this entry was created.
+  uint64 creation_timestamp = 2;
+  
+  // Identifies where in the chunk file this entry is stored.
+  uint64 offset_in_chunk = 4;
+  
+  // Size of the entry in bytes.
+  uint64 entry_size = 5;
+};

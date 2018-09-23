@@ -113,6 +113,8 @@ if (NOT CTR_BASE_DISABLE_TESTS)
    add_test_exec(ctr_common_test src/common_test.cc ctr_base)
    
    add_test_exec(geo_test src/geo/geo_test.cc geo_lib)
+
+   add_test_exec(deep_storage_test src/info/deep_storage_test.cc ds)
 endif()
 
 add_executable(metrics_explore src/metrics/metrics_explore.cc)
@@ -189,6 +191,11 @@ target_link_libraries(top_grow geo_lib ctr_base demand_matrix_input metrics gfla
 
 add_executable(sfml_main src/sfml/sfml_main.cc)
 target_link_libraries(sfml_main sfml_utils sfml-graphics sfml-system sfml-window)
+
+PROTOBUF_GENERATE_CPP(PROTO_DS_SRCS PROTO_DS_HDRS src/info/deep_storage.proto)
+set_property(SOURCE ${PROTO_DS_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS "-Wno-extended-offsetof")
+add_library(ds STATIC ${PROTO_DS_SRCS} src/info/deep_storage.cc)
+target_link_libraries(ds ${PROTOBUF_LIBRARIES} ncode)
 
 PROTOBUF_GENERATE_CPP(INFO_PROTO_SRCS INFO_PROTO_HDRS src/info/info.proto)
 set_property(SOURCE ${INFO_PROTO_SRCS} APPEND_STRING PROPERTY COMPILE_FLAGS "-Wno-extended-offsetof")

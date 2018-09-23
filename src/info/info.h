@@ -56,14 +56,13 @@ class InfoStorage {
   void ReadFromFile(const std::string& file);
 
  private:
-  uint64_t GetId();
+  bool IdTaken(uint64_t id) const;
 
   void PrivateAddTopology(const info::TopologyInfo& topology_info);
   void PrivateAddTrafficMatrix(const info::TrafficMatrixInfo& tm_info);
   void PrivateAddRouting(const info::RoutingInfo& routing_info);
 
   std::mt19937 rnd_;
-  std::uniform_int_distribution<uint64_t> distribution_;
 
   std::map<uint64_t, info::TopologyInfo> topology_infos_;
   std::map<uint64_t, info::TrafficMatrixInfo> traffic_matrix_infos_;

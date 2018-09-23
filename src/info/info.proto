@@ -296,20 +296,32 @@ message RoutingInfoMask {
 
 // A set of constraints on one or more fields.
 message FieldConstraint {
-  // Lower limit for numeric fields.
+  // Lower limit for numeric fields. All values >= this limit are ok.
   double lower_limit = 1;
   
-  // Upper limit for numeric fields.
+  // Upper limit for numeric fields. All values <= this limit are ok.
   double upper_limit = 2;
   
+  // Will make the lower limit < instead of <=.
+  bool lower_limit_open = 3;
+  
+  // Will make the lower limit > instead of >=.
+  bool upper_limit_open = 4;
+  
   // Whether or not boolean fields should be true.
-  bool is_true = 3;
+  bool is_true = 5;
   
   // Any field that is set in these masks will have to comply with the 
   // constraints in this message.  
-  TopologyInfoMask topology_mask = 4;
-  TrafficMatrixInfoMask traffic_matrix_mask = 5;
-  RoutingInfoMask routing_mask = 6;
+  TopologyInfoMask topology_mask = 6;
+  TrafficMatrixInfoMask traffic_matrix_mask = 7;
+  RoutingInfoMask routing_mask = 8;
+
+  // Will only match elements with these ids (if set).
+  uint64 topology_id = 9;  
+  uint64 traffic_matrix_id = 10;
+  uint64 routing_id = 11;
+  string routing_system = 12;
 };
 
 // A constraint or an expression of constraints.

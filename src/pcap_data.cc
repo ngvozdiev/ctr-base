@@ -475,9 +475,9 @@ void PcapDataTrace::Init(const PBPcapDataTrace& trace_pb,
   // And the bins.
   std::vector<size_t> offsets =
       SerializeBinnersToFile(binners, binned_data_output_file);
-  size_t flows_output_size = nc::File::FileSizeOrDie(flows_output_file);
+  size_t flows_output_size = nc::File::FileSize(flows_output_file).ValueOrDie();
   size_t binned_data_output_size =
-      nc::File::FileSizeOrDie(binned_data_output_file);
+      nc::File::FileSize(binned_data_output_file).ValueOrDie();
 
   // Now we have to update 'trace_pb', append it to 'output_file' and append
   // 'binned_data_file' and 'flows_file' as well.

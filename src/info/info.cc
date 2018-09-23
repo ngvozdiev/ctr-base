@@ -324,7 +324,8 @@ void InfoStorage::PrivateAddRouting(const info::RoutingInfo& routing_info) {
 uint64_t InfoStorage::AddTopology(const nc::net::GraphStorage& graph,
                                   const std::string& name) {
   std::lock_guard<std::mutex> lock_guard(mu_);
-  uint64_t id = GetId();
+  uint64_t id = nc::GetRandomId(
+      [this](uint64_t candidate) { return IdTaken(candidate); }, &rnd_);
   PrivateAddTopology(GenerateTopologyInfo(id, graph, name));
   return id;
 }
@@ -332,7 +333,8 @@ uint64_t InfoStorage::AddTopology(const nc::net::GraphStorage& graph,
 uint64_t InfoStorage::AddTrafficMatrix(uint64_t topology_id,
                                        const ctr::TrafficMatrix& tm) {
   std::lock_guard<std::mutex> lock_guard(mu_);
-  uint64_t id = GetId();
+  uint64_t id = nc::GetRandomId(
+      [this](uint64_t candidate) { return IdTaken(candidate); }, &rnd_);
   PrivateAddTrafficMatrix(GenerateTrafficMatrixInfo(id, topology_id, tm));
   return id;
 }
@@ -342,7 +344,8 @@ uint64_t InfoStorage::AddRouting(const std::string& routing_system,
                                  uint64_t traffic_matrix_id,
                                  const ctr::RoutingConfiguration& routing) {
   std::lock_guard<std::mutex> lock_guard(mu_);
-  uint64_t id = GetId();
+  uint64_t id = nc::GetRandomId(
+      [this](uint64_t candidate) { return IdTaken(candidate); }, &rnd_);
   PrivateAddRouting(GenerateRoutingInfo(routing_system, id, topology_id,
                                         traffic_matrix_id, routing));
   return id;
@@ -406,17 +409,10 @@ const info::RoutingInfo* InfoStorage::GetRoutingInfoOrNull(
   return *info;
 }
 
-uint64_t InfoStorage::GetId() {
-  while (true) {
-    uint64_t next_id = distribution_(rnd_);
-    if (nc::ContainsKey(topology_infos_, next_id) ||
-        nc::ContainsKey(traffic_matrix_infos_, next_id) ||
-        nc::ContainsKey(routing_infos_, next_id)) {
-      continue;
-    }
-
-    return next_id;
-  }
+bool InfoStorage::IdTaken(uint64_t id) const {
+  return nc::ContainsKey(topology_infos_, id) ||
+         nc::ContainsKey(traffic_matrix_infos_, id) ||
+         nc::ContainsKey(routing_infos_, id);
 }
 
 template <typename T>

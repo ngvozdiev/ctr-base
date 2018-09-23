@@ -36,12 +36,25 @@
         ScaleDiscreteDistribution(original.name(), mask.name##_multiplier()); \
   }
 
-#define EVALUATE_NUM_FIELD(name)                    \
-  if (mask.name()) {                                \
-    if ((info.name() < constraint.lower_limit()) || \
-        (info.name() > constraint.upper_limit())) { \
-      return false;                                 \
-    }                                               \
+#define EVALUATE_NUM_FIELD(name)                   \
+  if (mask.name()) {                               \
+    if (constraint.lower_limit_open() &&           \
+        info.name() < constraint.lower_limit()) {  \
+      return false;                                \
+    }                                              \
+                                                   \
+    if (info.name() <= constraint.lower_limit()) { \
+      return false;                                \
+    }                                              \
+                                                   \
+    if (constraint.upper_limit_open() &&           \
+        info.name() > constraint.upper_limit()) {  \
+      return false;                                \
+    }                                              \
+                                                   \
+    if (info.name() >= constraint.upper_limit()) { \
+      return false;                                \
+    }                                              \
   }
 
 DEFINE_uint64(info_server_port, 8080, "The port to run the server on");
@@ -101,6 +114,11 @@ static info::TopologyInfo ApplyTopologyMask(
 
 static bool ConstraintMatches(const info::TopologyInfo& info,
                               const info::FieldConstraint& constraint) {
+  if (constraint.topology_id() &&
+      constraint.topology_id() != info.topology_id()) {
+    return false;
+  }
+
   if (constraint.has_topology_mask()) {
     const info::TopologyInfoMask& mask = constraint.topology_mask();
     EVALUATE_NUM_FIELD(node_count);
@@ -154,6 +172,11 @@ static info::TrafficMatrixInfo ApplyTrafficInfoMask(
 
 static bool ConstraintMatches(const info::TrafficMatrixInfo& info,
                               const info::FieldConstraint& constraint) {
+  if (constraint.traffic_matrix_id() &&
+      constraint.traffic_matrix_id() != info.traffic_matrix_id()) {
+    return false;
+  }
+
   if (constraint.has_traffic_matrix_mask()) {
     const info::TrafficMatrixInfoMask& mask = constraint.traffic_matrix_mask();
     EVALUATE_NUM_FIELD(demand_count);
@@ -172,6 +195,7 @@ static info::RoutingInfo ApplyRoutingInfoMask(
   out.set_routing_id(original.routing_id());
   out.set_traffic_matrix_id(original.traffic_matrix_id());
   out.set_routing_system(original.routing_system());
+  out.set_topology_id(original.topology_id());
   SET_SIMPLE_FIELD(congested_flows_fraction);
   SET_SIMPLE_FIELD(congested_demands_fraction);
   SET_SIMPLE_FIELD(total_latency_stretch);
@@ -185,6 +209,15 @@ static info::RoutingInfo ApplyRoutingInfoMask(
 
 static bool ConstraintMatches(const info::RoutingInfo& info,
                               const info::FieldConstraint& constraint) {
+  if (constraint.routing_id() && constraint.routing_id() != info.routing_id()) {
+    return false;
+  }
+
+  if (!constraint.routing_system().empty() &&
+      constraint.routing_system() != info.routing_system()) {
+    return false;
+  }
+
   if (constraint.has_routing_mask()) {
     const info::RoutingInfoMask& mask = constraint.routing_mask();
     EVALUATE_NUM_FIELD(congested_flows_fraction);
@@ -262,8 +295,8 @@ InfoServer::InfoServer(std::unique_ptr<InfoStorage> info_storage)
 std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
     const info::SelectInfoRequest& request) const {
   std::vector<const info::TopologyInfo*> selected_topologies;
-  std::set<const info::TrafficMatrixInfo*> selected_traffic_matrices;
-  std::set<const info::RoutingInfo*> selected_routings;
+  std::vector<const info::TrafficMatrixInfo*> selected_traffic_matrices;
+  std::vector<const info::RoutingInfo*> selected_routings;
 
   bool return_topologies = false;
   bool return_tms = false;
@@ -284,84 +317,53 @@ std::unique_ptr<ctr::info::Response> InfoServer::HandleSelect(
     return_routing = true;
   }
 
-  if (return_topologies) {
-    if (request.topology_id_size() == 0) {
-      for (const info::TopologyInfo* info :
-           info_storage_->GetAllTopologyInfos()) {
-        selected_topologies.emplace_back(info);
+  for (const info::TopologyInfo* topology_info :
+       info_storage_->GetAllTopologyInfos()) {
+    if (return_topologies &&
+        !ConstraintMatchesExpression(*topology_info, request.constraints())) {
+      continue;
+    }
+
+    if (!return_tms) {
+      selected_topologies.emplace_back(topology_info);
+      continue;
+    }
+
+    bool tm_added = false;
+    for (const info::TrafficMatrixInfo* tm_info :
+         info_storage_->GetAllTrafficMatrixInfos(
+             topology_info->topology_id())) {
+      if (!ConstraintMatchesExpression(*tm_info, request.constraints())) {
+        continue;
       }
-    } else {
-      for (uint64_t topology_id : request.topology_id()) {
-        const info::TopologyInfo* info =
-            info_storage_->GetTopologyInfoOrNull(topology_id);
-        if (info != nullptr) {
-          selected_topologies.emplace_back(info);
+
+      if (!return_routing) {
+        selected_traffic_matrices.emplace_back(tm_info);
+        tm_added = true;
+        continue;
+      }
+
+      bool routing_added = false;
+      for (const info::RoutingInfo* routing_info :
+           info_storage_->GetAllRoutingInfos(tm_info->traffic_matrix_id())) {
+        if (!ConstraintMatchesExpression(*routing_info,
+                                         request.constraints())) {
+          continue;
         }
+
+        selected_routings.emplace_back(routing_info);
+        routing_added = true;
+      }
+
+      if (routing_added) {
+        selected_traffic_matrices.emplace_back(tm_info);
+        tm_added = true;
       }
     }
 
-    Filter<const info::TopologyInfo*>(
-        &selected_topologies, [&request](const info::TopologyInfo* info) {
-          return ConstraintMatchesExpression(*info, request.constraints());
-        });
-  }
-
-  if (return_tms) {
-    if (request.traffic_matrix_id_size() == 0) {
-      for (const info::TopologyInfo* topology : selected_topologies) {
-        std::vector<const info::TrafficMatrixInfo*> infos =
-            info_storage_->GetAllTrafficMatrixInfos(topology->topology_id());
-        selected_traffic_matrices.insert(infos.begin(), infos.end());
-      }
-    } else {
-      for (uint64_t traffic_matrix_id : request.traffic_matrix_id()) {
-        const info::TrafficMatrixInfo* info =
-            info_storage_->GetTrafficMatrixInfoOrNull(traffic_matrix_id);
-        if (info != nullptr) {
-          selected_traffic_matrices.insert(info);
-        }
-      }
+    if (tm_added) {
+      selected_topologies.emplace_back(topology_info);
     }
-
-    Filter<const info::TrafficMatrixInfo*>(
-        &selected_traffic_matrices,
-        [&request](const info::TrafficMatrixInfo* info) {
-          return ConstraintMatchesExpression(*info, request.constraints());
-        });
-  }
-
-  if (return_routing) {
-    if (request.routing_id_size() == 0 && request.routing_systems_size() == 0) {
-      for (const info::TrafficMatrixInfo* tm_info : selected_traffic_matrices) {
-        std::vector<const info::RoutingInfo*> infos =
-            info_storage_->GetAllRoutingInfos(tm_info->traffic_matrix_id());
-        selected_routings.insert(infos.begin(), infos.end());
-      }
-    } else {
-      for (uint64_t routing_id : request.routing_id()) {
-        const info::RoutingInfo* info =
-            info_storage_->GetRoutingInfoOrNull(routing_id);
-        if (info != nullptr) {
-          selected_routings.insert(info);
-        }
-      }
-
-      for (const std::string& routing_system : request.routing_systems()) {
-        for (const info::TrafficMatrixInfo* tm_info :
-             selected_traffic_matrices) {
-          const info::RoutingInfo* info = info_storage_->GetRoutingInfoOrNull(
-              tm_info->traffic_matrix_id(), routing_system);
-          if (info != nullptr) {
-            selected_routings.insert(info);
-          }
-        }
-      }
-    }
-
-    Filter<const info::RoutingInfo*>(
-        &selected_routings, [&request](const info::RoutingInfo* info) {
-          return ConstraintMatchesExpression(*info, request.constraints());
-        });
   }
 
   auto out = nc::make_unique<ctr::info::Response>();
